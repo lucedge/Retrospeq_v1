@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 40" width="210" height="40" role="img" aria-label="Retrospeq">
+  <g transform="translate(4 4)">
+    <circle cx="16" cy="16" r="11.25" fill="none" stroke="#14181B" stroke-width="2.4"/>
+    <circle cx="19.8" cy="19" r="3.3" fill="#E9A23B"/>
+  </g>
+  <text x="44" y="27.5" font-family="Archivo, Helvetica, Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="-1.1" fill="#14181B">Retrospe<tspan fill="#E9A23B">q</tspan></text>
+</svg>

@@ -82,7 +82,7 @@ Two integration layers, both already wired in `app/layout.tsx` / `app/globals.cs
 - `<link href="/brand/css/index.css">` in `app/layout.tsx` — fonts → tokens → base → marks → components, gives `.rq-btn`, `.rq-h1`, `.rq-num`, `.rq-row`, rating/stepper primitives etc.
 - `app/brand-tokens/tailwind.css` imported from `app/globals.css` — Tailwind v4 `@theme` mapping (`bg-bg`, `text-ink`, `border-line`, `bg-accent`, `font-sans`/`font-mono`, the type/space/radius scale).
 
-**Design system sync:** `public/brand/` and `app/brand-tokens/{tokens,tailwind}.css` are copies of `../retrospeq-design-system/brand/`. If the design system repo updates, re-copy both locations — do not hand-edit the copies, edit the source and re-sync.
+**Design system sync:** `retrospeq-design-system/` is vendored into this repo (plain copy, no `.git`, no submodule — the cloud build agents only ever see this one repo). `public/brand/` and `app/brand-tokens/{tokens,tailwind}.css` are copies of `retrospeq-design-system/brand/`. If the upstream design system changes, re-copy all three locations — do not hand-edit the copies, edit the source and re-sync.
 
 Rules that look like bugs (design-system README): one `.rq-btn` per view; `.rq-btn--equal` pairs have no primary/secondary distinction (an ethics decision — the relaxation prompt must not imply a recommendation); gauges/ambient strip are always visible, never appear-on-threshold (appearing-on-cross *is* an alarm); ratings are dots and values are steppers, nothing on a fast-capture screen takes a keyboard; `.rq-num` (tabular mono) on every number, no exceptions.
 

@@ -1,0 +1,23 @@
+{
+  "name": "@retrospeq/design-system",
+  "version": "1.0.0",
+  "description": "Retrospeq design system — tokens, self-hosted fonts, data-visualisation marks and UI components. No build step, no dependencies.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "sideEffects": ["*.css"],
+  "files": ["css", "tokens", "fonts", "logo", "README.md"],
+  "exports": {
+    ".": "./css/index.css",
+    "./css": "./css/index.css",
+    "./base": "./css/base.css",
+    "./marks": "./css/marks.css",
+    "./components": "./css/components.css",
+    "./tokens": "./tokens/tokens.css",
+    "./tokens.json": "./tokens/tokens.json",
+    "./tailwind": "./tokens/tailwind.css",
+    "./fonts": "./fonts/fonts.css",
+    "./logo/*": "./logo/*"
+  },
+  "keywords": ["design-system", "design-tokens", "css", "data-visualization", "retrospeq"]
+}

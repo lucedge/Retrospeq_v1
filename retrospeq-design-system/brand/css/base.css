@@ -1,0 +1,93 @@
+/* ============================================================
+   Retrospeq — Base
+   A light reset plus the typographic defaults. Opinionated only
+   where the system has an opinion; otherwise it stays out of the way.
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--rq-bg);
+  color: var(--rq-ink);
+  font-family: var(--rq-font-sans);
+  font-size: var(--rq-text-base);
+  line-height: var(--rq-leading-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+img, svg, video, canvas { display: block; max-width: 100%; }
+svg { flex-shrink: 0; }
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: none; cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--rq-focus);
+  outline-offset: 2px;
+  border-radius: var(--rq-radius-sm);
+}
+
+/* Wide content scrolls inside its own container — the page body never
+   scrolls sideways. */
+.rq-scroll-x { overflow-x: auto; max-width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- Typography ---------- */
+
+.rq-display {
+  font-size: var(--rq-text-4xl);
+  font-weight: var(--rq-weight-display);
+  letter-spacing: var(--rq-track-display);
+  line-height: .98;
+  text-wrap: balance;
+}
+
+.rq-h1 {
+  font-size: var(--rq-text-2xl);
+  font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight);
+  line-height: var(--rq-leading-tight);
+  text-wrap: balance;
+  margin: 0;
+}
+
+.rq-h2 {
+  font-size: var(--rq-text-xl);
+  font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight);
+  line-height: var(--rq-leading-tight);
+  margin: 0;
+}
+
+.rq-body { font-size: var(--rq-text-base); line-height: var(--rq-leading-body); }
+.rq-sub  { font-size: var(--rq-text-sm); line-height: var(--rq-leading-snug); color: var(--rq-ink-soft); margin: 0; }
+
+/* Mono eyebrow / field label. Uppercase, opened up, never body copy. */
+.rq-label {
+  font-family: var(--rq-font-mono);
+  font-size: var(--rq-text-xs);
+  font-weight: var(--rq-weight-regular);
+  letter-spacing: var(--rq-track-label);
+  text-transform: uppercase;
+  color: var(--rq-ink-faint);
+  margin: 0;
+}
+
+/* EVERY number in the product uses this. Tabular so columns never jitter. */
+.rq-num {
+  font-family: var(--rq-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--rq-weight-medium);
+  letter-spacing: var(--rq-track-snug);
+}

@@ -1,0 +1,9 @@
+# Python caches (from local skill scripts)
+__pycache__/
+*.py[cod]
+
+# Build / dependency output
+node_modules/
+prototype/.vite/
+dist/
+.DS_Store

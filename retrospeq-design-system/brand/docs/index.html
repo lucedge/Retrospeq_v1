@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retrospeq — Design System</title>
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../logo/favicon.svg">
+<link rel="stylesheet" href="../css/index.css">
+<style>
+  .page { max-width: 940px; margin: 0 auto; padding: 56px 28px 80px; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 44px; }
+  .top svg { height: 34px; }
+  .top h1 { font-size: var(--rq-text-2xl); font-weight: var(--rq-weight-display); letter-spacing: var(--rq-track-display); margin: 0; }
+  .lede { font-size: var(--rq-text-md); line-height: var(--rq-leading-body); color: var(--rq-ink-soft); max-width: 56ch; margin: 0 0 40px; }
+  .lede b { color: var(--rq-ink); font-weight: var(--rq-weight-semi); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-bottom: 40px; }
+  .item { display: block; text-decoration: none; color: inherit; transition: border-color var(--rq-duration-fast) var(--rq-ease); }
+  .item:hover { border-color: var(--rq-accent); }
+  .item h2 { font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); margin: 0 0 6px; }
+  .item p { font-size: var(--rq-text-sm); line-height: var(--rq-leading-snug); color: var(--rq-ink-soft); margin: 0; }
+  .sect { margin-bottom: 14px; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sw { width: 62px; }
+  .sw i { display: block; height: 42px; border-radius: var(--rq-radius-sm); border: 1px solid var(--rq-line); }
+  .sw span { display: block; font-family: var(--rq-font-mono); font-size: 9px; color: var(--rq-ink-faint); margin-top: 5px; }
+  .demo { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="top">
+    <svg viewBox="0 0 58 74" aria-hidden="true">
+      <circle cx="26" cy="26" r="20.5" fill="none" stroke="var(--rq-ink)" stroke-width="11"/>
+      <rect x="41" y="5.5" width="11" height="68.5" fill="var(--rq-ink)"/>
+      <circle cx="32" cy="31" r="5.5" fill="var(--rq-accent)"/>
+    </svg>
+    <h1>Retrospeq</h1>
+  </div>
+
+  <p class="lede">The design system for a decision journal. Mood is <b>instrument black × amber LED</b>; the interface shows evidence rather than paragraphs, and <b>nothing is ever coloured red or green</b> — direction lives in the geometry instead.</p>
+
+  <p class="rq-label sect">Reference</p>
+  <div class="grid">
+    <a class="item rq-card" href="./instrument.html">
+      <h2>The system →</h2>
+      <p>17 screens, palette, type and the seven data marks in context.</p>
+    </a>
+    <a class="item rq-card" href="./wordmarks-v3.html">
+      <h2>Wordmarks →</h2>
+      <p>Six directions where the letterforms carry the concept. Current.</p>
+    </a>
+    <a class="item rq-card" href="./marks.html">
+      <h2>Symbol marks →</h2>
+      <p>Six graphical directions, construction and usage rules.</p>
+    </a>
+    <a class="item rq-card" href="./wordmarks-v1.html">
+      <h2>Wordmarks, first pass →</h2>
+      <p>Superseded. Kept for the reasoning trail.</p>
+    </a>
+  </div>
+
+  <p class="rq-label sect">Palette</p>
+  <div class="swatches" style="margin-bottom:40px">
+    <div class="sw"><i style="background:var(--rq-bg)"></i><span>bg</span></div>
+    <div class="sw"><i style="background:var(--rq-surface)"></i><span>surface</span></div>
+    <div class="sw"><i style="background:var(--rq-surface-2)"></i><span>surface-2</span></div>
+    <div class="sw"><i style="background:var(--rq-line)"></i><span>line</span></div>
+    <div class="sw"><i style="background:var(--rq-ink-faint)"></i><span>ink-faint</span></div>
+    <div class="sw"><i style="background:var(--rq-ink-soft)"></i><span>ink-soft</span></div>
+    <div class="sw"><i style="background:var(--rq-ink)"></i><span>ink</span></div>
+    <div class="sw"><i style="background:var(--rq-accent)"></i><span>accent</span></div>
+    <div class="sw"><i style="background:var(--rq-mark)"></i><span>mark</span></div>
+    <div class="sw"><i style="background:var(--rq-mark-dim)"></i><span>mark-dim</span></div>
+  </div>
+
+  <p class="rq-label sect">Marks &amp; controls — live from the stylesheet</p>
+  <div class="rq-card">
+    <div class="demo">
+      <div>
+        <p class="rq-label">Adherence</p>
+        <div class="rq-dots" style="max-width:150px">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i class="off"></i><i class="off"></i><i class="off"></i>
+        </div>
+      </div>
+      <div style="min-width:180px">
+        <p class="rq-label">R bars</p>
+        <div class="rq-rrow" style="margin-bottom:6px"><div class="rq-track"><i class="rq-fill" style="left:50%;width:26%"></i></div><span class="rq-rval rq-num">+1.8R</span></div>
+        <div class="rq-rrow"><div class="rq-track"><i class="rq-fill" style="right:50%;width:14%"></i></div><span class="rq-rval rq-num">−1.0R</span></div>
+      </div>
+      <div style="min-width:150px">
+        <p class="rq-label">Risk vs cap</p>
+        <div class="rq-gauge"><i class="rq-gauge__fill" style="width:55%"></i><i class="rq-gauge__cap" style="left:75%"></i></div>
+        <div class="rq-gauge__lbl"><span>1.1%</span><span>cap 2.0%</span></div>
+      </div>
+      <div>
+        <p class="rq-label">Streak</p>
+        <div class="rq-strip" style="width:130px">
+          <i style="height:60%"></i><i style="height:100%"></i><i style="height:80%"></i><i style="height:100%"></i>
+          <i style="height:45%"></i><i style="height:100%"></i><i style="height:70%"></i><i style="height:100%"></i>
+          <i class="gap" style="height:30%"></i><i style="height:90%"></i><i style="height:100%"></i><i style="height:75%"></i>
+        </div>
+      </div>
+    </div>
+
+    <hr class="rq-hr">
+
+    <div class="demo">
+      <div><p class="rq-label">Rating</p><div class="rq-rating"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div></div>
+      <div><p class="rq-label">Pills</p><div class="rq-pills"><span class="rq-pill on">Breakout</span><span class="rq-pill">Pullback</span></div></div>
+      <div style="min-width:130px"><p class="rq-label">Stepper</p><div class="rq-step"><span class="rq-step__btn">−</span><span class="rq-step__val">1.2%</span><span class="rq-step__btn">+</span></div></div>
+      <div><p class="rq-label">Buttons</p><div style="display:flex;gap:8px"><button class="rq-btn">Arm</button><button class="rq-btn rq-btn--ghost">Not now</button></div></div>
+      <div><p class="rq-label">Symmetric choice</p><div class="rq-btn-row" style="min-width:220px"><button class="rq-btn rq-btn--equal">Keep 1%</button><button class="rq-btn rq-btn--equal">Move to 2%</button></div></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
