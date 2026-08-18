@@ -1,0 +1,121 @@
+{
+  "fixture": "overnight_weekend",
+  "fills": [
+    { "account_ref": "acct_forex", "provider_ref": "ow-fx-1", "server_day": "2026-08-07" },
+    { "account_ref": "acct_forex", "provider_ref": "ow-fx-2", "server_day": "2026-08-10" },
+    { "account_ref": "acct_crypto", "provider_ref": "ow-btc-1", "server_day": "2026-08-07" },
+    { "account_ref": "acct_crypto", "provider_ref": "ow-btc-2", "server_day": "2026-08-08" }
+  ],
+  "coverage_gaps": [],
+  "coverage_gaps_note": "The Fri 20:00Z -> Mon 09:00Z gap with no fills over the weekend is NOT a coverage_gaps row. The market is closed, not missing data (00-foundation §7.3's alerting condition is for missed SCHEDULED syncs during trading hours, not for the absence of trading itself). See gapped_history for the contrasting case where a hole IS a real coverage gap.",
+  "blocks": [
+    {
+      "block_ref": "block_forex",
+      "account_ref": "acct_forex",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-07T20:00:00Z",
+      "closed_at": "2026-08-10T09:00:00Z",
+      "server_day": "2026-08-07"
+    },
+    {
+      "block_ref": "block_crypto",
+      "account_ref": "acct_crypto",
+      "instrument": "BTCUSD",
+      "opened_at": "2026-08-07T23:00:00Z",
+      "closed_at": "2026-08-08T01:00:00Z",
+      "server_day": "2026-08-07"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_forex",
+      "account_ref": "acct_forex",
+      "block_ref": "block_forex",
+      "instrument": "EURUSD",
+      "direction": "long",
+      "opened_at": "2026-08-07T20:00:00Z",
+      "closed_at": "2026-08-10T09:00:00Z",
+      "server_day": "2026-08-07",
+      "server_day_note": "trades.server_day = server_day(opened_at) = Friday, per this library's decision #6 (fixtures/README.md), even though the CLOSING fill ow-fx-2's own server_day is 2026-08-10 (Monday) — see 'fills' above. The trade's server_day never moves once it opens.",
+      "status": "closed",
+      "entry_price_avg": "1.09000000",
+      "exit_price_avg": "1.09150000",
+      "peak_volume": "10000.00000000",
+      "initial_stop": "1.08800000",
+      "initial_risk_pct": "0.200000",
+      "risk_pct": "0.200000",
+      "r_multiple": "0.7500",
+      "realized_pnl": "15.00000000",
+      "currency": "USD",
+      "hold_seconds": 219600,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "ow-fx-1", "role": "entry" },
+        { "fill_ref": "ow-fx-2", "role": "exit" }
+      ]
+    },
+    {
+      "trade_ref": "trade_crypto",
+      "account_ref": "acct_crypto",
+      "block_ref": "block_crypto",
+      "instrument": "BTCUSD",
+      "direction": "long",
+      "opened_at": "2026-08-07T23:00:00Z",
+      "closed_at": "2026-08-08T01:00:00Z",
+      "server_day": "2026-08-07",
+      "server_day_note": "Crypto rollover is 00:00 UTC (no shift): server_day(opened_at) = date(2026-08-07T23:00Z) = 2026-08-07, the OPEN day, even though the position crosses UTC midnight and closes on 2026-08-08.",
+      "status": "closed",
+      "entry_price_avg": "60000.00000000",
+      "exit_price_avg": "60200.00000000",
+      "peak_volume": "0.50000000",
+      "initial_stop": "59500.00000000",
+      "initial_risk_pct": "1.000000",
+      "risk_pct": "1.000000",
+      "r_multiple": "0.4000",
+      "realized_pnl": "100.00000000",
+      "currency": "USD",
+      "hold_seconds": 7200,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "ow-btc-1", "role": "entry" },
+        { "fill_ref": "ow-btc-2", "role": "exit" }
+      ]
+    }
+  ],
+  "invariant_checks": [
+    {
+      "invariant": "server_day assignment, both rollover regimes (00-foundation §9.3)",
+      "note": "trade_forex demonstrates the forex/non-zero-rollover rule sticking to the open day across a market closure; trade_crypto demonstrates the 00:00 UTC no-shift rule sticking to the open day across a UTC-midnight crossing while the market stays open.",
+      "matches": true
+    },
+    {
+      "invariant": "no spurious session/overnight boundary split (Module 02 §4.3 signal table, weight 0.65)",
+      "note": "Both trades are a plain 2-fill entry/exit pair. The session/overnight boundary signal requires an ADDITIONAL fill landing on either side of the rollover to mean anything — neither trade has one, so neither should trigger a split or even register the signal in grouping_signals.",
+      "matches": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_forex",
+      "sum_of_fill_realized_pnl": "15.00000000",
+      "matches_trade_realized_pnl": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_crypto",
+      "sum_of_fill_realized_pnl": "100.00000000",
+      "matches_trade_realized_pnl": true
+    }
+  ]
+}

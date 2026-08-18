@@ -1,0 +1,113 @@
+{
+  "fixture": "multi_currency",
+  "fills": [
+    { "account_ref": "acct_usd", "provider_ref": "mc-usd-1", "server_day": "2026-08-04" },
+    { "account_ref": "acct_usd", "provider_ref": "mc-usd-2", "server_day": "2026-08-04" },
+    { "account_ref": "acct_jpy", "provider_ref": "mc-jpy-1", "server_day": "2026-08-04" },
+    { "account_ref": "acct_jpy", "provider_ref": "mc-jpy-2", "server_day": "2026-08-04" }
+  ],
+  "blocks": [
+    {
+      "block_ref": "block_usd",
+      "account_ref": "acct_usd",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-04T09:00:00Z",
+      "closed_at": "2026-08-04T09:30:00Z",
+      "server_day": "2026-08-04"
+    },
+    {
+      "block_ref": "block_jpy",
+      "account_ref": "acct_jpy",
+      "instrument": "USDJPY",
+      "opened_at": "2026-08-04T09:00:00Z",
+      "closed_at": "2026-08-04T09:30:00Z",
+      "server_day": "2026-08-04"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_usd",
+      "account_ref": "acct_usd",
+      "block_ref": "block_usd",
+      "instrument": "EURUSD",
+      "direction": "long",
+      "opened_at": "2026-08-04T09:00:00Z",
+      "closed_at": "2026-08-04T09:30:00Z",
+      "server_day": "2026-08-04",
+      "status": "closed",
+      "entry_price_avg": "1.10000000",
+      "exit_price_avg": "1.10100000",
+      "peak_volume": "500000.00000000",
+      "initial_stop": "1.09900000",
+      "initial_risk_pct": "1.000000",
+      "risk_pct": "1.000000",
+      "r_multiple": "1.0000",
+      "realized_pnl": "500.00000000",
+      "currency": "USD",
+      "hold_seconds": 1800,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "mc-usd-1", "role": "entry" },
+        { "fill_ref": "mc-usd-2", "role": "exit" }
+      ]
+    },
+    {
+      "trade_ref": "trade_jpy",
+      "account_ref": "acct_jpy",
+      "block_ref": "block_jpy",
+      "instrument": "USDJPY",
+      "direction": "long",
+      "opened_at": "2026-08-04T09:00:00Z",
+      "closed_at": "2026-08-04T09:30:00Z",
+      "server_day": "2026-08-04",
+      "status": "closed",
+      "entry_price_avg": "150.00000000",
+      "exit_price_avg": "150.05000000",
+      "peak_volume": "1000000.00000000",
+      "initial_stop": "149.50000000",
+      "initial_risk_pct": "10.000000",
+      "risk_pct": "10.000000",
+      "r_multiple": "0.1000",
+      "realized_pnl": "50000.00000000",
+      "currency": "JPY",
+      "hold_seconds": 1800,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "mc-jpy-1", "role": "entry" },
+        { "fill_ref": "mc-jpy-2", "role": "exit" }
+      ]
+    }
+  ],
+  "invariant_check": {
+    "invariant": "no currency mixing in any aggregate (00-foundation §9.2, Money)",
+    "trap": "trade_usd.realized_pnl = 500.00 USD and trade_jpy.realized_pnl = 50000.00 JPY are same server_day (2026-08-04), same user, and deliberately differ by two orders of magnitude so that a naive sum(realized_pnl) across accounts/currencies is visually obvious as a bug, not a rounding curiosity.",
+    "forbidden_result": "500.00 + 50000.00 = 50500.00 — MEANINGLESS. Never compute this without currency-aware conversion.",
+    "correct_handling": "Any cross-account aggregate must either report per-currency subtotals or convert through a currency-aware step before summing. This fixture supplies the trap case only; the conversion/aggregation logic itself belongs to downstream modules (Module 05 analytics) and is out of scope here."
+  },
+  "invariant_checks": [
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_usd",
+      "sum_of_fill_realized_pnl": "500.00000000",
+      "matches_trade_realized_pnl": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_jpy",
+      "sum_of_fill_realized_pnl": "50000.00000000",
+      "matches_trade_realized_pnl": true
+    }
+  ]
+}

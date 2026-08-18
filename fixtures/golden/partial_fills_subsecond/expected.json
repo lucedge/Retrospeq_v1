@@ -1,0 +1,74 @@
+{
+  "fixture": "partial_fills_subsecond",
+  "dedup": {
+    "note": "input.json delivers pfs-2 twice (identical payload, same provider_ref). unique(account_id, provider_ref) + ON CONFLICT DO NOTHING (§4.1 step 4) means only ONE fills row for pfs-2 is ever written. The fills list below has exactly 4 rows, not 5.",
+    "provider_refs_after_dedup": ["pfs-1", "pfs-2", "pfs-3", "pfs-exit"],
+    "duplicate_provider_ref": "pfs-2",
+    "fills_seen": 5,
+    "fills_new": 4
+  },
+  "fills": [
+    { "provider_ref": "pfs-1", "server_day": "2026-08-04" },
+    { "provider_ref": "pfs-2", "server_day": "2026-08-04" },
+    { "provider_ref": "pfs-3", "server_day": "2026-08-04" },
+    { "provider_ref": "pfs-exit", "server_day": "2026-08-04" }
+  ],
+  "blocks": [
+    {
+      "block_ref": "block_1",
+      "instrument": "BTCUSD",
+      "opened_at": "2026-08-04T14:00:00.000Z",
+      "closed_at": "2026-08-04T14:30:00.000Z",
+      "server_day": "2026-08-04"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_1",
+      "block_ref": "block_1",
+      "instrument": "BTCUSD",
+      "direction": "long",
+      "opened_at": "2026-08-04T14:00:00.000Z",
+      "closed_at": "2026-08-04T14:30:00.000Z",
+      "server_day": "2026-08-04",
+      "status": "closed",
+      "entry_price_avg": "42000.55000000",
+      "exit_price_avg": "42100.00000000",
+      "peak_volume": "1.00000000",
+      "initial_stop": "41500.00000000",
+      "initial_risk_pct": "0.300000",
+      "risk_pct": "1.000000",
+      "r_multiple": "0.6630",
+      "realized_pnl": "99.45000000",
+      "currency": "USD",
+      "hold_seconds": 1800,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "pfs-1", "role": "entry" },
+        { "fill_ref": "pfs-2", "role": "add" },
+        { "fill_ref": "pfs-3", "role": "add" },
+        { "fill_ref": "pfs-exit", "role": "exit" }
+      ]
+    }
+  ],
+  "invariant_checks": [
+    {
+      "invariant": "grouping is deterministic for identical input, regardless of feed arrival order (00-foundation §9.2; Module 02 §4.2 'ordered by filled_at, id')",
+      "note": "input.json's fills array arrives in feed order [pfs-2(dup), pfs-2(dup), pfs-3, pfs-1, pfs-exit] — none of it filled_at order. Block/grouping derivation must re-sort by (filled_at, id) before running the running-volume algorithm; the result above does not depend on array order.",
+      "matches": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_1",
+      "sum_of_fill_realized_pnl": "99.45000000",
+      "matches_trade_realized_pnl": true
+    }
+  ],
+  "scoping_note": "This fixture does not cover the true exact-timestamp-tie (filled_at, id) tiebreak — the three entry fills are 0.35s and 0.55s apart, which is realistic sub-second broker granularity but not a literal tie. A genuine (filled_at, id)-tiebreak test would need to pin insertion order as a second, separate concern and is left out of Phase 0's required set."
+}

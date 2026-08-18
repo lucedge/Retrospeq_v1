@@ -1,0 +1,102 @@
+{
+  "fixture": "overnight_weekend",
+  "accounts": [
+    {
+      "account_ref": "acct_forex",
+      "account_id": "01a04f41-6ff0-7acd-b58d-6aef15e36e2e",
+      "user_id": "01a02aa7-50a4-7f4a-abe2-570e75ebb382",
+      "currency": "USD",
+      "platform": "mt5",
+      "day_rollover": "22:00:00 UTC",
+      "starting_equity": "10000.00000000",
+      "fills": [
+        {
+          "provider_ref": "ow-fx-1",
+          "instrument": "EURUSD",
+          "side": "buy",
+          "volume": "10000.00000000",
+          "price": "1.09000000",
+          "filled_at": "2026-08-07T20:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "0.00000000",
+          "currency": "USD",
+          "stop_at_fill": "1.08800000",
+          "target_at_fill": null,
+          "provider_position_ref": "pos-ow-fx",
+          "provider_parent_ref": null,
+          "close_reason": null,
+          "raw": {},
+          "_comment": "Opened Friday 20:00Z. Market is closed over the weekend — no fills Sat/Sun. This gap is NOT a coverage_gaps row; the market simply isn't trading."
+        },
+        {
+          "provider_ref": "ow-fx-2",
+          "instrument": "EURUSD",
+          "side": "sell",
+          "volume": "10000.00000000",
+          "price": "1.09150000",
+          "filled_at": "2026-08-10T09:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "15.00000000",
+          "currency": "USD",
+          "stop_at_fill": null,
+          "target_at_fill": null,
+          "provider_position_ref": "pos-ow-fx",
+          "provider_parent_ref": null,
+          "close_reason": "manual",
+          "raw": {},
+          "_comment": "Closed Monday 09:00Z — 2.5 days after open, having skipped a closed weekend."
+        }
+      ]
+    },
+    {
+      "account_ref": "acct_crypto",
+      "account_id": "01a03640-46ed-71c4-9ea5-a835d68ea830",
+      "user_id": "01a02aa7-50a4-7f4a-abe2-570e75ebb382",
+      "currency": "USD",
+      "platform": "mt5",
+      "day_rollover": "00:00:00 UTC",
+      "starting_equity": "25000.00000000",
+      "fills": [
+        {
+          "provider_ref": "ow-btc-1",
+          "instrument": "BTCUSD",
+          "side": "buy",
+          "volume": "0.50000000",
+          "price": "60000.00000000",
+          "filled_at": "2026-08-07T23:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "0.00000000",
+          "currency": "USD",
+          "stop_at_fill": "59500.00000000",
+          "target_at_fill": null,
+          "provider_position_ref": "pos-ow-btc",
+          "provider_parent_ref": null,
+          "close_reason": null,
+          "raw": {},
+          "_comment": "Crypto trades 24/7 — this position crosses UTC midnight, not a market closure."
+        },
+        {
+          "provider_ref": "ow-btc-2",
+          "instrument": "BTCUSD",
+          "side": "sell",
+          "volume": "0.50000000",
+          "price": "60200.00000000",
+          "filled_at": "2026-08-08T01:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "100.00000000",
+          "currency": "USD",
+          "stop_at_fill": null,
+          "target_at_fill": null,
+          "provider_position_ref": "pos-ow-btc",
+          "provider_parent_ref": null,
+          "close_reason": "manual",
+          "raw": {}
+        }
+      ]
+    }
+  ]
+}

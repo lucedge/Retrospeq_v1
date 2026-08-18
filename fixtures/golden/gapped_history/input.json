@@ -1,0 +1,72 @@
+{
+  "fixture": "gapped_history",
+  "account": {
+    "account_id": "01a019e1-35f2-78ec-854b-5b0df3a0328a",
+    "user_id": "01a01c92-2382-74b5-aef7-029227e96463",
+    "currency": "USD",
+    "platform": "mt5",
+    "day_rollover": "22:00:00 UTC",
+    "starting_equity": "10000.00000000"
+  },
+  "sync_runs": [
+    {
+      "sync_run_ref": "sync_run_1",
+      "tier": "t0",
+      "trigger": "scheduled",
+      "window_from": "2026-08-10T00:00:00Z",
+      "window_to": "2026-08-10T10:00:00Z",
+      "status": "ok",
+      "note": "Returns the entry fill at 09:00Z. Nothing wrong with this run in isolation."
+    },
+    {
+      "sync_run_ref": "sync_run_2",
+      "tier": "t0",
+      "trigger": "scheduled",
+      "window_from": "2026-08-10T14:00:00Z",
+      "window_to": "2026-08-11T00:00:00Z",
+      "status": "ok",
+      "note": "A scheduled sync between 10:00Z and 14:00Z never ran (missed scheduled sync, 00-foundation §7.3's own alerting condition) — this run's window starts at 14:00Z, leaving 10:00-14:00Z unrequested. Returns the exit fill at 15:00Z."
+    }
+  ],
+  "fills": [
+    {
+      "provider_ref": "gh-1",
+      "instrument": "EURUSD",
+      "side": "buy",
+      "volume": "100000.00000000",
+      "price": "1.12000000",
+      "filled_at": "2026-08-10T09:00:00Z",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "realized_pnl": "0.00000000",
+      "currency": "USD",
+      "stop_at_fill": "1.11900000",
+      "target_at_fill": null,
+      "provider_position_ref": "pos-gh",
+      "provider_parent_ref": null,
+      "close_reason": null,
+      "raw": {},
+      "_sync_run_ref": "sync_run_1"
+    },
+    {
+      "provider_ref": "gh-2",
+      "instrument": "EURUSD",
+      "side": "sell",
+      "volume": "100000.00000000",
+      "price": "1.12000000",
+      "filled_at": "2026-08-10T15:00:00Z",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "realized_pnl": "0.00000000",
+      "currency": "USD",
+      "stop_at_fill": null,
+      "target_at_fill": null,
+      "provider_position_ref": "pos-gh",
+      "provider_parent_ref": null,
+      "close_reason": "manual",
+      "raw": {},
+      "_sync_run_ref": "sync_run_2",
+      "_comment": "Buy 09:00 -> sell 15:00, net 0, same price. In isolation this looks like an ordinary flat, unremarkable closed trade. The trap: a real coverage gap (10:00-14:00Z) falls strictly inside [opened_at, closed_at], so the day must never be closeable even though the visible fills look complete."
+    }
+  ]
+}

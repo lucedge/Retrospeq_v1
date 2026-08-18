@@ -1,0 +1,99 @@
+{
+  "fixture": "multi_currency",
+  "accounts": [
+    {
+      "account_ref": "acct_usd",
+      "account_id": "01a02280-6fbc-720f-918b-8bfde9bbc209",
+      "user_id": "01a04b1c-aefe-7ae1-8e01-c87c7dd58d29",
+      "currency": "USD",
+      "platform": "mt5",
+      "day_rollover": "22:00:00 UTC",
+      "starting_equity": "50000.00000000",
+      "fills": [
+        {
+          "provider_ref": "mc-usd-1",
+          "instrument": "EURUSD",
+          "side": "buy",
+          "volume": "500000.00000000",
+          "price": "1.10000000",
+          "filled_at": "2026-08-04T09:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "0.00000000",
+          "currency": "USD",
+          "stop_at_fill": "1.09900000",
+          "target_at_fill": null,
+          "provider_position_ref": "pos-mc-usd",
+          "provider_parent_ref": null,
+          "close_reason": null,
+          "raw": {}
+        },
+        {
+          "provider_ref": "mc-usd-2",
+          "instrument": "EURUSD",
+          "side": "sell",
+          "volume": "500000.00000000",
+          "price": "1.10100000",
+          "filled_at": "2026-08-04T09:30:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "500.00000000",
+          "currency": "USD",
+          "stop_at_fill": null,
+          "target_at_fill": null,
+          "provider_position_ref": "pos-mc-usd",
+          "provider_parent_ref": null,
+          "close_reason": "manual",
+          "raw": {}
+        }
+      ]
+    },
+    {
+      "account_ref": "acct_jpy",
+      "account_id": "01a03543-9fdf-7a69-87b2-84ad5ff075ec",
+      "user_id": "01a04b1c-aefe-7ae1-8e01-c87c7dd58d29",
+      "currency": "JPY",
+      "platform": "mt5",
+      "day_rollover": "22:00:00 UTC",
+      "starting_equity": "5000000.00000000",
+      "fills": [
+        {
+          "provider_ref": "mc-jpy-1",
+          "instrument": "USDJPY",
+          "side": "buy",
+          "volume": "1000000.00000000",
+          "price": "150.00000000",
+          "filled_at": "2026-08-04T09:00:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "0.00000000",
+          "currency": "JPY",
+          "stop_at_fill": "149.50000000",
+          "target_at_fill": null,
+          "provider_position_ref": "pos-mc-jpy",
+          "provider_parent_ref": null,
+          "close_reason": null,
+          "raw": {}
+        },
+        {
+          "provider_ref": "mc-jpy-2",
+          "instrument": "USDJPY",
+          "side": "sell",
+          "volume": "1000000.00000000",
+          "price": "150.05000000",
+          "filled_at": "2026-08-04T09:30:00Z",
+          "commission": "0.00000000",
+          "swap": "0.00000000",
+          "realized_pnl": "50000.00000000",
+          "currency": "JPY",
+          "stop_at_fill": null,
+          "target_at_fill": null,
+          "provider_position_ref": "pos-mc-jpy",
+          "provider_parent_ref": null,
+          "close_reason": "manual",
+          "raw": {}
+        }
+      ]
+    }
+  ]
+}

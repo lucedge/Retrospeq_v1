@@ -1,0 +1,93 @@
+{
+  "fixture": "gapped_history",
+  "fills": [
+    { "provider_ref": "gh-1", "server_day": "2026-08-10" },
+    { "provider_ref": "gh-2", "server_day": "2026-08-10" }
+  ],
+  "blocks": [
+    {
+      "block_ref": "block_1",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-10T09:00:00Z",
+      "closed_at": "2026-08-10T15:00:00Z",
+      "server_day": "2026-08-10"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_1",
+      "block_ref": "block_1",
+      "instrument": "EURUSD",
+      "direction": "long",
+      "opened_at": "2026-08-10T09:00:00Z",
+      "closed_at": "2026-08-10T15:00:00Z",
+      "server_day": "2026-08-10",
+      "status": "closed",
+      "entry_price_avg": "1.12000000",
+      "exit_price_avg": "1.12000000",
+      "peak_volume": "100000.00000000",
+      "initial_stop": "1.11900000",
+      "initial_risk_pct": "1.000000",
+      "risk_pct": "1.000000",
+      "r_multiple": "0.0000",
+      "realized_pnl": "0.00000000",
+      "currency": "USD",
+      "hold_seconds": 21600,
+      "outcome": "scratch",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "gh-1", "role": "entry" },
+        { "fill_ref": "gh-2", "role": "exit" }
+      ],
+      "note": "Buy 09:00 -> sell 15:00 at the SAME price, net 0. Block derivation and grouping run on visible data only and produce what looks like a completely ordinary closed flat trade. Nothing about the trade record itself signals a problem — that's the trap this fixture is built to catch."
+    }
+  ],
+  "sync": {
+    "sync_runs": [
+      {
+        "sync_run_ref": "sync_run_1",
+        "window_from": "2026-08-10T00:00:00Z",
+        "window_to": "2026-08-10T10:00:00Z",
+        "fills_seen": 1,
+        "fills_new": 1,
+        "status": "ok"
+      },
+      {
+        "sync_run_ref": "sync_run_2",
+        "window_from": "2026-08-10T14:00:00Z",
+        "window_to": "2026-08-11T00:00:00Z",
+        "fills_seen": 1,
+        "fills_new": 1,
+        "status": "ok"
+      }
+    ],
+    "coverage_gaps": [
+      {
+        "gap_from": "2026-08-10T10:00:00Z",
+        "gap_to": "2026-08-10T14:00:00Z",
+        "resolved_at": null
+      }
+    ],
+    "closeout_blocked": true,
+    "blocking_reason": "SYNC_COVERAGE_GAP",
+    "blocking_reason_note": "The gap window [10:00Z, 14:00Z) falls strictly inside trade_1's [opened_at 09:00Z, closed_at 15:00Z). Per Module 02 §4.6 ('assert no coverage_gap overlaps this server_day') and §6.3 ('a day is never marked closable while a coverage gap exists in it'), server_day 2026-08-10 must never be closeable while this gap remains unresolved, even though the visible trade looks clean.",
+    "scoping_note": "This models the gap as arising from a missed SCHEDULED sync (00-foundation §7.3's alerting condition: sync_run_2's window starts at 14:00Z instead of continuing from sync_run_1's 10:00Z end) rather than the WITHIN-run 'gap between window_from and the earliest returned fill' mechanism described in Module 02 §4.1 step 5. Both are coverage_gaps rows in the end, but they're detected by different reconciliation logic (schedule-vs-actual-runs, vs. within-a-run feed completeness) — worth being explicit about so this fixture isn't read as testing §4.1 step 5 specifically."
+  },
+  "invariant_checks": [
+    {
+      "invariant": "a day is never closable while a coverage gap exists in it (Module 02 §6.3, §4.6)",
+      "matches": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_1",
+      "sum_of_fill_realized_pnl": "0.00000000",
+      "matches_trade_realized_pnl": true
+    }
+  ]
+}

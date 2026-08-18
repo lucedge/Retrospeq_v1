@@ -1,0 +1,119 @@
+{
+  "fixture": "flip_no_flat",
+  "fills": [
+    { "provider_ref": "flip-1", "server_day": "2026-08-06" },
+    { "provider_ref": "flip-2", "server_day": "2026-08-06" },
+    { "provider_ref": "flip-3", "server_day": "2026-08-06" }
+  ],
+  "blocks": [
+    {
+      "block_ref": "block_long",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-06T09:00:00Z",
+      "closed_at": "2026-08-06T09:15:00Z",
+      "server_day": "2026-08-06"
+    },
+    {
+      "block_ref": "block_short",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-06T09:15:00Z",
+      "closed_at": "2026-08-06T09:30:00Z",
+      "server_day": "2026-08-06"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_long",
+      "block_ref": "block_long",
+      "instrument": "EURUSD",
+      "direction": "long",
+      "opened_at": "2026-08-06T09:00:00Z",
+      "closed_at": "2026-08-06T09:15:00Z",
+      "server_day": "2026-08-06",
+      "status": "closed",
+      "entry_price_avg": "1.15000000",
+      "exit_price_avg": "1.15100000",
+      "peak_volume": "100000.00000000",
+      "initial_stop": "1.14900000",
+      "initial_risk_pct": "1.000000",
+      "risk_pct": "1.000000",
+      "r_multiple": "1.0000",
+      "realized_pnl": "100.00000000",
+      "currency": "USD",
+      "hold_seconds": 900,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "flip-1", "role": "entry" },
+        { "fill_ref": "flip-2", "role": "exit" }
+      ],
+      "trade_events": []
+    },
+    {
+      "trade_ref": "trade_short",
+      "block_ref": "block_short",
+      "instrument": "EURUSD",
+      "direction": "short",
+      "opened_at": "2026-08-06T09:15:00Z",
+      "closed_at": "2026-08-06T09:30:00Z",
+      "server_day": "2026-08-06",
+      "status": "closed",
+      "entry_price_avg": "1.15100000",
+      "exit_price_avg": "1.15050000",
+      "peak_volume": "100000.00000000",
+      "initial_stop": null,
+      "initial_risk_pct": null,
+      "risk_pct": null,
+      "r_multiple": null,
+      "realized_pnl": "50.00000000",
+      "currency": "USD",
+      "hold_seconds": 900,
+      "outcome": "win",
+      "scale_out_count": 1,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "flip-3", "role": "exit" }
+      ],
+      "trade_events": [
+        {
+          "kind": "entry",
+          "fill_ref": "flip-2",
+          "occurred_at": "2026-08-06T09:15:00Z",
+          "price": "1.15100000",
+          "volume": "100000.00000000",
+          "volume_after": "100000.00000000",
+          "note": "flip-2 is a single 200000-unit physical fill. Its trade_fills row (role=exit) belongs to trade_long only, per trade_fills_fill_unique. This trade_events row on trade_short references the SAME fill_id to supply the opening entry_price_avg for the new short, per docs/adr/0001-flip-fill-split-via-trade-events.md."
+        }
+      ]
+    }
+  ],
+  "invariant_checks": [
+    {
+      "invariant": "every fill maps to exactly one trade via trade_fills (00-foundation §9.2 / Module 02 §3.1 trade_fills_fill_unique)",
+      "note": "flip-2 has exactly one trade_fills row (trade_long, role=exit). Its appearance on trade_short is via trade_events only, which has no fill-uniqueness constraint — the unique index holds literally.",
+      "matches": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_long",
+      "sum_of_fill_realized_pnl": "100.00000000",
+      "note": "flip-1 (entry) reports 0.00; flip-2's reported realized_pnl (100.00) is only the closing leg's P&L — the opening leg of the new short is unrealized and carries no P&L field at all (trade_events has none).",
+      "matches_trade_realized_pnl": true
+    },
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_short",
+      "sum_of_fill_realized_pnl": "50.00000000",
+      "matches_trade_realized_pnl": true
+    }
+  ]
+}
