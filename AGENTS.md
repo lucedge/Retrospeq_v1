@@ -90,7 +90,27 @@ Rules that look like bugs (design-system README): one `.rq-btn` per view; `.rq-b
 
 Unit 90% line coverage on the grouping/rule/statistics engines, 70% overall · property-based tests on grouping and rule-evaluation invariants · RLS cross-user isolation asserted on 100% of tables, automated · E2E on every module's core flow plus one failure path · golden fixture replay for anything touching the grouping engine.
 
+## Documentation
+
+Required per 00-foundation §12, checked (not written) by `retrospeq-qa`, written by `retrospeq-coder` as part of finishing a slice — not a separate pass, not optional:
+
+- `docs/adr/NNNN-short-title.md` — one per deliberate deviation from a 00-foundation convention. What was deviated from, why, what it costs.
+- `docs/runbook.md` — one entry per alerting condition a module's spec calls out (00-foundation §7.3 / the module's own error-handling section).
+- Non-obvious migration constraints get an inline comment, not a separate doc.
+
+No dedicated documentation agent — see "Subagents" below for why the 5-agent roster (not the larger role list sometimes proposed for this kind of pipeline) is deliberate.
+
 ## Subagents
+
+Deliberately 5 roles, not more. A broader ~17-role pipeline (separate
+Requirements/Architecture/Frontend/Backend/Database/Integration/Code-Review/
+Performance/Bug-Fix/Documentation agents) was considered and rejected
+2026-08-19 — see PROGRESS.md decision log. The short version: this
+spec ships vertical slices, not layers, so splitting one slice across
+several coding agents adds handoff overhead without adding coverage;
+the responsibilities that were real (repo-reuse checks, docs,
+performance budgets) got folded into the existing agents instead of
+becoming new ones.
 
 Definitions live in `.claude/agents/`. Roster: `retrospeq-coder` (implements one story/module slice against spec + this file), `retrospeq-tester` (writes/runs unit, property, RLS, integration, E2E, fixture-replay tests), `retrospeq-security-reviewer` (credential handling, RLS, injection surface — blocking authority on the security bar above), `retrospeq-qa` (reviews against the non-negotiables list and design-system rules, catches drift), `retrospeq-orchestrator` (reads PROGRESS.md, decides next task per build order, dispatches the others, updates the ledger). The orchestrator is the one invoked by the scheduled routine that resumes work after a context reset or usage-limit restart — see PROGRESS.md "Autonomous continuation."
 

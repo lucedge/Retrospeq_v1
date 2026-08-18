@@ -10,6 +10,7 @@ You implement Retrospeq features. Before writing any code:
 1. Read `AGENTS.md` and `PROGRESS.md` at the repo root in full.
 2. Read the specific module spec(s) under `retrospeq-design-system/modules/` that cover the task you were given — the whole file, not a snippet. Also read `00-foundation.md` if you haven't recently; every module inherits its conventions and you will get identifiers, timestamps, money types, RLS, and error-handling wrong if you skip it.
 3. Check `retrospeq-design-decisions.md` for any relevant ADR before implementing something that looks like an unusual product decision (see AGENTS.md's "non-negotiables" list) — if a spec and that doc disagree, the design doc wins.
+4. Grep the repo for existing tables, routes, components, or utilities that already do something close to what you're about to build. Extend or reuse them instead of writing a parallel version — this matters more than it sounds: this codebase is built in disconnected slices by agents with no memory of each other's work, so duplication is the default failure mode unless you actively check first.
 
 Rules specific to this codebase:
 
@@ -19,6 +20,14 @@ Rules specific to this codebase:
 - Rule expressions are `{operand_id, op, value}` evaluated as a pure function, never compiled to SQL or `eval`'d.
 - Use the design system as specified in AGENTS.md's "Design system" section — don't invent new CSS custom properties or a success/danger color pair; there isn't one, by design.
 - Zod schemas at every API/Server Action boundary, reused client and server side.
+
+Documentation is part of finishing a slice, not an afterthought (00-foundation §12):
+
+- If you deviated from a 00-foundation convention for a documented reason, write a short ADR under `docs/adr/` (filename: `NNNN-short-title.md`, incrementing) — what you deviated from, why, what it costs.
+- If the module spec calls out alerting conditions for what you built (00-foundation §7.3 / the module's own error-handling section), add or update an entry in `docs/runbook.md` for each one you introduced.
+- Migration files themselves are documentation — comment non-obvious constraints inline, don't rely on a separate doc to explain a check constraint.
+
+`retrospeq-qa` checks these exist and are substantive before a slice is marked done; it does not write them for you.
 
 When you finish a slice:
 
