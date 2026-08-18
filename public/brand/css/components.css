@@ -1,0 +1,138 @@
+/* ============================================================
+   Retrospeq — Components
+   Controls sized for fast, keyboard-free capture, plus the small
+   set of containers the product needs. All touch targets clear 44px
+   where they are primary.
+   ============================================================ */
+
+/* ---------- Buttons ----------
+   ONE .rq-btn per view. If a screen seems to need two primaries,
+   the screen is doing two jobs. */
+.rq-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 13px 20px; min-height: 44px;
+  background: var(--rq-accent); color: var(--rq-accent-on);
+  border-radius: var(--rq-radius-md);
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-snug);
+  transition: filter var(--rq-duration-fast) var(--rq-ease);
+}
+.rq-btn:hover { filter: brightness(1.06); }
+.rq-btn:active { filter: brightness(.94); }
+.rq-btn[disabled] { opacity: .45; cursor: not-allowed; filter: none; }
+.rq-btn--block { width: 100%; }
+
+.rq-btn--ghost {
+  background: none; color: var(--rq-ink);
+  box-shadow: inset 0 0 0 1px var(--rq-line-strong);
+  font-weight: var(--rq-weight-semi);
+}
+.rq-btn--ghost:hover { background: var(--rq-surface-2); filter: none; }
+
+/* Symmetric choice. Both options MUST be this class — same element,
+   same weight, no default. Used where the product has an opinion that
+   the current state is incoherent, but none about which way to resolve
+   it. A well-meaning refactor to "primary + secondary" breaks an
+   ethics decision, not a style preference. */
+.rq-btn--equal {
+  background: none; color: var(--rq-ink);
+  box-shadow: inset 0 0 0 1.5px var(--rq-ink);
+  font-weight: var(--rq-weight-bold);
+}
+.rq-btn--equal:hover { background: var(--rq-surface-2); filter: none; }
+
+.rq-btn-row { display: flex; gap: 8px; }
+.rq-btn-row > * { flex: 1; }
+
+/* ---------- Dot rating ----------
+   Ratings are dots, never a numeric input. Tap target 26px+ with
+   surrounding padding. */
+.rq-rating { display: flex; gap: 6px; }
+.rq-rating i {
+  display: block; width: 26px; height: 26px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1.4px var(--rq-line-strong);
+  transition: background var(--rq-duration-fast) var(--rq-ease);
+}
+.rq-rating i.on { background: var(--rq-accent); box-shadow: none; }
+
+/* ---------- Pills (pick-one / pick-many) ---------- */
+.rq-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.rq-pill {
+  padding: 8px 13px; min-height: 34px;
+  border-radius: var(--rq-radius-pill);
+  background: var(--rq-surface); color: var(--rq-ink-soft);
+  box-shadow: inset 0 0 0 1px var(--rq-line);
+  font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium);
+}
+.rq-pill.on {
+  background: var(--rq-accent); color: var(--rq-accent-on);
+  box-shadow: none; font-weight: var(--rq-weight-bold);
+}
+
+/* ---------- Stepper ----------
+   Numbers are stepped, never typed. If a field needs a keyboard it
+   does not belong on a pre-entry screen. */
+.rq-step {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 6px; border-radius: var(--rq-radius-pill);
+  background: var(--rq-surface); box-shadow: inset 0 0 0 1px var(--rq-line);
+}
+.rq-step__btn {
+  width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 0 0 1px var(--rq-line);
+  font-size: var(--rq-text-md); font-weight: var(--rq-weight-semi);
+  color: var(--rq-accent-ink);
+}
+.rq-step__val {
+  font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium);
+}
+
+/* ---------- Tags ---------- */
+.rq-tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: var(--rq-radius-pill);
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs);
+  font-weight: var(--rq-weight-semi); letter-spacing: .03em;
+}
+.rq-tag--on    { background: var(--rq-accent-soft); color: var(--rq-accent-ink); }
+.rq-tag--muted { background: var(--rq-surface-2); color: var(--rq-ink-faint); }
+
+/* ---------- Containers ---------- */
+.rq-card {
+  background: var(--rq-surface);
+  border: 1px solid var(--rq-line);
+  border-radius: var(--rq-radius-lg);
+  padding: var(--rq-space-4);
+}
+.rq-well { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); }
+.rq-hr { border: none; border-top: 1px solid var(--rq-line); margin: var(--rq-space-4) 0; }
+
+/* ---------- List rows ----------
+   Fixed-width slots keep icons and trailing values in true vertical
+   lanes across rows. Never rely on gap alone to align columns. */
+.rq-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--rq-line);
+}
+.rq-row:last-child { border-bottom: none; }
+.rq-row__name { width: 62px; flex-shrink: 0; font-size: var(--rq-text-sm); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.rq-row__meta { width: 34px; flex-shrink: 0; font-family: var(--rq-font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.rq-row__end  { width: 40px; flex-shrink: 0; text-align: right; font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); color: var(--rq-ink-faint); }
+
+/* ---------- Tab bar ---------- */
+.rq-tabs { display: flex; padding: 7px 0 12px; background: var(--rq-surface); border-top: 1px solid var(--rq-line); }
+.rq-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--rq-ink-faint); }
+.rq-tab.on { color: var(--rq-accent-ink); }
+.rq-tab span { font-size: 8.5px; font-weight: var(--rq-weight-semi); }
+
+/* ---------- Cost note ----------
+   Amber-bordered, for a trade-off the user must weigh — NOT a warning
+   to dismiss. There is no red equivalent in this system by design. */
+.rq-cost {
+  border: 1px solid var(--rq-accent);
+  background: var(--rq-accent-soft);
+  border-radius: var(--rq-radius-md);
+  padding: var(--rq-space-3);
+}

@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "./brand-tokens/tailwind.css";
+
+/*
+  The plain retrospeq-design-system CSS (fonts, tokens, base, marks,
+  components — the .rq-btn / .rq-h1 / .rq-num layer) is loaded via a
+  <link> tag in app/layout.tsx from /brand/css/index.css, per the
+  design system's own "no build step" usage contract. This file only
+  wires the Tailwind v4 @theme mapping (bg-bg, text-ink, etc.) on top
+  of the same tokens.
+
+  Do not hand-edit tokens here — the source of truth is
+  ../../retrospeq-design-system/brand/tokens/*, synced into
+  app/brand-tokens/ and public/brand/. See CLAUDE.md "Design system
+  sync".
+*/
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--rq-bg);
+  color: var(--rq-ink);
+  font-family: var(--font-sans);
+}

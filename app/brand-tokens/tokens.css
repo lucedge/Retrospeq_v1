@@ -1,0 +1,175 @@
+/* ============================================================
+   Retrospeq — Design Tokens
+   Mood: instrument black × amber LED.
+   All tokens are prefixed --rq- to avoid collisions with host apps.
+
+   Themes are token-level: components style through the tokens and
+   never reference a theme directly. Order matters —
+   media query first, then [data-theme] so an explicit user choice
+   wins in BOTH directions.
+   ============================================================ */
+
+:root {
+  /* ---- Surface ---- */
+  --rq-bg:            #F6F7F8;   /* page ground */
+  --rq-surface:       #FFFFFF;   /* cards, sheets */
+  --rq-surface-2:     #EFF1F2;   /* recessed wells, stage areas */
+  --rq-line:          #E0E4E6;   /* hairlines, dividers */
+  --rq-line-strong:   #C9CFD3;   /* emphasised borders, axis rules */
+
+  /* ---- Text ---- */
+  --rq-ink:           #14181B;   /* primary */
+  --rq-ink-soft:      #5C666D;   /* secondary  (AA on --rq-bg) */
+  --rq-ink-faint:     #8A939A;   /* labels, meta — never body copy */
+
+  /* ---- Accent (the ONE accent; max one CTA per view) ---- */
+  --rq-accent:        #E9A23B;   /* fills, buttons, marks */
+  --rq-accent-ink:    #8F6112;   /* accent AS TEXT — darkened for contrast */
+  --rq-accent-soft:   #FBF1DE;   /* tint background */
+  --rq-accent-on:     #14181B;   /* text sitting ON --rq-accent */
+
+  /* ---- Data marks ----
+     Direction is encoded by GEOMETRY, never by hue. There is deliberately
+     no success/danger colour pair — see README "The one hard rule". */
+  --rq-mark:          #C9821F;   /* primary data mark */
+  --rq-mark-dim:      #DFE3E6;   /* baseline / comparison series */
+  --rq-mark-ghost:    #EDEFF1;   /* empty track behind a bar */
+
+  /* ---- Misc ---- */
+  --rq-bezel:         #20262A;   /* device frames in mockups */
+  --rq-shadow:        rgba(20, 24, 27, .16);
+  --rq-focus:         var(--rq-accent);
+
+  /* ---- Type ---- */
+  --rq-font-sans: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --rq-font-mono: 'Azeret Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --rq-text-2xs:  10px;
+  --rq-text-xs:   11px;
+  --rq-text-sm:   12.5px;
+  --rq-text-base: 14px;
+  --rq-text-md:   16px;
+  --rq-text-lg:   19px;
+  --rq-text-xl:   23px;
+  --rq-text-2xl:  27px;
+  --rq-text-3xl:  34px;
+  --rq-text-4xl:  44px;
+  --rq-text-5xl:  60px;
+
+  --rq-weight-thin:    200;   /* "no data yet" state of the gauge wordmark */
+  --rq-weight-regular: 400;
+  --rq-weight-medium:  500;
+  --rq-weight-semi:    600;
+  --rq-weight-bold:    700;
+  --rq-weight-display: 800;
+
+  /* Tracking tightens as type grows; mono labels open up. */
+  --rq-track-display: -.045em;
+  --rq-track-tight:   -.032em;
+  --rq-track-snug:    -.02em;
+  --rq-track-normal:  0;
+  --rq-track-label:   .1em;
+  --rq-track-wide:    .14em;
+
+  --rq-leading-tight: 1.1;
+  --rq-leading-snug:  1.35;
+  --rq-leading-body:  1.55;
+
+  /* ---- Space (4px base) ---- */
+  --rq-space-1:  4px;
+  --rq-space-2:  8px;
+  --rq-space-3:  12px;
+  --rq-space-4:  16px;
+  --rq-space-5:  20px;
+  --rq-space-6:  24px;
+  --rq-space-8:  32px;
+  --rq-space-10: 40px;
+  --rq-space-12: 48px;
+  --rq-space-16: 64px;
+
+  /* ---- Radius ---- */
+  --rq-radius-sm:   6px;
+  --rq-radius-md:   10px;
+  --rq-radius-lg:   14px;
+  --rq-radius-xl:   21px;   /* app-icon squircle */
+  --rq-radius-pill: 999px;
+
+  /* ---- Motion ---- */
+  --rq-ease:          cubic-bezier(.2, .7, .3, 1);
+  --rq-duration-fast: 140ms;
+  --rq-duration:      220ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rq-bg:          #0E1113;
+    --rq-surface:     #171B1F;
+    --rq-surface-2:   #1F262A;
+    --rq-line:        rgba(255, 255, 255, .10);
+    --rq-line-strong: rgba(255, 255, 255, .22);
+
+    --rq-ink:         #ECEFF1;
+    --rq-ink-soft:    #98A2A8;
+    --rq-ink-faint:   #6B757B;
+
+    --rq-accent:      #E9A23B;
+    --rq-accent-ink:  #E9A23B;   /* amber clears AA on the dark ground as-is */
+    --rq-accent-soft: rgba(233, 162, 59, .14);
+    --rq-accent-on:   #14181B;
+
+    --rq-mark:        #E9A23B;
+    --rq-mark-dim:    #2B3237;
+    --rq-mark-ghost:  #20262A;
+
+    --rq-bezel:       #2A3238;
+    --rq-shadow:      rgba(0, 0, 0, .6);
+  }
+}
+
+:root[data-theme="dark"] {
+  --rq-bg:          #0E1113;
+  --rq-surface:     #171B1F;
+  --rq-surface-2:   #1F262A;
+  --rq-line:        rgba(255, 255, 255, .10);
+  --rq-line-strong: rgba(255, 255, 255, .22);
+
+  --rq-ink:         #ECEFF1;
+  --rq-ink-soft:    #98A2A8;
+  --rq-ink-faint:   #6B757B;
+
+  --rq-accent:      #E9A23B;
+  --rq-accent-ink:  #E9A23B;
+  --rq-accent-soft: rgba(233, 162, 59, .14);
+  --rq-accent-on:   #14181B;
+
+  --rq-mark:        #E9A23B;
+  --rq-mark-dim:    #2B3237;
+  --rq-mark-ghost:  #20262A;
+
+  --rq-bezel:       #2A3238;
+  --rq-shadow:      rgba(0, 0, 0, .6);
+}
+
+:root[data-theme="light"] {
+  --rq-bg:          #F6F7F8;
+  --rq-surface:     #FFFFFF;
+  --rq-surface-2:   #EFF1F2;
+  --rq-line:        #E0E4E6;
+  --rq-line-strong: #C9CFD3;
+
+  --rq-ink:         #14181B;
+  --rq-ink-soft:    #5C666D;
+  --rq-ink-faint:   #8A939A;
+
+  --rq-accent:      #E9A23B;
+  --rq-accent-ink:  #8F6112;
+  --rq-accent-soft: #FBF1DE;
+  --rq-accent-on:   #14181B;
+
+  --rq-mark:        #C9821F;
+  --rq-mark-dim:    #DFE3E6;
+  --rq-mark-ghost:  #EDEFF1;
+
+  --rq-bezel:       #20262A;
+  --rq-shadow:      rgba(20, 24, 27, .16);
+}

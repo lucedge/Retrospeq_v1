@@ -1,0 +1,79 @@
+/* ============================================================
+   Retrospeq — Tailwind v4 theme
+   Usage:  @import "./brand/tokens/tailwind.css";
+   Gives you classes like bg-bg, text-ink, border-line, bg-accent,
+   font-sans, text-2xl, p-6, rounded-lg.
+
+   Colours reference the runtime custom properties from tokens.css,
+   so light/dark switching keeps working — import tokens.css too.
+   ============================================================ */
+
+@import "./tokens.css";
+
+@theme {
+  --color-bg:          var(--rq-bg);
+  --color-surface:     var(--rq-surface);
+  --color-surface-2:   var(--rq-surface-2);
+  --color-line:        var(--rq-line);
+  --color-line-strong: var(--rq-line-strong);
+
+  --color-ink:         var(--rq-ink);
+  --color-ink-soft:    var(--rq-ink-soft);
+  --color-ink-faint:   var(--rq-ink-faint);
+
+  --color-accent:      var(--rq-accent);
+  --color-accent-ink:  var(--rq-accent-ink);
+  --color-accent-soft: var(--rq-accent-soft);
+  --color-accent-on:   var(--rq-accent-on);
+
+  --color-mark:        var(--rq-mark);
+  --color-mark-dim:    var(--rq-mark-dim);
+  --color-mark-ghost:  var(--rq-mark-ghost);
+
+  --font-sans: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Azeret Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-2xs: 10px;
+  --text-xs:  11px;
+  --text-sm:  12.5px;
+  --text-base:14px;
+  --text-md:  16px;
+  --text-lg:  19px;
+  --text-xl:  23px;
+  --text-2xl: 27px;
+  --text-3xl: 34px;
+  --text-4xl: 44px;
+  --text-5xl: 60px;
+
+  --font-weight-thin:    200;
+  --font-weight-display: 800;
+
+  --tracking-display: -.045em;
+  --tracking-tight:   -.032em;
+  --tracking-snug:    -.02em;
+  --tracking-label:   .1em;
+  --tracking-wide:    .14em;
+
+  --leading-tight: 1.1;
+  --leading-snug:  1.35;
+  --leading-body:  1.55;
+
+  --spacing-1:  4px;
+  --spacing-2:  8px;
+  --spacing-3:  12px;
+  --spacing-4:  16px;
+  --spacing-5:  20px;
+  --spacing-6:  24px;
+  --spacing-8:  32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   21px;
+  --radius-pill: 999px;
+
+  --ease-rq: cubic-bezier(.2, .7, .3, 1);
+}

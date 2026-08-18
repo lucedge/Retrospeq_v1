@@ -1,0 +1,130 @@
+/* ============================================================
+   Retrospeq — Data marks
+   The visualisation primitives. Text is the fallback; if a number
+   can be a mark, it becomes one.
+
+   THE ONE HARD RULE: every mark uses a single ink (--rq-mark).
+   Direction is expressed by geometry — which side of a zero line a
+   bar sits on — never by red/green. The product's whole thesis is
+   that outcome is the wrong thing to judge by, so the chart layer
+   is not allowed to judge it either.
+   ============================================================ */
+
+/* ---------- Heat grid ----------
+   Two-dimensional rates (weekday x session). Encode magnitude with
+   opacity on --rq-mark; outline the cell that IS the finding.
+   <div class="rq-hgrid">
+     <div class="rq-hgrid__row">
+       <span class="rq-hgrid__lbl">AM</span>
+       <i class="rq-hcell" style="opacity:.75"></i> ...
+   Set --rq-hcell-h to change row height. */
+.rq-hgrid { display: flex; flex-direction: column; gap: 3px; }
+.rq-hgrid__row { display: flex; gap: 3px; align-items: center; }
+.rq-hgrid__lbl {
+  font-family: var(--rq-font-mono); font-size: 9px; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--rq-ink-faint);
+  width: 26px; flex-shrink: 0;
+}
+.rq-hcell {
+  flex: 1; height: var(--rq-hcell-h, 26px);
+  border-radius: 3px; background: var(--rq-mark);
+}
+.rq-hcell--flag { outline: 1.5px solid var(--rq-ink); outline-offset: 1.5px; }
+.rq-hgrid__foot { display: flex; gap: 3px; padding-left: 29px; margin-top: 2px; }
+.rq-hgrid__foot span {
+  flex: 1; text-align: center;
+  font-family: var(--rq-font-mono); font-size: 9px; color: var(--rq-ink-faint);
+}
+
+/* ---------- Dot matrix ----------
+   Countable ratios: "31 of 34", never a bare percentage.
+   <div class="rq-dots"><i></i><i class="off"></i>...</div> */
+.rq-dots { display: flex; flex-wrap: wrap; gap: 4px; }
+.rq-dots i {
+  display: block;
+  width: var(--rq-dot-size, 9px); height: var(--rq-dot-size, 9px);
+  border-radius: 50%; background: var(--rq-mark);
+}
+.rq-dots i.off { background: none; box-shadow: inset 0 0 0 1.2px var(--rq-line-strong); }
+
+/* ---------- Streak strip ----------
+   One bar per period. Height = completeness, NOT volume. */
+.rq-strip { display: flex; gap: 3px; align-items: flex-end; height: var(--rq-strip-h, 26px); }
+.rq-strip i { flex: 1; display: block; background: var(--rq-mark); border-radius: 1.5px; }
+.rq-strip i.gap { background: var(--rq-mark-dim); }
+
+/* ---------- R bar ----------
+   Signed magnitude around a zero line. Positive: left:50%.
+   Negative: right:50%. Same ink for both — direction is position.
+   <div class="rq-rrow">
+     <div class="rq-track"><i class="rq-fill" style="left:50%;width:24%"></i></div>
+     <span class="rq-rval rq-num">+1.8R</span>
+   </div> */
+.rq-rrow { display: flex; align-items: center; gap: 10px; }
+.rq-track {
+  flex: 1; position: relative; height: var(--rq-track-h, 16px);
+  background: var(--rq-mark-ghost); border-radius: 2px;
+}
+.rq-track::before {   /* the zero line */
+  content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px;
+  width: 1px; background: var(--rq-line-strong);
+}
+.rq-fill { position: absolute; top: 3px; bottom: 3px; background: var(--rq-mark); border-radius: 1.5px; }
+.rq-rval {
+  width: 46px; flex-shrink: 0; text-align: right;
+  font-size: var(--rq-text-sm);
+}
+
+/* ---------- Gauge ----------
+   A value against a cap. ALWAYS visible — an indicator that only
+   appears when you cross a limit IS an alarm, and it interrupts at
+   the worst moment. Always-on means crossing is just a bar moving. */
+.rq-gauge { position: relative; height: 8px; background: var(--rq-mark-ghost); border-radius: var(--rq-radius-pill); }
+.rq-gauge__fill { position: absolute; inset: 0 auto 0 0; background: var(--rq-mark); border-radius: var(--rq-radius-pill); }
+.rq-gauge__cap  { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--rq-ink); }
+.rq-gauge__lbl  {
+  display: flex; justify-content: space-between; margin-top: 6px;
+  font-family: var(--rq-font-mono); font-size: 9.5px; color: var(--rq-ink-faint);
+}
+
+/* ---------- Histogram + threshold ----------
+   A distribution with a decision line on it. Used to seed every
+   calibrated rule from the user's OWN data, so a threshold is
+   argued for rather than asserted. */
+.rq-hist { position: relative; display: flex; align-items: flex-end; gap: 2px; height: var(--rq-hist-h, 64px); }
+.rq-hist i { flex: 1; display: block; background: var(--rq-mark-dim); border-radius: 1.5px 1.5px 0 0; }
+.rq-hist i.hot { background: var(--rq-mark); }
+.rq-hist__thr { position: absolute; top: -6px; bottom: -4px; width: 2px; background: var(--rq-ink); }
+.rq-hist__thr::after {
+  content: attr(data-label);
+  position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+  font-family: var(--rq-font-mono); font-size: 9.5px; color: var(--rq-ink); white-space: nowrap;
+}
+
+/* ---------- Comparison bars ----------
+   Two rates side by side ("71% vs 42%"). .hot marks the subject. */
+.rq-cmp { display: flex; flex-direction: column; gap: 9px; }
+.rq-cmp__row { display: flex; align-items: center; gap: 10px; }
+.rq-cmp__lbl { width: 74px; flex-shrink: 0; font-size: var(--rq-text-xs); color: var(--rq-ink-soft); }
+.rq-cmp__track { flex: 1; height: 20px; background: var(--rq-mark-ghost); border-radius: 2px; overflow: hidden; }
+.rq-cmp__fill { height: 100%; background: var(--rq-mark-dim); border-radius: 2px; }
+.rq-cmp__row.hot .rq-cmp__fill { background: var(--rq-mark); }
+.rq-cmp__val {
+  width: 38px; flex-shrink: 0; text-align: right;
+  font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-size: var(--rq-text-sm);
+}
+
+/* ---------- Ring ----------
+   Completeness. Pair with an SVG: two circles, r=22, stroke-width 4,
+   stroke-dasharray 138, rotate(-90). */
+.rq-ring { position: relative; width: 52px; height: 52px; flex-shrink: 0; }
+.rq-ring svg { transform: rotate(-90deg); }
+.rq-ring__text {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); font-weight: var(--rq-weight-medium);
+}
+
+/* ---------- Sparkline ----------
+   Wrapper for an inline SVG polyline. Emphasise the endpoint with a
+   filled circle; keep gridlines out unless they earn their place. */
+.rq-spark { display: block; width: 100%; height: 38px; overflow: visible; }
