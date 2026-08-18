@@ -17,6 +17,38 @@ and PROGRESS.md the only checks in the loop. Read both fully before
 touching code. Do not wait for a human to confirm direction — decide
 from the spec, record the decision, keep moving.
 
+## When something needs the owner — never fake it, always flag it
+
+This is a hard rule, above every other instruction in this file: **if
+a real dependency is missing (a database, a credential, an external
+account, a genuinely ambiguous product decision the spec doesn't
+answer), do not simulate success.**
+
+Concretely:
+
+- If code needs a real Supabase/KMS/broker connection that doesn't
+  exist yet, write it to fail loudly and clearly when that dependency
+  is absent (a thrown error naming exactly what's missing) — never a
+  hardcoded fake value, a silent mock standing in for a real service,
+  or a "TODO: this returns dummy data for now" left unmarked.
+- Never mark a task "done," a test "passing," or a security check
+  "passed" in `PROGRESS.md` if it only worked against a stand-in for
+  something real. Report it as blocked, not as complete.
+- The moment you hit something that genuinely needs the owner (an
+  account only they can create, a payment method, a product decision
+  the design-decisions doc doesn't resolve) — write an entry to
+  **`NEEDS_YOUR_INPUT.md`** at the repo root: what's needed, exactly
+  why, which task is stalled on it, and what (if anything) you built
+  in the meantime against the missing piece's interface. This file is
+  the one thing the owner should be able to glance at and trust
+  completely — if it's empty, nothing needs them; if it has an entry,
+  something genuinely does. Don't let it accumulate stale resolved
+  entries — remove one once its blocker is actually cleared.
+- This is different from `PROGRESS.md`'s "Infra gaps" list, which is a
+  standing reference of known future needs (e.g. "will need Vercel
+  eventually"). `NEEDS_YOUR_INPUT.md` is only for things blocking
+  *current* work, right now.
+
 ## What we're building
 
 A trading journal that asks **"was this a good decision?"**, not

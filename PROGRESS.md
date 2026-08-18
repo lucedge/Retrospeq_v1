@@ -31,6 +31,15 @@ authority.
 
 _(none started yet — orchestrator: pick Phase 0, golden fixture library, per brief-developer-and-design.md build order)_
 
+## Needs-your-input signal
+
+See `NEEDS_YOUR_INPUT.md` at the repo root — that file, not this
+section, is the fast glanceable answer to "does anything need the
+owner right now." This "Infra gaps" list below is the standing,
+known-future-needs reference; `NEEDS_YOUR_INPUT.md` is only for things
+actually stalling current work. See AGENTS.md → "When something needs
+the owner — never fake it, always flag it."
+
 ## Infra gaps (tracked, not blocking on code)
 
 - [ ] No Vercel project for Retrospeq. Owner needs to create one and either connect this repo via Vercel's GitHub integration or supply a deploy token.

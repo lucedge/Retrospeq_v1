@@ -1,0 +1,62 @@
+{
+  "fixture": "scaled_in_out",
+  "fills": [
+    { "provider_ref": "sio-1", "server_day": "2026-08-05" },
+    { "provider_ref": "sio-2", "server_day": "2026-08-05" },
+    { "provider_ref": "sio-3", "server_day": "2026-08-05" },
+    { "provider_ref": "sio-4", "server_day": "2026-08-05" }
+  ],
+  "blocks": [
+    {
+      "block_ref": "block_1",
+      "instrument": "EURUSD",
+      "opened_at": "2026-08-05T09:00:00Z",
+      "closed_at": "2026-08-05T09:35:00Z",
+      "server_day": "2026-08-05"
+    }
+  ],
+  "trades": [
+    {
+      "trade_ref": "trade_1",
+      "block_ref": "block_1",
+      "instrument": "EURUSD",
+      "direction": "long",
+      "opened_at": "2026-08-05T09:00:00Z",
+      "closed_at": "2026-08-05T09:35:00Z",
+      "server_day": "2026-08-05",
+      "status": "closed",
+      "entry_price_avg": "1.20025000",
+      "exit_price_avg": "1.20200000",
+      "peak_volume": "100000.00000000",
+      "initial_stop": "1.19800000",
+      "initial_risk_pct": "1.000000",
+      "risk_pct": "2.000000",
+      "r_multiple": "1.7500",
+      "realized_pnl": "175.00000000",
+      "currency": "USD",
+      "hold_seconds": 2100,
+      "outcome": "win",
+      "scale_out_count": 2,
+      "grouping_confidence": "confident_single",
+      "grouping_signals": {},
+      "grouping_source": "auto",
+      "confirmed_at": null,
+      "not_a_decision": false,
+      "trade_fills": [
+        { "fill_ref": "sio-1", "role": "entry" },
+        { "fill_ref": "sio-2", "role": "add" },
+        { "fill_ref": "sio-3", "role": "trim" },
+        { "fill_ref": "sio-4", "role": "exit" }
+      ]
+    }
+  ],
+  "invariant_checks": [
+    {
+      "invariant": "sum of fill P&L equals trade P&L (00-foundation §9.2)",
+      "trade_ref": "trade_1",
+      "sum_of_fill_realized_pnl": "175.00000000",
+      "per_fill": { "sio-1": "0.00000000", "sio-2": "0.00000000", "sio-3": "62.50000000", "sio-4": "112.50000000" },
+      "matches_trade_realized_pnl": true
+    }
+  ]
+}
