@@ -12,8 +12,9 @@ answer to "does anything need me right now."
 
 ---
 
-_(no open items — Phase 0 fixture work does not require Supabase, Vercel, or
-KMS. The next phase, Module 01 + 02, will need at least the Supabase
-project to run real RLS tests — see PROGRESS.md's "Infra gaps" — but
-that's a standing known-future-need, not a live stall yet, so it isn't
-listed here until an agent actually hits it mid-task.)_
+**2026-08-20 — two things needed to actually run RLS/migration verification against the shared dev Supabase project (see `docs/adr/0002-shared-dev-supabase-project.md`):**
+
+1. **A direct Postgres connection string** (`SUPABASE_DB_URL`) — the API keys already in `.env.local` aren't enough to apply migrations or run RLS tests directly; that needs the database connection string from Supabase Dashboard → Project Settings → Database → Connection string. Add it to `.env.local` as `SUPABASE_DB_URL=...`.
+2. **One dashboard toggle** — Project Settings → API → "Exposed schemas" → add `retrospeq`. Needed for the app's own client-side/REST access to that schema later; not required for direct-Postgres migration/RLS verification itself.
+
+Neither is a new account or a cost — both are settings inside the Supabase project that's already accessible.

@@ -1,0 +1,15 @@
+-- Retrospeq lives in its own Postgres schema, not "public", because this
+-- Supabase project is shared with the separate LuceEdge app for dev/test
+-- purposes only (owner decision 2026-08-20) -- see
+-- docs/adr/0002-shared-dev-supabase-project.md for the full reasoning.
+-- LuceEdge already owns a "public.data_requests" table with a different
+-- structure than Retrospeq's Module 01 spec defines under the same name;
+-- schema separation avoids that collision without deviating from any
+-- module spec's actual table names.
+--
+-- Every subsequent Retrospeq migration creates its objects inside this
+-- schema explicitly (e.g. "retrospeq.shadow_runs"), not via a session
+-- search_path -- explicit qualification is safer against someone running
+-- a migration file by hand in the Supabase SQL editor without the right
+-- session state set first.
+create schema if not exists retrospeq;

@@ -38,7 +38,11 @@
 --   bytes 9-15  : random
 create extension if not exists pgcrypto;
 
-create or replace function uuid_generate_v7()
+-- Schema separation added 2026-08-20 (docs/adr/0002-shared-dev-supabase-project.md):
+-- this and every table below moved from implicit "public" into "retrospeq"
+-- (created in 20260819010000_init_schema.sql), which ran first. Explicitly
+-- schema-qualified rather than relying on search_path.
+create or replace function retrospeq.uuid_generate_v7()
 returns uuid
 language plpgsql
 volatile
@@ -75,9 +79,9 @@ $$;
 -- current state, so this table is intentionally append-only-by-usage
 -- (no upsert key) even though no explicit uniqueness constraint enforces
 -- that at the DB level.
-create table shadow_runs (
-  id            uuid primary key default uuid_generate_v7(),
-  user_id       uuid not null references profiles(id) on delete cascade,
+create table retrospeq.shadow_runs (
+  id            uuid primary key default retrospeq.uuid_generate_v7(),
+  user_id       uuid not null references retrospeq.profiles(id) on delete cascade,
   analytic_id   text not null,
   would_render  boolean not null,
   payload       jsonb not null,
@@ -89,10 +93,10 @@ create table shadow_runs (
 -- read "how many distinct accounts has analytic X run on" and "since
 -- when" — both served by this composite index.
 create index shadow_runs_analytic_id_computed_at_idx
-  on shadow_runs (analytic_id, computed_at desc);
+  on retrospeq.shadow_runs (analytic_id, computed_at desc);
 
 create index shadow_runs_user_id_idx
-  on shadow_runs (user_id);
+  on retrospeq.shadow_runs (user_id);
 
 -- RLS: 00-foundation §3.1's standard owner-policy shape. Module 05 does
 -- not list `shadow_runs` in any RLS-exception table (unlike Module 01's
@@ -101,9 +105,9 @@ create index shadow_runs_user_id_idx
 -- nightly shadow-run job, per 00-foundation §1.2's "Deferred" class) uses
 -- the service role, which bypasses RLS entirely per §3.2; this policy
 -- governs client-side access only.
-alter table shadow_runs enable row level security;
+alter table retrospeq.shadow_runs enable row level security;
 
-create policy shadow_runs_owner on shadow_runs
+create policy shadow_runs_owner on retrospeq.shadow_runs
   for all
   using (user_id = auth.uid())
   with check (user_id = auth.uid());

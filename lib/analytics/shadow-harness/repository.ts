@@ -50,9 +50,14 @@ export function createSupabaseShadowRunRepository(): ShadowRunRepository {
     throw new ShadowHarnessNotConfiguredError(missing);
   }
 
+  // db.schema: 'retrospeq' — this project's tables live in a dedicated
+  // schema, not "public", because the Supabase project is shared with the
+  // separate LuceEdge app for dev/test purposes (docs/adr/0002). Every
+  // .from(...) call below resolves against retrospeq.<table>, not public.<table>.
   const client = createClient(
     process.env.SUPABASE_URL as string,
     process.env.SUPABASE_SERVICE_ROLE_KEY as string,
+    { db: { schema: 'retrospeq' } },
   );
 
   return {

@@ -30,8 +30,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files - the .example template is a safe, secret-free reference
+# and should stay tracked so collaborators/cloud agents know what's needed
 .env*
+!.env.local.example
 
 # vercel
 .vercel
