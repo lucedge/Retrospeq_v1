@@ -117,6 +117,24 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-20 — Removed `module-docs-github/` (the old superseded LuceEdge
+  spec) from the repo, owner request ("confusing to have it sitting
+  there"). Before removing, verified its actual provenance rather than
+  assuming: it is a byte-for-byte match of `lucedge/module-docs`'
+  `main` branch on GitHub. Also cloned that repo's `retrospeq-v1`
+  branch and diffed it against `retrospeq-design-system/modules/`
+  (the already-documented source of truth) — every module file,
+  `analytics-registry.md`, both briefs, and the flow-diagram SVG are
+  byte-identical; the only difference anywhere is the design-decisions
+  doc's title line ("Decision OS" upstream vs. "Retrospeq" locally,
+  the local copy already having the correct current product name).
+  Net effect: confirms the build has been reading the correct spec all
+  along — this was a cleanup of confusing dead weight, not a
+  correction of a real misconfiguration. `AGENTS.md`'s "Source of
+  truth" section updated to point at the GitHub repo/branch instead of
+  a local folder for anyone who needs the old spec for historical
+  reference.
+
 - 2026-08-20 — Added a 6th subagent, `retrospeq-docs`, and a
   screenshot-based UI self-verification convention, both owner-directed
   in-session (not something an autonomous run decided on its own).

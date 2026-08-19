@@ -126,7 +126,7 @@ violated?* A violation is Rulebook; a fact is Strategy.
 5. `retrospeq-design-system/modules/analytics-registry.md` — every analytic's data tier, confidence, kill switch
 6. `retrospeq-design-system/brand/` — the design system (see "Design system" below)
 
-`module-docs-github/` (the old LuceEdge trade-journal spec) is superseded — reference only, do not build against it.
+The old LuceEdge trade-journal spec (superseded — do not build against it) used to be vendored locally at `module-docs-github/`; removed 2026-08-20 as confusing dead weight now that its provenance is confirmed (`lucedge/module-docs` on GitHub, `main` branch — the current spec is that same repo's `retrospeq-v1` branch, already vendored at `retrospeq-design-system/modules/`). If you need to compare against the old spec for historical context, clone `main` from that repo rather than expecting a local copy.
 
 `reference/lucedge-broker-prior-art/` — LuceEdge's actual cTrader/MT5 broker integration code, copied 2026-08-20 as a one-time snapshot (not synced) because the LuceEdge repo won't be reachable once this workspace is retrospeq-app-only. Prior art for Module 02's `BrokerAdapter` work — read its own README before touching it. **Do not copy-paste from it** — none of it meets Retrospeq's security bar (envelope encryption, vendor-agnostic adapter, mandatory read-only verification); see the README for specifics.
 
