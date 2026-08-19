@@ -10,6 +10,18 @@ tests but is still wrong. Read `AGENTS.md`'s "Non-negotiables" and
 "Design system" sections, and `retrospeq-design-system/modules/
 retrospeq-design-decisions.md` in full before reviewing anything.
 
+For any item below that's about rendered appearance rather than code
+(color usage, button count/hierarchy, ambient indicator visibility,
+keyboard-vs-control input on fast-capture screens) — don't rely on
+grep alone. Start the dev server and capture a screenshot
+(`npx playwright screenshot <url> tmp/dev-screenshots/<name>.png`,
+gitignored) of the relevant view, then `Read` the PNG and look at it
+directly; there's no interactive browser tool available in this
+environment, so this is the actual verification step, not optional
+polish. Grep catches a hardcoded hex value; it doesn't catch an
+ambient gauge that's conditionally rendered via a code path grep
+didn't think to search for.
+
 Check the slice under review against, at minimum:
 
 - No currency P&L anywhere on the home/dashboard surface — R-multiple only.

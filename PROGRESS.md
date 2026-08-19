@@ -117,6 +117,41 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-20 — Added a 6th subagent, `retrospeq-docs`, and a
+  screenshot-based UI self-verification convention, both owner-directed
+  in-session (not something an autonomous run decided on its own).
+  **`retrospeq-docs`** maintains `docs/DEVELOPMENT.md`, a new
+  human-readable "start here" developer reference — synthesized from
+  `PROGRESS.md`/ADRs/runbook, not a duplicate of any of them — dispatched
+  by the orchestrator at phase boundaries (step 5), same cadence as the
+  `/code-review` pass. This explicitly reverses part of the 2026-08-19
+  "5 roles, not more" decision (see that entry below); the reversal is
+  fine on its own terms — that decision was scoped to "don't split one
+  slice across layers," and a cross-repo synthesized reference is a
+  different shape of work than a per-slice ADR, not a re-litigation of
+  the original reasoning. Full updated rationale in `AGENTS.md` →
+  "Subagents". Seeded `docs/DEVELOPMENT.md` with an initial skeleton
+  reflecting actual repo state at time of writing (Phase 0 complete,
+  Phase 1 not started) rather than leaving it empty for the agent's
+  first real dispatch. **Screenshot-based UI verification**: this
+  environment has no interactive browser tool, so `retrospeq-coder`
+  (self-check before handoff), `retrospeq-tester` (E2E state capture),
+  and `retrospeq-qa` (design-system appearance checks) now all use
+  headless `npx playwright screenshot` (or an inline
+  `page.screenshot()` for flows needing interaction first) against the
+  local dev server, saved to gitignored `tmp/dev-screenshots/`, then
+  `Read` back to actually view — this is a supplement to functional
+  Playwright assertions, not a replacement. No module has shipped a UI
+  yet, so this is process infrastructure ahead of need, same pattern as
+  the Phase 0 shadow harness.
+- 2026-08-20 — Widened `.claude/settings.json`'s permission allowlist
+  (`Write`, `Edit`, `Agent`, project-scoped only) at the owner's
+  explicit request, so autonomous slices don't stall on a permission
+  prompt for every file write/subagent dispatch — extends the same
+  intent as the existing git/npm allowlist and the autonomy policy
+  above, not a new grant of authority beyond what was already approved
+  for commits/pushes.
+
 - 2026-08-20 — Adopted the existing LuceEdge Supabase project for Retrospeq dev/test use (owner offer), isolated via a dedicated `retrospeq` Postgres schema rather than `public` — a real `public.data_requests` name collision with LuceEdge's own table made schema separation necessary, not just cautious. Full reasoning in `docs/adr/0002-shared-dev-supabase-project.md`. The shadow-harness migration and its repository code were updated to be schema-qualified (`retrospeq.shadow_runs`, `db: { schema: 'retrospeq' }`); all 27 existing tests still pass. This does not close the standing need for a dedicated production Supabase project (00-foundation §1.1) — see reworded Infra gaps entry.
 - 2026-08-20 — Documented a kill-switch convention in AGENTS.md ("Stopping everything") after a real instance where fully stopping the local loop + a background agent took several back-and-forth exchanges. New rule: any stop signal from the owner triggers stopping the loop, all in-flight background agents, and the cloud routine (if enabled) immediately, in that order, without asking first — clarifying questions come after, not before, stopping.
 - 2026-08-20 — Copied LuceEdge's broker/MT5/cTrader code, Docker bridge, investigation docs, and existing DB schema into `reference/lucedge-broker-prior-art/` as a one-time snapshot, ahead of the owner moving to a retrospeq-app-only workspace where `E:\LuceEdge` won't be reachable anymore. Explicitly reference-only — see that folder's own README for why none of it meets Retrospeq's security bar as-is. LuceEdge's live app, `.env.local`, and DB migrations were left untouched (owner confirmed LuceEdge should keep working, not be retired).

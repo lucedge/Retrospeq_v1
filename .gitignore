@@ -47,3 +47,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ephemeral screenshots agents take against the local dev server to
+# visually self-check UI slices (see AGENTS.md "UI self-verification") -
+# throwaway, never a build artifact to commit
+/tmp/dev-screenshots

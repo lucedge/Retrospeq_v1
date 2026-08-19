@@ -192,17 +192,66 @@ No dedicated documentation agent — see "Subagents" below for why the 5-agent r
 
 ## Subagents
 
-Deliberately 5 roles, not more. A broader ~17-role pipeline (separate
-Requirements/Architecture/Frontend/Backend/Database/Integration/Code-Review/
-Performance/Bug-Fix/Documentation agents) was considered and rejected
-2026-08-19 — see PROGRESS.md decision log. The short version: this
-spec ships vertical slices, not layers, so splitting one slice across
-several coding agents adds handoff overhead without adding coverage;
-the responsibilities that were real (repo-reuse checks, docs,
-performance budgets) got folded into the existing agents instead of
-becoming new ones.
+6 roles, not the originally-larger list. A broader ~17-role pipeline
+(separate Requirements/Architecture/Frontend/Backend/Database/
+Integration/Code-Review/Performance/Bug-Fix/Documentation agents) was
+considered and rejected 2026-08-19 — see PROGRESS.md decision log. The
+short version: this spec ships vertical slices, not layers, so
+splitting one slice across several coding agents adds handoff overhead
+without adding coverage; the responsibilities that were real
+(repo-reuse checks, performance budgets) got folded into the existing
+agents instead of becoming new ones.
 
-Definitions live in `.claude/agents/`. Roster: `retrospeq-coder` (implements one story/module slice against spec + this file), `retrospeq-tester` (writes/runs unit, property, RLS, integration, E2E, fixture-replay tests), `retrospeq-security-reviewer` (credential handling, RLS, injection surface — blocking authority on the security bar above), `retrospeq-qa` (reviews against the non-negotiables list and design-system rules, catches drift), `retrospeq-orchestrator` (reads PROGRESS.md, decides next task per build order, dispatches the others, updates the ledger). The orchestrator is the one invoked by the local `/loop` (the cloud routine is deliberately paused — owner checks progress in person, see PROGRESS.md "Autonomous continuation — cost/cadence policy") after a context reset or usage-limit restart.
+That count went from 5 to 6 on 2026-08-20 — owner-directed, not a
+drift back toward the rejected 17-role pipeline. The 2026-08-19
+decision folded documentation into `retrospeq-coder`/`retrospeq-qa`
+(ADRs + runbook, checked not written) specifically because those are
+narrow, per-slice artifacts a coder writing the slice is well-placed
+to produce. A standing, synthesized "how do I run/understand this
+repo" reference is a different shape of work — it needs to look across
+the whole repo state, not just the slice just written — so it gets its
+own agent rather than being bolted onto one that's mid-slice. See the
+decision log entry for 2026-08-20 for the full reasoning.
+
+Definitions live in `.claude/agents/`. Roster: `retrospeq-coder`
+(implements one story/module slice against spec + this file, and does
+a screenshot-based visual self-check for any UI surface — see "UI
+self-verification" below), `retrospeq-tester` (writes/runs unit,
+property, RLS, integration, E2E, fixture-replay tests, plus screenshot
+capture for UI E2E flows), `retrospeq-security-reviewer` (credential
+handling, RLS, injection surface — blocking authority on the security
+bar above), `retrospeq-qa` (reviews against the non-negotiables list
+and design-system rules, catches drift, screenshot-verifies anything
+about rendered appearance), `retrospeq-docs` (keeps
+`docs/DEVELOPMENT.md` — the synthesized developer reference — current,
+dispatched at phase boundaries), `retrospeq-orchestrator` (reads
+PROGRESS.md, decides next task per build order, dispatches the others,
+updates the ledger). The orchestrator is the one invoked by the local
+`/loop` (the cloud routine is deliberately paused — owner checks
+progress in person, see PROGRESS.md "Autonomous continuation —
+cost/cadence policy") after a context reset or usage-limit restart.
+
+## UI self-verification (no interactive browser tool available)
+
+Agents in this environment have Bash but no interactive browser
+control — they can't click through the running app the way a person
+can. The substitute: headless Playwright screenshots.
+
+```bash
+npx playwright screenshot http://localhost:3000/<route> tmp/dev-screenshots/<name>.png
+```
+
+`tmp/dev-screenshots/` is gitignored — throwaway visual checks, not
+build artifacts. Any agent (coder self-checking its own slice, tester
+capturing E2E states, qa verifying a design-system rule that's about
+rendered appearance) runs the dev server, captures the relevant
+view(s), then uses `Read` on the PNG to actually look at it — that's
+how a color, spacing, or empty-state regression gets caught, since
+grepping code can't see what actually renders. For flows behind auth
+or needing interaction first, a short Playwright script
+(`page.goto` → interact → `page.screenshot()`) replaces the one-line
+CLI form. This is a supplement to functional test assertions, not a
+replacement for them.
 
 ## Known infra gaps (do not block coding on these — build against the interfaces; flag and keep moving)
 

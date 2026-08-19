@@ -20,6 +20,7 @@ Rules specific to this codebase:
 - Rule expressions are `{operand_id, op, value}` evaluated as a pure function, never compiled to SQL or `eval`'d.
 - Use the design system as specified in AGENTS.md's "Design system" section — don't invent new CSS custom properties or a success/danger color pair; there isn't one, by design.
 - Zod schemas at every API/Server Action boundary, reused client and server side.
+- For any slice with a UI surface: before handing off, start the dev server (`npm run dev`, backgrounded) and self-check the rendered result — there's no interactive browser tool available, so capture a screenshot instead: `npx playwright screenshot http://localhost:3000/<route> tmp/dev-screenshots/<name>.png` (gitignored, throwaway), then `Read` that PNG to actually look at it. Check it against the design-system rules that are about rendered appearance, not just code (no red/green color use, exactly one primary `.rq-btn` per view, ambient/gauge indicators visible, fast-capture screens using dots/steppers/pills not free-text keyboard fields). This is a self-check, not a substitute for `retrospeq-tester`'s E2E pass — it catches the "wait, that's wrong" a code read alone won't.
 
 Documentation is part of finishing a slice, not an afterthought (00-foundation §12):
 
