@@ -43,6 +43,36 @@ file will, since it's just a repo file):
   a workspace switch made `E:\LuceEdge` unreachable — treat it as frozen
   reference, not a live source to pull further updates from.
 
+## Stopping everything — the kill-switch convention
+
+Captured 2026-08-20 after a real instance of this taking several
+back-and-forth exchanges to actually achieve, which is exactly the
+friction this convention exists to remove.
+
+**When the owner signals stop, in any phrasing** ("stop", "no no stop",
+"hold off", "pause this", "kill it") — treat it as urgent and total,
+covering everything autonomous, not just whatever the most recent
+message was about. Act immediately, in this order, without asking
+first:
+
+1. Stop the local `/loop` if one is running (`ScheduleWakeup` with `stop: true`).
+2. Stop every in-flight background agent this session dispatched (`TaskList` to find them, `TaskStop` each one).
+3. Check whether the cloud scheduled routine is enabled; if so, pause it too (`RemoteTrigger` update, `enabled: false`). "Stop" means stop all autonomous activity, not just whatever is local to this chat.
+4. Run `git status` to confirm nothing is left mid-write, and report that honestly — clean, or here's exactly what's uncommitted.
+5. Tell the owner plainly what was actually stopped. Don't assume they know which separate mechanisms (loop vs. background task vs. cloud routine) existed — that gap is what caused the friction last time.
+
+**Do not lead with clarifying questions before acting.** Stop everything
+first; ask the one thing that genuinely can't be inferred (e.g.
+"temporary pause or done for the day?") only after everything is
+already stopped, not before. A stop that turns out to have been broader
+than intended costs a small amount of redone work; a stop that's slower
+than the owner wanted costs trust.
+
+**Resuming is always a separate, explicit instruction** — saying
+`/loop` again, saying "resume," or re-enabling the routine. Never
+resume automatically just because time has passed or a wakeup fires;
+a stop is a stop until the owner says otherwise.
+
 ## When something needs the owner — never fake it, always flag it
 
 This is a hard rule, above every other instruction in this file: **if
