@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "coverage/**",
+    // Vendored spec/reference material, not this project's own code -
+    // see AGENTS.md "Source of truth" / "Working with the owner".
+    "retrospeq-design-system/**",
+    "module-docs-github/**",
+    "reference/**",
   ]),
 ]);
 
