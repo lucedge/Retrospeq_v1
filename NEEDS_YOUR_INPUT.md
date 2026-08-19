@@ -12,9 +12,6 @@ answer to "does anything need me right now."
 
 ---
 
-**2026-08-20 — two things needed to actually run RLS/migration verification against the shared dev Supabase project (see `docs/adr/0002-shared-dev-supabase-project.md`):**
+_(no open items — `SUPABASE_DB_URL` was supplied 2026-08-20 and connection/migration verification is done, see PROGRESS.md decision log. The `retrospeq` schema is real. `shadow_runs`'s RLS is still unverified, but that's now blocked on Module 01's `profiles` table existing, not on anything the owner needs to provide — it'll resolve itself once Phase 1 work resumes.)_
 
-1. **A direct Postgres connection string** (`SUPABASE_DB_URL`) — the API keys already in `.env.local` aren't enough to apply migrations or run RLS tests directly; that needs the database connection string from Supabase Dashboard → Project Settings → Database → Connection string. Add it to `.env.local` as `SUPABASE_DB_URL=...`.
-2. **One dashboard toggle** — Project Settings → API → "Exposed schemas" → add `retrospeq`. Needed for the app's own client-side/REST access to that schema later; not required for direct-Postgres migration/RLS verification itself.
-
-Neither is a new account or a cost — both are settings inside the Supabase project that's already accessible.
+One still-open, non-blocking item whenever convenient: the "Exposed schemas" dashboard toggle (Project Settings → API → add `retrospeq`) — only needed for the app's own client-side/REST access at runtime, not for anything happening right now.
