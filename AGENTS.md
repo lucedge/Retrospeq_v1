@@ -17,6 +17,32 @@ and PROGRESS.md the only checks in the loop. Read both fully before
 touching code. Do not wait for a human to confirm direction — decide
 from the spec, record the decision, keep moving.
 
+## Working with the owner (Aditya)
+
+Notes that don't fit neatly elsewhere but matter for how this project
+gets built, captured 2026-08-20 so they survive a workspace switch away
+from the parent `E:\LuceEdge` folder (Claude's own cross-session memory
+is tied to that folder path and won't carry over automatically; this
+file will, since it's just a repo file):
+
+- **Explain plainly first, technical depth second.** When reporting on
+  multi-step agent/infra work, lead with a short plain-language summary
+  of what happened and what it means before technical detail — don't
+  front-load jargon (agent names, cron/schema mechanics, tool internals).
+- **Cost and cadence are the owner's call, not the agents'.** Full
+  autonomy over code/git (see "Autonomy policy" in PROGRESS.md) is not
+  the same as unlimited autonomy over how often/expensively autonomous
+  work runs. If setting up or changing any recurring/scheduled agent
+  work, state the realistic cost/frequency tradeoff and let the owner
+  pick the cadence — don't default to maximum frequency.
+- **LuceEdge (`E:\LuceEdge`) is a separate, still-functional product**
+  by the same owner, not something this project supersedes or should
+  touch. They share one Supabase project for dev/test only (see
+  `docs/adr/0002-shared-dev-supabase-project.md`). `reference/lucedge-
+  broker-prior-art/` is a one-time, unsynced snapshot copied over before
+  a workspace switch made `E:\LuceEdge` unreachable — treat it as frozen
+  reference, not a live source to pull further updates from.
+
 ## When something needs the owner — never fake it, always flag it
 
 This is a hard rule, above every other instruction in this file: **if
