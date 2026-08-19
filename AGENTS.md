@@ -72,6 +72,8 @@ violated?* A violation is Rulebook; a fact is Strategy.
 
 `module-docs-github/` (the old LuceEdge trade-journal spec) is superseded — reference only, do not build against it.
 
+`reference/lucedge-broker-prior-art/` — LuceEdge's actual cTrader/MT5 broker integration code, copied 2026-08-20 as a one-time snapshot (not synced) because the LuceEdge repo won't be reachable once this workspace is retrospeq-app-only. Prior art for Module 02's `BrokerAdapter` work — read its own README before touching it. **Do not copy-paste from it** — none of it meets Retrospeq's security bar (envelope encryption, vendor-agnostic adapter, mandatory read-only verification); see the README for specifics.
+
 **Convention (00-foundation §12):** spec vs design-decisions doc → design doc is intent, spec is wrong until reconciled. Spec vs code → fix one deliberately, do not let drift accumulate silently. Log every such reconciliation in PROGRESS.md's decision log.
 
 ## Non-negotiables (each has an ADR in the design-decisions doc — read it before "fixing" one)

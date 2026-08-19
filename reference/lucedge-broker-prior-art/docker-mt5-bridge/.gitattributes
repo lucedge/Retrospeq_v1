@@ -1,0 +1,6 @@
+# Everything here gets parsed/run inside a Linux container or by the Docker
+# build engine — Windows CRLF checkout breaks start.sh outright (see
+# docs/M2_MT5_Docker_Wine_Investigation.md, issue 6) and can silently break
+# the Dockerfile's backslash-continued RUN commands too.
+*.sh text eol=lf
+Dockerfile text eol=lf
