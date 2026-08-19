@@ -133,12 +133,29 @@ Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 - 2026-08-19 — `uuid_generate_v7()` is referenced in every module's DDL (00-foundation §2.1) but never defined anywhere in the design system. Defined it in the shadow harness migration (the first migration in this repo that needs it) as a plpgsql function following RFC 9562 §5.7's UUIDv7 byte layout, using `create or replace` so a later Module 01/02 migration that also declares it is a no-op rather than a conflict. Not a foundation deviation — an implementation of an assumed-to-exist primitive — so documented inline in the migration rather than as a separate ADR, per AGENTS.md "non-obvious migration constraints get an inline comment, not a separate doc."
 - 2026-08-19 — Hit a real hard incompatibility while wiring up this repo's first tests: `vitest@4.1.11` (already a devDependency from initial scaffolding) pulls in a rolldown-based Vite whose startup requires `node:util`'s `styleText` export, added in Node 20.12 — this repo runs Node 20.11.0 (see "Infra gaps"). This is exactly the "hard incompatibility" the existing infra-gap line said to revisit on. Fix: pinned `vitest` and `@vitest/coverage-v8` to `3.2.7` (last major before the rolldown-based Vite chain; depends on `vite@^5||^6||^7`, all classic esbuild-based). Chose a devDependency downgrade over a Node upgrade because the Node install is machine-wide and shared with unrelated projects (the parent `E:\LuceEdge` repo, `Pesa Hi Pesa`) — changing it is a bigger, riskier action than pinning one package in this repo, and isn't necessary to unblock this task. All 27 shadow-harness tests pass under `vitest@3.2.7`; `npm run build` and `npm run lint` both still pass.
 
-## Autonomous continuation
+## Autonomous continuation — cost/cadence policy (owner decision 2026-08-20)
 
-A scheduled routine re-invokes the orchestrator periodically so work
-resumes after a context reset or usage-limit restart without a human
-prompting it. See the routine created via the `schedule` skill /
-CronCreate — check its config for current cadence. On each wake:
-orchestrator reads this file, picks the next undone task in phase
-order, dispatches coder/tester/security-reviewer/qa as needed, updates
-this file, commits.
+**Local `/loop` only. No cloud routine.** The cloud scheduled routine
+(`trig_01NV6fHZShY1bPQindEH7dc2`) stays paused — the owner explicitly
+doesn't want to rely on it, since they'll check progress in person
+rather than needing unattended cloud continuation.
+
+**Policy: run hard until usage is exhausted, then stop; resume only
+when the owner explicitly says so.** Concretely:
+
+- While a local `/loop` session is open, self-pace wake-ups based on
+  real work completed (not a fixed clock) and keep dispatching the
+  next task in build order continuously.
+- There is no way to detect "about to run out of usage" in advance —
+  no API for it. The expected failure mode is simply: a cycle stops
+  producing commits, and the loop goes quiet. That is normal, not a
+  bug to engineer around.
+- **Do not build any "graceful exhaustion detection" behavior.** It
+  isn't achievable and isn't needed — the owner's own policy is to
+  check in periodically and see whether it's still running.
+- **Never auto-resume.** A stopped loop stays stopped until the owner
+  says `/loop` again (or "continue") — this is a deliberate consequence
+  of not using the cloud routine, not a gap to fix.
+- This means real progress only happens while the owner is actively
+  checking in and re-triggering it, not around the clock. That's the
+  accepted tradeoff for not paying for/relying on the cloud routine.
