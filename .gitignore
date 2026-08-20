@@ -12,6 +12,16 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
+/blob-report
+# machine-local Playwright browser binary cache — redirected here (rather
+# than the default %USERPROFILE%\AppData\Local\ms-playwright) because the
+# C: drive has ~0 bytes free (see PROGRESS.md decision log, npm
+# cache/tmp redirect entry, same root cause). Set via
+# PLAYWRIGHT_BROWSERS_PATH=E:\playwright-browsers when running
+# `npx playwright install` / `npx playwright test` on this machine.
+/playwright-browsers
 
 # next.js
 /.next/
@@ -48,7 +58,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# ephemeral screenshots agents take against the local dev server to
-# visually self-check UI slices (see AGENTS.md "UI self-verification") -
-# throwaway, never a build artifact to commit
-/tmp/dev-screenshots
+# ephemeral scratch space: screenshots agents take against the local dev
+# server to visually self-check UI slices (see AGENTS.md "UI
+# self-verification"), plus one-off manual verification scripts (e.g.
+# apply-migration.mjs) agents write to check something against the live
+# DB by hand - never a build artifact to commit. If a check needs to be
+# repeatable, it belongs in a real test file under a __tests__/ dir, not
+# here.
+/tmp/

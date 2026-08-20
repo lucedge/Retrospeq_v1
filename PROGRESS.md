@@ -20,8 +20,8 @@ authority.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`) and unit/property tested — see "Current task" for the precise scope boundary (harness infra only; no real shadow analytics registered yet, RLS unverified against a live DB) |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | Not started |
+| 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 slice 1 done (stories 1.1-1.3: email/Google signup, sign-in, sign-out, password reset, `profiles` table + trigger, mandatory per-endpoint rate limiting). Module 01 stories 1.4-1.5 (sessions, 2FA), 2.x (account connection/`BrokerAdapter`), 3.x (settings), 4.x (entitlements), 5.x (rights/privacy) and all of Module 02 remain — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -29,71 +29,81 @@ authority.
 
 ## Current task
 
-Phase 0 golden fixture library complete: 8/8 fixtures under
-`fixtures/golden/` (`simple_daytrades`, `scaled_in_out`,
-`swing_with_intraday`, `flip_no_flat`, `partial_fills_subsecond`,
-`overnight_weekend`, `multi_currency`, `gapped_history`), each with
-`input.json` / `expected.json` / `README.md`, plus `fixtures/README.md`
-(library overview) and `docs/adr/0001-flip-fill-split-via-trade-events.md`
-(the `trade_fills` unique-index vs. §4.2 "split fill" resolution used in
-`flip_no_flat`). All expected values verified by an independent script
-cross-check (pnl, outcome, `server_day`, `hold_seconds`, `risk_pct` /
-`initial_risk_pct` / `r_multiple`, `scale_out_count`) before commit — not
-just hand-computed once. `npm run build` passes.
+**Phase 0 — complete.** 8/8 golden fixtures (`fixtures/golden/`); shadow
+harness infrastructure (`lib/analytics/shadow-harness/`, `shadow_runs`
+table) built, tested (27 tests, ~98% coverage), and as of 2026-08-20 its
+RLS is now actually verified against the live DB too (the `profiles`
+forward-dependency block resolved once Module 01's migration landed —
+see decision log). Real shadow-analytic registrations (`spec.weekday`
+etc.) remain deferred to Phase 3 (need Module 02's confirmed trades +
+Module 05's edge engine) — not a regression, always the plan.
 
-**Shadow harness built (2026-08-19), scoped deliberately:**
+**Phase 1 — in progress. Module 01 slice 1 done** (stories 1.1-1.3:
+email/Google signup, sign-in, sign-out, password reset):
 
-Built — Module 05 §3.1/§4.9, the harness's own data model and
-infrastructure:
+- `supabase/migrations/20260820010000_profiles.sql` — `profiles` table
+  + `handle_new_user` trigger, `20260820020000_retrospeq_schema_grants.sql`
+  — schema-level GRANTs to anon/authenticated/service_role (a real gap
+  found while writing RLS tests: GRANT is necessary but not sufficient,
+  RLS does the narrowing — see that migration's own header), and
+  `20260820030000_rate_limit_hits.sql` — the rate-limit bookkeeping
+  table + `increment_rate_limit()` function. All three applied to and
+  verified against the live shared dev Supabase project.
+- `lib/supabase/`, `lib/auth/`, `app/(auth)/`, `app/auth/callback/`,
+  `proxy.ts` — the auth Server Actions, error mapping, Zod schemas, and
+  the four UI screens (login/signup/reset-password/reset-password-confirm).
+- `lib/rate-limit/` — Module 01 §7.2's mandatory per-IP-and-per-user
+  throttle on every auth endpoint, added after retrospeq-security-reviewer
+  correctly failed the slice for having zero throttling on first pass.
+  Direct-`pg` fixed-window counter (ADR 0003 explains why not
+  supabase-js), fails loudly on missing config, fails open on unexpected
+  DB errors (ADR 0004 explains the tradeoff).
+- Tests: 131 passing, 3 skip-guard fallbacks (env-gated live-DB suites —
+  the env is present in this repo, so they actually ran), 99.34%
+  line coverage on all new code. RLS cross-user isolation verified live
+  for `profiles` and `rate_limit_hits` (zero-policy/service-role-only
+  shape for the latter, matching `account_credentials`'s spec'd shape).
+  `npm run build` and `npm run lint` both clean.
+- E2E (`e2e/auth.spec.ts`, Playwright — browsers installed to
+  `E:\playwright-browsers`, not the default C: path, same disk-space
+  constraint as the npm cache redirect): 2/5 pass outright
+  (invalid-credentials error path, reset-password/confirm empty-state
+  render — screenshots reviewed, match the design system). The other
+  3 (signup happy path, signup-duplicate-email, password-reset
+  no-enumeration) cannot complete past their "check your email" step —
+  **the shared dev Supabase project's transactional email sending is
+  genuinely broken** (`500 unexpected_failure`, confirmed independently
+  by both retrospeq-tester and this orchestrator session hours apart),
+  not a code defect — see `NEEDS_YOUR_INPUT.md`. The exact failure mode
+  is itself proof the error-mapping code works correctly
+  (`AUTH_MAILER_UNAVAILABLE`, 100%-covered branch in
+  `lib/auth/__tests__/errors.test.ts`).
+- Security-reviewed: one blocking FAIL (missing rate limiting) on first
+  pass, fixed, re-reviewed, PASS. QA-reviewed: PASS, two findings
+  (missing ADRs, an unverified "sessions invalidated on reset" claim)
+  both fixed same-session (ADR 0003/0004 written; `confirmPasswordReset`
+  now explicitly calls `signOut({ scope: 'others' })` instead of
+  assuming `updateUser` does it, with a test proving the call happens
+  in the right order and doesn't block the redirect on its own failure).
 
-- `supabase/migrations/20260819020000_shadow_harness.sql` — `shadow_runs`
-  table exactly per spec, RLS owner policy (00-foundation §3.1 default —
-  no exception documented for this table), plus a `uuid_generate_v7()`
-  function definition (no module spec defines one anywhere, despite every
-  DDL block referencing it; this is the first migration in the repo that
-  needs it, so it owns the canonical definition — see the file's header
-  comment for the RFC 9562 bit-layout reasoning).
-- `lib/analytics/shadow-harness/` — `types.ts` (the `ShadowAnalytic<TFact>`
-  contract), `runner.ts` (`runShadowAnalytic`/`runShadowAnalyticBatch` —
-  pure, never fabricates a result on a thrown compute error), `repository.ts`
-  (Supabase-backed persistence that throws `ShadowHarnessNotConfiguredError`
-  naming the missing env vars — no live Supabase project exists, so this
-  fails loudly rather than no-op'ing), `promotion.ts` (mechanically checks
-  the "ran without error on ≥ 30 accounts" half of the shadow→beta
-  criteria; the other two criteria are explicitly represented as
-  `'not_automatable'`, never guessed), `eligible-trade.ts` (Module 05
-  §4.1's population filter, restated as a pure predicate — not an engine).
-- Tests: 27 passing (vitest + fast-check property tests on the runner's
-  faithfulness and the promotion helper's distinct-account counting),
-  4 RLS assertions left as explicit `describe.skip`/`it.todo` (cannot run
-  without a live Postgres — see below). Coverage on the harness code:
-  98.3% lines / 96.7% branches (`npm run test:coverage`).
-- `docs/runbook.md` created — one entry, "Shadow analytic diverging from
-  expectation" (00-foundation §7.3's alerting row for this piece).
+**Not done yet, not blocked, straightforward continuation:** Module 01
+stories 1.4 (session list/revoke) and 1.5 (2FA/TOTP), stories 2.x
+(trading-account connection, `BrokerAdapter` interface, envelope
+encryption, `account_credentials`), 3.x (account settings), 4.x
+(entitlements/`subscriptions`/`analytic_config`), 5.x (rights/privacy —
+export/erasure/`audit_log`/`data_requests`) — then all of Module 02
+(Trade Ingestion & Model, the largest/highest-risk module in v1: fills,
+blocks, the grouping engine, trade events, confirmation freeze).
 
-**Deliberately NOT built** (scope boundary — see decision log below for
-the full reasoning): the edge engine, the detection engine, the
-statistical gates (§4.3), and the `spec.weekday` canary (§4.10) itself.
-All of them need confirmed trades from Module 02, which doesn't exist in
-this repo yet (no grouping engine — only its golden fixtures). The harness
-is generic infrastructure, tested with synthetic stand-in analytics
-(`__tests__/fixtures.ts`), not a fake grouping engine. It is ready to
-accept real registrations the moment Module 02 lands.
-
-**Not verified — flagged, not faked:** RLS on `shadow_runs` is written
-per spec but has never run against a live Postgres (no Supabase project
-for Retrospeq — see "Infra gaps"). The migration also has a forward
-dependency on Module 01's `profiles` table, which doesn't exist yet
-either, so this migration file cannot literally be applied to any
-database as-is right now; it is correct against the eventual schema, not
-against a schema that exists today.
-
-Next: Phase 1, Module 01 (Identity & Accounts) + Module 02 (Trade
-Ingestion & Model), per brief-developer-and-design.md build order. Real
-shadow-analytic registrations (starting with `spec.weekday`) become
-buildable once Module 02's confirmed trades and Module 05's edge-engine
-gates exist — not a Phase 0 task, tracked for whenever Module 05's
-engines themselves get built (Phase 3 per the build order).
+**Next slice:** Module 01 stories 2.x — `trading_accounts` +
+`account_credentials` schema/RLS, the `BrokerAdapter` TS interface
+(00-foundation §10.1, vendor-agnostic, no real vendor selected — build
+against the interface + a test/fixture adapter, not a real broker), and
+the connect flow including the mandatory read-only verification step.
+Envelope encryption (AES-256-GCM per-credential key wrapped by an
+external KMS master key) is buildable in interface/logic form now but
+has no real KMS account yet (infra gap) — build it to fail loudly
+without one, don't stub a fake master key.
 
 ## Needs-your-input signal
 
@@ -134,6 +144,71 @@ Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
   truth" section updated to point at the GitHub repo/branch instead of
   a local folder for anyone who needs the old spec for historical
   reference.
+
+- 2026-08-20 — Process correction, mid-session: the orchestrator had
+  been dispatching retrospeq-tester/retrospeq-security-reviewer as
+  background agents while reviewing one slice before starting the next
+  — but with no tool to poll a background agent's status, this produced
+  an "exit and wait to be resumed" loop that cost turns without
+  advancing anything. **Fix, now the standing convention:** dispatch
+  retrospeq-coder/tester/security-reviewer/qa/docs synchronously
+  (foreground) when the very next step depends on their result, which
+  it almost always does for a single slice being reviewed before the
+  next one starts — background dispatch is only for genuine parallel
+  work happening alongside something else in the same turn, which
+  reviewing-before-proceeding never is. Applied for the rest of this
+  session and going forward.
+
+- 2026-08-20 — Module 01 slice 1 (auth: stories 1.1-1.3) finished and
+  committed after resuming a previous run that was killed mid-slice.
+  Reviewed the interrupted coder's uncommitted work on its merits
+  (per orchestrator instructions: don't discard working code just
+  because it was interrupted) and judged it sound — well-documented,
+  spec-aligned, its `profiles` migration already verified applied to
+  the live shared dev DB. Dispatched retrospeq-tester and
+  retrospeq-security-reviewer to finish it properly rather than mark it
+  done on the strength of a read-through alone. Two real findings came
+  out of that, both fixed and re-verified this session:
+  (1) **retrospeq-security-reviewer FAIL, blocking:** zero rate limiting
+  existed on any auth endpoint, violating Module 01 §7.2's mandatory
+  "throttle per user and per IP." Fixed with `lib/rate-limit/` — a
+  direct-Postgres (not supabase-js — the `retrospeq` schema isn't yet
+  in the project's "Exposed schemas" dashboard setting, so `.rpc()`
+  would 404; ADR 0003) fixed-window counter, fails loudly on missing
+  config, fails open on unexpected DB errors (ADR 0004's documented
+  tradeoff — an auth outage from the limiter's own infra would be worse
+  than a brief throttling gap, and Supabase Auth's own server-side
+  limits remain as a backstop regardless). Re-reviewed: PASS.
+  (2) **retrospeq-qa findings, non-blocking but fixed anyway:** two
+  deliberate architectural deviations (direct-pg, fail-open) had no ADR
+  — written (0003, 0004). `confirmPasswordReset`'s claim that "all
+  sessions invalidated on reset" happens automatically via `updateUser`
+  was an unverified assumption about vendor behavior — replaced with an
+  explicit `signOut({ scope: 'others' })` call and a test proving it
+  fires in the right order and doesn't block the redirect on its own
+  failure.
+  Separately (not a slice-blocking issue, logged in
+  `NEEDS_YOUR_INPUT.md`): the shared dev Supabase project's
+  transactional email sending is genuinely broken
+  (`500 unexpected_failure`), confirmed independently twice hours apart
+  — blocks 3 of 5 E2E tests from completing their "check your email"
+  step, but not the underlying code (100%-covered by unit tests
+  including that exact failure path) and not something an agent can fix
+  (dashboard-only setting). Also fixed two pre-existing test bugs found
+  along the way (a Playwright locator too broad, matching Next.js's own
+  route-announcer div; a module-identity mismatch between a statically-
+  and dynamically-imported error class after `vi.resetModules()`) and
+  closed out Phase 0's one remaining loose end (`shadow_runs`'s RLS was
+  "written but unverified" — the `profiles`-table forward dependency
+  that blocked it is gone, so it now runs for real, un-skipped).
+  Installed Playwright's Chromium to `E:\playwright-browsers` instead of
+  the default C: path — this machine's C: drive has ~0 bytes free (same
+  constraint as the existing npm cache/tmp redirect); gitignored, not
+  committed. Moved `pg` from `devDependencies` to `dependencies` (it's
+  now real runtime code via the rate limiter, not just test tooling).
+  Widened `.gitignore`'s `tmp/dev-screenshots`-only entry to all of
+  `/tmp/` (scratch verification scripts belong there too, never
+  committed) and added `/playwright-browsers`.
 
 - 2026-08-20 — Added a 6th subagent, `retrospeq-docs`, and a
   screenshot-based UI self-verification convention, both owner-directed

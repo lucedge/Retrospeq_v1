@@ -1,8 +1,19 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Mirrors tsconfig.json's "@/*" -> "./*" path alias — needed so tests
+  // that import app code by its `@/...` alias (e.g. a route handler
+  // importing `@/lib/supabase/server`) resolve the same way the Next.js
+  // build itself resolves them.
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('.', import.meta.url)),
+    },
+  },
   test: {
     environment: 'node',
+    setupFiles: ['./vitest.setup.ts'],
     include: ['**/*.test.ts'],
     exclude: ['node_modules', '.next', 'fixtures/**'],
     coverage: {
