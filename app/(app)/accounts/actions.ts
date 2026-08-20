@@ -41,6 +41,8 @@ import {
   updateTradingAccountSettingsInputSchema,
   type TradingAccountRow,
 } from '@/lib/broker/accounts-repository';
+import { canForUser } from '@/lib/entitlements/service';
+import { accountConnectLimitMessage } from '@/lib/entitlements/messages';
 
 /**
  * Module 01 stories 2.x — the Server Action layer wiring `lib/broker/connect.ts`'s
@@ -66,6 +68,12 @@ import {
  * success. Only `manual` accounts (no credential, no encryption) can
  * complete end-to-end today. This is the same standing infra gap
  * PROGRESS.md already tracks, not a new one introduced by this slice.
+ *
+ * Module 01 story 4.4 (this repo's plan/entitlement slice) added a real
+ * server-side `account.connect` cap check here — see
+ * `lib/entitlements/service.ts`'s `canForUser`, applied before either
+ * the manual or credentialed branch below, so a free-plan trader cannot
+ * connect a second account by any path through this action.
  */
 
 export interface AccountActionState {
@@ -198,6 +206,26 @@ export async function connectAccount(
   } catch (err) {
     if (err instanceof RateLimitExceededError) return rateLimitToState();
     throw err;
+  }
+
+  // Module 01 story 4.4: "my entitlements enforced server-side ... every
+  // capability check server-side; client state advisory only." Applies
+  // to EVERY platform including manual (story 2.7) — a manual account
+  // still occupies an `account.connect` slot, per
+  // lib/entitlements/account-usage.ts's own reasoning. Checked before
+  // the manual/credentialed branch below so neither path can bypass it.
+  const entitlement = await canForUser(user.id, 'account.connect');
+  if (!entitlement.allowed) {
+    return {
+      error: {
+        code: 'ENTITLEMENT_LIMIT',
+        user_message:
+          entitlement.limit !== null
+            ? accountConnectLimitMessage(entitlement.used ?? entitlement.limit, entitlement.limit)
+            : "You've reached your account connection limit.",
+        retryable: false,
+      },
+    };
   }
 
   if (platform === 'manual') {

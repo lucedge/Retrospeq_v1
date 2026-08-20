@@ -132,6 +132,26 @@ export const RATE_LIMITS = {
     ip: { limit: 30, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 01 stories 4.1-4.4 — app/(app)/plan/actions.ts.
+   * `requestBillingPortal`: no real billing provider exists yet
+   * (`lib/entitlements/billing.ts`), so this always fails fast today —
+   * still a real write-adjacent endpoint per §7.2's blanket posture, not
+   * exempt just because it currently always errors.
+   */
+  billingPortal: {
+    ip: { limit: 40, windowSeconds: 3600 },
+    email: { limit: 30, windowSeconds: 3600 },
+  },
+  /** `devSetPlan` — dev/test-only entitlement override
+   *  (`lib/entitlements/subscription-repository.ts`'s
+   *  `setUserPlanForTesting`, refuses to run in production regardless).
+   *  Tighter than `billingPortal`: this one actually mutates a
+   *  security-relevant column, even though only in development. */
+  devSetPlan: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 10, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

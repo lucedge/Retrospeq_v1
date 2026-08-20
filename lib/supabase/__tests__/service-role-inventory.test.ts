@@ -61,6 +61,13 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // Module 01 stories 2.x: account_credentials INSERT (connect) and
   // DELETE (disconnect) — both per docs/adr/0005 and docs/adr/0006.
   'lib/broker/accounts-repository.ts',
+  // Module 01 stories 4.x: the ONLY write path to `subscriptions`
+  // (setUserPlanForTesting, dev/test-only — see that function's own doc
+  // comment and docs/adr/0008-subscriptions-read-only-rls.md). RLS on
+  // this table deliberately has no client-writable policy at all, per
+  // that ADR, so this is the sole legitimate route to a plan change
+  // until a real billing webhook exists.
+  'lib/entitlements/subscription-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

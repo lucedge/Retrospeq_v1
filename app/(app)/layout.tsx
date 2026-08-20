@@ -66,6 +66,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           Retrospeq
         </Link>
         <nav className="flex items-center gap-3">
+          <Link href="/plan" className="rq-sub underline">
+            Plan
+          </Link>
           <Link href="/security" className="rq-sub underline">
             Security
           </Link>
