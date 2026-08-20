@@ -134,3 +134,52 @@ represents a systemic vendor outage rather than isolated user-side
 issues — distinguish the two by checking whether failures cluster on
 one platform/vendor across many distinct users (systemic) versus
 scattered across unrelated causes (not systemic, no page needed).
+
+---
+
+## Every credentialed connect attempt fails because KMS isn't configured
+
+**Source:** discovered while building `app/(app)/accounts/actions.ts`'s
+`connectAccount` (Module 01 stories 2.x UI/Server-Action slice,
+2026-08-20) — not a code path the spec names by its own error code, but
+a real, currently-live consequence of the standing infra gap tracked in
+PROGRESS.md ("No external KMS account"). Related to, but distinct from,
+this file's "Any credential decryption failure" entry above:
+that entry is about *decryption* failing after a credential was
+successfully stored; this one is about *encryption* never succeeding in
+the first place, so nothing is ever stored at all.
+
+**What this means operationally:** `lib/broker/envelope-encryption.ts`'s
+`createKmsMasterKeyProvider()` throws `KmsNotConfiguredError`
+unconditionally until a real external KMS vendor is wired in
+(`RETROSPEQ_KMS_KEY_ID` plus an actual KMS SDK call — see that
+function's own `TODO(kms)`). `connectAccount` catches this and returns a
+named, non-retryable `CONNECT_KMS_NOT_CONFIGURED` error rather than
+faking success — but the practical effect is that **every** MT4/MT5/
+cTrader/Binance/Bybit connect attempt that gets past broker auth and the
+mandatory read-only check (Module 01 §4.1 steps 3-4) will still fail at
+step 6, for every user, until a real KMS exists. Only `manual` accounts
+(no credential involved) can complete today. This is not a partial
+degradation — it is effectively a total outage of the credentialed
+connect flow, masked from being an *incident* only because it has been
+true since before any user could hit it (no production deployment yet).
+
+**How to check:** any spike in `CONNECT_KMS_NOT_CONFIGURED` in
+`connectAccount`'s `console.error` output (searchable string: "cannot
+complete a credentialed connect — KMS not configured") is not an
+anomaly to triage — it is the expected, 100%-of-attempts outcome for
+every credentialed platform until `RETROSPEQ_KMS_KEY_ID` and a real KMS
+vendor call exist. A single occurrence is not alert-worthy by itself;
+what would be alert-worthy is this error appearing in a *deployed*
+(non-local-dev) environment at all, since that would mean a release
+shipped without KMS configured.
+
+**Action:** this blocks real users from connecting anything but a
+manual account — treat "wire up a real external KMS vendor" as a
+release-blocking prerequisite for enabling any credentialed platform in
+production, not a follow-up nice-to-have. Tracked in PROGRESS.md's
+"Infra gaps" (no external KMS account — needs owner action, cannot be
+resolved by an agent). Once a real KMS exists, this entire runbook entry
+becomes moot and should be removed rather than left stale (AGENTS.md
+`NEEDS_YOUR_INPUT.md` convention: "Don't let it accumulate stale
+resolved entries").

@@ -11,6 +11,7 @@ import {
 } from '@/lib/auth/schemas';
 import { mapAuthError, type AppAuthError } from '@/lib/auth/errors';
 import { enforceRateLimit } from '@/lib/rate-limit/limiter';
+import { getClientIp } from '@/lib/rate-limit/http';
 
 /**
  * Shared shape for every auth form's `useActionState`. `fieldErrors`
@@ -32,22 +33,6 @@ async function getOrigin(): Promise<string> {
   const proto = h.get('x-forwarded-proto') ?? 'http';
   const host = h.get('x-forwarded-host') ?? h.get('host');
   return `${proto}://${host}`;
-}
-
-/**
- * Best-effort client IP for rate limiting (lib/rate-limit/). Vercel sets
- * `x-forwarded-for` on every request; `x-real-ip` is a common fallback
- * behind other proxies. Server Actions have no direct access to the
- * request socket, only `headers()` — same constraint `getOrigin()`
- * above already works around. Falls back to a fixed key in local dev
- * (no proxy in front), which means all local traffic shares one bucket
- * — acceptable there, never true in any real deployment.
- */
-async function getClientIp(): Promise<string> {
-  const h = await headers();
-  const forwardedFor = h.get('x-forwarded-for');
-  if (forwardedFor) return forwardedFor.split(',')[0].trim();
-  return h.get('x-real-ip') ?? 'unknown';
 }
 
 /**

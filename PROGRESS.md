@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 slice 1 done (stories 1.1-1.3: email/Google signup, sign-in, sign-out, password reset, `profiles` table + trigger, mandatory per-endpoint rate limiting). Module 01 stories 1.4-1.5 (sessions, 2FA), 2.x (account connection/`BrokerAdapter`), 3.x (settings), 4.x (entitlements), 5.x (rights/privacy) and all of Module 02 remain — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 slice 1 done (stories 1.1-1.3). Stories 2.x (account connection) fully built — schema, `lib/broker/`, and now the connect/account-list UI + Server Actions — coder pass complete, tester/security-reviewer/qa passes pending. Module 01 stories 1.4-1.5 (sessions, 2FA), 3.x (settings), 4.x (entitlements), 5.x (rights/privacy) and all of Module 02 remain — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -183,21 +183,133 @@ Built (not yet UI-wired — that's the next slice):
   `trading_accounts`/`account_credentials` INSERT (the next slice —
   must follow ADR 0005's service-role guidance), and Module 02's
   sync/import.
-**Not done yet, not blocked, straightforward continuation:** the UI/
-Server-Action slice for stories 2.x (connect screen, account list,
-the actual DB write per ADR 0005), Module 01 stories 1.4 (session
-list/revoke) and 1.5 (2FA/TOTP), 3.x (account settings), 4.x
-(entitlements/`subscriptions`/`analytic_config`), 5.x (rights/privacy —
-export/erasure/`audit_log`/`data_requests`) — then all of Module 02
-(Trade Ingestion & Model, the largest/highest-risk module in v1: fills,
-blocks, the grouping engine, trade events, confirmation freeze).
+**Module 01 stories 2.x — UI/Server-Action layer built, reviewed, done.**
 
-**Next slice:** the UI/Server-Action layer for Module 01 stories 2.x
-(the connect screen per §5.2's reference markup, the account list, and
-the actual `trading_accounts`/`account_credentials` Server Action
-writes — per ADR 0005, through the service-role client, not a direct
-RLS-scoped client call). UI slice — needs the screenshot self-check
-before it can be marked done.
+- `docs/adr/0006-account-writes-direct-postgres.md` — a real, live-probed
+  finding while wiring the Server Action: PostgREST returns
+  `406 PGRST106 "Invalid schema: retrospeq"` for `trading_accounts` too,
+  not just the credentials table ADR 0005 already knew about — the
+  `retrospeq` schema still isn't in "Exposed schemas" (unchanged from
+  ADR 0002/0003's finding). Both `lib/supabase/server.ts`'s RLS-scoped
+  client and `lib/supabase/service.ts`'s service-role client would 404
+  against any `retrospeq` table via `.from()`. Resolution: `lib/supabase/direct.ts`,
+  a direct-`pg` module (mirrors ADR 0003's rate-limiter pattern) with two
+  entry points — `withUserConnection` (`SET LOCAL ROLE authenticated` +
+  `request.jwt.claims`, genuinely RLS-enforced, not just app-layer-trusted)
+  and `withServiceRoleConnection` (`SET LOCAL ROLE service_role`,
+  bypasses RLS per ADR 0005). This satisfies ADR 0005's requirement in
+  spirit — same security property, reached one layer below PostgREST —
+  not by literally using `lib/supabase/service.ts`.
+- `lib/broker/accounts-repository.ts` — all `trading_accounts`/
+  `account_credentials` reads/writes the Server Actions need, built on
+  `lib/supabase/direct.ts`. `DuplicateAccountError` maps the
+  `(user_id, platform, provider_ref)` unique-violation to a friendly
+  message.
+- `lib/broker/platform-defaults.ts` — per-platform label/day-rollover/
+  currency/credential-kind defaults (story 3.1/3.2's rollover defaults;
+  editing them is that story's own settings screen, not this slice's).
+- `app/(app)/layout.tsx` (minimal authenticated shell + auth guard),
+  `app/(app)/accounts/page.tsx` (account list, direct-pg read since
+  `.from()` can't reach this schema), `app/(app)/accounts/connect/page.tsx`
+  (connect form, `useActionState`), `app/(app)/accounts/actions.ts`
+  (`connectAccount`/`disconnectAccount` Server Actions).
+- `connectAccount` only ever constructs `lib/broker/fixture-adapter.ts`'s
+  fixture adapter (no real vendor exists — PROGRESS.md's own standing
+  gap) via a clearly-commented, dev-only `pickFixtureBehavior` heuristic
+  keyed on the submitted credential text (e.g. containing "master" ->
+  simulated `credential_too_permissive`), so the connect screen is
+  genuinely exercisable end-to-end including the mandatory rejection
+  path, not just simulating success.
+- **Real bug found and fixed via the mandatory screenshot self-check,
+  not just a code read:** `createKmsMasterKeyProvider()` was originally
+  called eagerly as a call argument
+  (`connectTradingAccount(adapter, input, createKmsMasterKeyProvider())`) —
+  since it throws unconditionally (no real KMS yet), JS's eager argument
+  evaluation meant it threw *before* `connectTradingAccount` ever ran,
+  short-circuiting Module 01 §4.1 steps 3-4 (auth + the mandatory
+  read-only check) for every credentialed attempt and masking
+  `CONNECT_CREDENTIAL_TOO_PERMISSIVE`/`CONNECT_AUTH_FAILED`/etc behind a
+  generic KMS error. A screenshot of submitting a "...master-password"
+  credential showed the wrong message (KMS-not-configured instead of the
+  rejection alert), which is what caught it. Fixed with
+  `lazyKmsMasterKeyProvider()` — defers the real provider call (and its
+  throw) until `wrapDataKey` is actually invoked inside step 6, which
+  only happens after steps 3-4 already succeeded. Regression test added
+  (`app/(app)/accounts/__tests__/actions.test.ts`) proving a master
+  credential still surfaces the correct rejection even with an
+  always-throwing KMS provider.
+- **Consequence, not a bug, documented in `docs/runbook.md`'s new
+  entry:** every *credentialed* platform (MT4/MT5/cTrader/Binance/Bybit)
+  still cannot complete a real connect today — it correctly fails at
+  step 6 with a named `CONNECT_KMS_NOT_CONFIGURED` error rather than
+  faking success, because no real external KMS exists yet (standing
+  infra gap). Only `manual` accounts work end-to-end right now. This is
+  the expected, honest behavior per AGENTS.md ("never fake it"), not a
+  regression — verified directly: the rejection/auth-failure/manual
+  paths were screenshot-confirmed working; a real KMS is a genuine
+  prerequisite before any credentialed platform can be enabled in
+  production.
+- Tests: 16 new Server Action unit tests (mocked session/repository/KMS,
+  `app/(app)/accounts/__tests__/actions.test.ts`) plus 5 new live-DB
+  tests (`lib/broker/__tests__/accounts-repository.live.test.ts`) proving
+  `lib/supabase/direct.ts` genuinely enforces RLS and the service-role
+  bypass against the real shared dev/test project (cross-user isolation,
+  duplicate-account rejection, the full connect->disconnect lifecycle).
+  Full suite: **203 passing**, 5 skip-guard fallbacks (env present,
+  nothing actually skipped except each live suite's own inert
+  placeholder). `npm run build`, `tsc --noEmit`, and `npm run lint` all
+  clean (lint: only pre-existing-pattern `_prefixed`-unused-param
+  warnings). One live-DB test needed its timeout raised from vitest's
+  5000ms default to 20s (`accounts-repository.live.test.ts`'s full
+  connect->disconnect lifecycle test chains 8 sequential live-DB round
+  trips — a genuine budget issue, reproduced consistently, not a flake).
+- Screenshot self-check performed against the real running dev server +
+  real Supabase Auth (a confirmed test user created via the GoTrue admin
+  API, since transactional email is still broken on this project — see
+  `NEEDS_YOUR_INPUT.md`): empty account list, empty connect form, the
+  live rejection alert, the manual-platform success/capability screen,
+  the account list with a connected manual account, and the
+  disconnected state after clicking Disconnect — all screenshots
+  reviewed and matched the design system (amber accent only, no red/
+  green, one primary `.rq-btn` per view, `.rq-tag`-based status chips
+  carrying text not colour, `.rq-pill` platform picker).
+- **Security-reviewed: one FAIL, fixed, re-reviewed PASS.** Module 01
+  §7.2's mandatory "service-role inventory" test (originally written for
+  `createServiceRoleClient(` only, per `lib/supabase/service.ts`'s own
+  doc comment) had gone stale — nothing enumerated the new
+  `withServiceRoleConnection(` call sites this slice added. Fixed with
+  `lib/supabase/__tests__/service-role-inventory.test.ts`, which walks
+  the whole repo source tree and asserts the exact file set containing
+  either pattern matches a reviewed allowlist (exact-set equality, so a
+  new unreviewed call site anywhere fails it). `lib/supabase/service.ts`'s
+  doc comment updated to describe both RLS-bypass mechanisms instead of
+  only the one it originally covered. Re-reviewed: PASS. Every other
+  area (JWT-claims simulation genuinely enforcing RLS not just app-layer
+  trust, service-role call-site scoping, `pickFixtureBehavior`'s safety,
+  rate limiting, credential-leakage) passed on the first review.
+- **QA-reviewed: PASS**, with one drift item and one copy nit, both
+  fixed same-session: (1) this PROGRESS.md section itself was stale
+  (said "200 passing" after the security fix added 3 more tests) — now
+  corrected. (2) The manual-account success screen was reusing
+  credentialed-platform copy ("Not available on this broker") for a
+  mode that has no broker at all — fixed with an `isManual` flag threaded
+  through `AccountActionState` so manual accounts now say "Entered
+  manually, not synced"; re-screenshotted and visually confirmed
+  (`tmp/dev-screenshots/connect-success.png`).
+
+**Still not done, not blocked, straightforward continuation:** Module 01
+stories 1.4 (session list/revoke) and 1.5 (2FA/TOTP), 3.x (account
+settings — label/rollover editing), 4.x (entitlements/`subscriptions`/
+`analytic_config`), 5.x (rights/privacy — export/erasure/`audit_log`/
+`data_requests`) — then all of Module 02 (Trade Ingestion & Model, the
+largest/highest-risk module in v1: fills, blocks, the grouping engine,
+trade events, confirmation freeze).
+
+**Next slice:** Module 01 stories 1.4 (session list/revoke) and 1.5
+(2FA/TOTP) — reasonable to pair, both live on a "security" account
+screen. Then 3.x (account settings), 4.x (entitlements), 5.x
+(rights/privacy), in that order per the build order's own module
+numbering, before moving to Module 02.
 
 ## Needs-your-input signal
 
@@ -220,6 +332,47 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-20 — Module 01 stories 2.x UI/Server-Action layer built
+  (connect screen, account list, `connectAccount`/`disconnectAccount`
+  Server Actions) on top of the prior slice's backend foundation. Two
+  real findings, both fixed same-session:
+  (1) **Architectural, extends ADR 0005:** a live probe confirmed
+  PostgREST's `retrospeq`-schema exposure gap (ADR 0002/0003) also blocks
+  `trading_accounts`, not just `account_credentials` — `.from()` calls
+  through *both* `lib/supabase/server.ts` and `lib/supabase/service.ts`
+  would 404/406 against any table in this schema today. Resolved with
+  `lib/supabase/direct.ts` (direct-`pg`, `SET LOCAL ROLE` role-switching
+  mirroring what PostgREST does internally) — `docs/adr/0006-account-
+  writes-direct-postgres.md` records the full reasoning. Satisfies ADR
+  0005's security intent (service-role bypass only for credentials,
+  application-layer ownership checks) without literally using the
+  supabase-js service-role client, since that client can't reach this
+  schema at all right now.
+  (2) **Real bug, caught by the mandatory screenshot self-check, not a
+  code read:** `createKmsMasterKeyProvider()` was called eagerly as a
+  call argument to `connectTradingAccount(...)`, so its unconditional
+  "no KMS yet" throw fired *before* the adapter's own auth/read-only
+  check ever ran — masking the mandatory `CONNECT_CREDENTIAL_TOO_PERMISSIVE`
+  rejection (and every other adapter-level outcome) behind a generic KMS
+  error for every credentialed connect attempt. A screenshot of
+  submitting a "...master-password" credential showed the wrong message,
+  which is what surfaced it. Fixed with a lazy provider wrapper deferring
+  the throw to first actual use (step 6, after steps 3-4 already
+  succeeded); a regression test now asserts a master credential is
+  rejected correctly even with an always-throwing KMS provider. This is
+  exactly the kind of "wait, that's wrong" AGENTS.md's screenshot-check
+  requirement exists to catch that a code read alone would have missed —
+  the code looked correct on inspection; only watching the actual
+  rendered rejection alert (or its absence) revealed the bug.
+  Net effect, honestly stated: manual accounts connect end-to-end today;
+  every credentialed platform correctly fails at the encryption step
+  with a named, non-retryable error until a real external KMS exists
+  (standing infra gap, `docs/runbook.md`'s new entry) — not a regression,
+  the correct behavior for a missing dependency per AGENTS.md.
+  Coder pass only — retrospeq-tester/security-reviewer/qa passes still
+  needed before this slice (or Module 01 stories 2.x as a whole) can be
+  marked done.
 
 - 2026-08-20 — Module 01 stories 2.x backend foundation built
   (`trading_accounts`/`account_credentials` migration,
