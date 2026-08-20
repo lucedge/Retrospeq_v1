@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 stories 1.1-1.3 (auth), 1.4-1.5 (sessions/2FA), 2.x (account connection), 3.x (settings), and 4.x (plan/entitlement) are all genuinely done — coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. Module 01 stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`) are **coder-complete this session** (real live-DB-tested erasure execution, real export bundle by signed URL) — retrospeq-tester/security-reviewer/qa passes still needed before the module as a whole is "done." All of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remains — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done — every story group (1.1-1.3 auth, 1.4-1.5 sessions/2FA, 2.x account connection, 3.x settings, 4.x entitlements, 5.x rights/privacy) coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. All of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remains — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -792,13 +792,7 @@ capability.
   email, the `audit_log` entry survives with `user_id` nulled, and the
   real `auth.users` row is genuinely gone (confirmed via
   `auth.admin.getUserById` returning 404, not just a local table check)
-  — full destructive lifecycle, real data, not a mock.** Full repo
-  suite: **540 passing**, 9 skip-guard fallbacks (env present, nothing
-  actually skipped). `npm run build`, `npx tsc --noEmit`, and
-  `npm run lint` all clean (lint: only the same pre-existing-pattern
-  `_prefixed`-unused-param warnings already noted elsewhere). Overall
-  coverage 99.02% lines / 94.41% branch; `lib/privacy/` itself 99.43%
-  lines / 94.53% branch.
+  — full destructive lifecycle, real data, not a mock.**
 - Screenshot self-check (`tmp/screenshot-privacy.mjs`, real dev server +
   real Supabase Auth test user): default privacy screen, telemetry
   opted-out, export-ready with real download links, erasure-pending with
@@ -816,14 +810,84 @@ capability.
   severities, how to check, action for each) — "Any credential decryption
   failure" and "Broker/vendor connection outage during connect" already
   existed from an earlier slice, not duplicated.
-- **Not yet done: retrospeq-tester/retrospeq-security-reviewer/qa passes.**
-  Security review is mandatory here per this slice's own dispatch
-  (credential destruction, RLS on new tables, real hard-delete erasure).
+- **retrospeq-security-reviewer: one blocking FAIL, fixed, re-reviewed
+  PASS.** `executeErasure` originally did a non-atomic check-then-act
+  status transition (read the row, check `status === 'pending'` in
+  application code, then write `'processing'` unconditionally) — two
+  concurrent calls for the same request could both pass the check
+  before either write landed, both proceed through the destructive
+  path, and the loser's `auth.admin.deleteUser` call would fail and
+  throw a false "needs manual on-call follow-up" incident even though
+  the erasure had fully succeeded. Fixed with
+  `markDataRequestProcessing()` (`lib/privacy/data-requests-repository.ts`)
+  — a single atomic `UPDATE ... WHERE status = 'pending'`, mirroring
+  `cancelDataRequest`'s already-correct pattern — and `executeErasure`
+  now aborts cleanly (before any destructive work) if it loses that
+  race. Proven with a real concurrency test
+  (`lib/privacy/__tests__/erasure.live.test.ts`: two genuinely
+  concurrent `executeErasure` calls against the same live-DB row,
+  `Promise.allSettled`, asserting exactly one wins) plus a mocked
+  complement. Re-reviewed: PASS. Every other area (credential-first
+  destruction order, tombstone anonymity, RLS self-write prevention on
+  all three new tables, export's exclusion of secrets, rate limiting,
+  the retroactive `createServiceRoleClient()`/mfa-admin fix) passed on
+  the first review.
+- **retrospeq-qa: two must-fix items, both applied and re-verified
+  same session.** (1) The delete-account screen's copy claimed
+  "Your credential is destroyed immediately when this is requested" —
+  false; credentials are destroyed at EXECUTION (after the 7-day grace
+  elapses, or via the dev bypass), not at request time, per §4.6's own
+  flow and the shipped code. Fixed the copy in
+  `app/(app)/privacy/page.tsx` to describe what actually happens. (2)
+  Story 5.3 ("access, erasure, restriction, objection, portability all
+  implemented as code paths") had two of five unmet: `data_requests
+  .kind` included `'restriction'` in its schema but nothing ever
+  created/read/canceled a row of that kind (an unwired enum value, not
+  a code path), and `'objection'` had no representation anywhere. Fixed
+  restriction with a new, genuinely wired `lib/privacy/restriction.ts`
+  (`requestRestriction`/`getActiveRestriction`/`liftRestriction`, reusing
+  the exact same `data_requests` machinery erasure/export already
+  established — no new schema/RLS needed since RLS doesn't care about
+  `kind`), a Privacy-screen section, two new Server Actions, two new
+  rate-limit scopes, and 6 unit tests. Same honest-scope-boundary
+  posture as everywhere else in this slice: restriction is a real,
+  visible, cancellable request — what it would actually *suspend*
+  (Module 02 sync, Module 05 analytics) doesn't exist yet to suspend.
+  Objection: NOT built as a separate mechanism — logged as a deliberate
+  decision (see decision log) that telemetry opt-out (story 5.4,
+  already real) already IS the objection mechanism for the one
+  legitimate-interest-based processing this product currently does
+  (§13's own data policy: "legitimate interest for telemetry with
+  opt-out") — building a second, parallel "object" flow with nothing
+  distinct to object to would be inventing UI for a right with no
+  current referent, not a more complete implementation.
+- **Module 01 stories 5.x is now genuinely done — the last slice of
+  Module 01.** Coded, security-reviewed (one FAIL, fixed, re-reviewed
+  PASS), QA-reviewed (two must-fix items, fixed), tested throughout.
+  Full repo suite: **554 passing** (after the restriction code path and
+  the `pg-type-parsers.ts` ISO-8601 correction below), 9 skip-guard fallbacks (env present,
+  nothing actually skipped). `npm run build`, `npx tsc --noEmit`, and
+  `npm run lint` all clean.
+- **Module 01 (Identity & Accounts) is now complete in full** — every
+  story group (1.1-1.3 auth, 1.4-1.5 sessions/2FA, 2.x account
+  connection, 3.x settings, 4.x entitlements, 5.x rights/privacy)
+  coded, tested, security-reviewed, QA-reviewed, committed. Ready for
+  the Phase 1 boundary process (§`/code-review` pass +
+  `retrospeq-docs` dispatch) once Module 02 also lands, per AGENTS.md
+  step 5 ("before marking a *phase* — not every slice — complete").
 
-**Next slice:** finish Module 01 stories 5.x's review gates
-(retrospeq-tester/security-reviewer/qa), then all of Module 02 (Trade
-Ingestion & Model, the largest/highest-risk module in v1: fills, blocks,
-the grouping engine, trade events, confirmation freeze).
+**Next slice:** all of Module 02 (Trade Ingestion & Model — the
+largest/highest-risk module in v1: sync pipeline, fill storage/dedup,
+block derivation, the grouping engine, the trade event model, pre-entry
+capture matching, close-out confirmation, evaluation-freeze triggering,
+corrections/not-a-decision, open position state, manual trade entry).
+Build order: golden fixtures already exist (Phase 0) — start from the
+schema (`fills`/`blocks`/`trades`/`trade_fills`/`trade_events`/
+`arm_events`/`trade_captures`/`sync_runs`/`coverage_gaps`/
+`day_closeouts`/`position_snapshots`, Module 02 §3.1) and the sync
+pipeline skeleton against `BrokerAdapter` before the grouping engine
+itself, per Module 02's own "largest and highest-risk" framing and
+00-foundation §9.3's fixture-first testing bar.
 
 ## Needs-your-input signal
 
@@ -847,6 +911,41 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — Closed out Module 01 stories 5.x's review findings.
+  **Security (blocking):** `executeErasure`'s pending->processing
+  transition was non-atomic (check-then-act), a real concurrent-
+  double-execution race — fixed with `markDataRequestProcessing()`,
+  a single atomic conditional `UPDATE`, proven with a live concurrency
+  test. **QA (must-fix):** the delete-account screen's copy claimed
+  credentials are destroyed "immediately when this is requested,"
+  which is false — they're destroyed at execution, after the 7-day
+  grace elapses; corrected the copy to match the actual (correct) code
+  behavior. **QA (must-fix): story 5.3's restriction gap.**
+  `data_requests.kind` included `'restriction'` in its schema from the
+  original migration, but nothing created/read/canceled a row of that
+  kind — an unwired enum value isn't a "code path" per the story's own
+  acceptance criterion. Built `lib/privacy/restriction.ts`
+  (`requestRestriction`/`getActiveRestriction`/`liftRestriction`),
+  reusing the exact `data_requests` machinery erasure/export already
+  use — no new schema or RLS needed, since RLS doesn't key on `kind`.
+  **Objection — deliberately NOT built as a separate mechanism,** a
+  judgment call, not an oversight: GDPR's "right to object" (Article
+  21) applies to processing done on a legitimate-interest basis, and
+  telemetry is the ONLY legitimate-interest-based processing this
+  product currently does (Module 01 §13's own data policy: "legitimate
+  interest for telemetry with opt-out" — every other lawful basis in
+  that table is "contract"). Story 5.4's telemetry opt-out (already
+  real, already tested) IS the objection mechanism for that processing
+  — a trader can object to it and have that objection immediately
+  respected, which is exactly what Article 21 requires. A second,
+  parallel "submit an objection" flow with nothing distinct to object
+  to would be inventing UI for a right with no current referent in
+  this product, not a more complete implementation of story 5.3. This
+  reasoning should be revisited if a future module (Module 05's
+  analytics, e.g.) ever processes data on a legitimate-interest basis
+  distinct from telemetry — at that point a real, separate objection
+  target would exist and this decision should be reopened.
 
 - 2026-08-21 — Module 01 stories 5.x (rights/privacy) built: `audit_log`/
   `data_requests`/`erasure_tombstones` (new migration), export (real JSON+CSV

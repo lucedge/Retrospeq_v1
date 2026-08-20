@@ -216,6 +216,61 @@ describe.skipIf(!env)('lib/privacy/erasure.ts executeErasure (live DB)', () => {
     await deleteTestAuthUser(env, user.id).catch(() => {});
   }, 30_000);
 
+  it(
+    'concurrent double-execution: exactly one caller wins the atomic pending->processing race, the other aborts cleanly before any destructive work — regression test for a retrospeq-security-reviewer FAIL (2026-08-21)',
+    async () => {
+      if (!env) return;
+      const { requestErasure, executeErasure, ErasureAlreadyProcessedError } = await import(
+        '../erasure'
+      );
+
+      const user = await createTestAuthUser(env, 'erasure-live-race');
+      const request = await requestErasure(user.id);
+
+      // Two genuinely concurrent calls for the SAME request id — this is
+      // exactly the scenario a non-atomic check-then-act transition would
+      // let both callers pass through, each eventually calling
+      // `auth.admin.deleteUser` on a user the other one already erased.
+      // `markDataRequestProcessing`'s atomic `UPDATE ... WHERE status =
+      // 'pending'` (lib/privacy/data-requests-repository.ts) must ensure
+      // only one of these two promises ever proceeds past that point.
+      const results = await Promise.allSettled([
+        executeErasure(request.id, { bypassGracePeriod: true }),
+        executeErasure(request.id, { bypassGracePeriod: true }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      // The loser must fail with the clean, expected "already processed"
+      // error — never an unhandled `auth.admin.deleteUser` failure (the
+      // false-incident failure mode the race previously produced), and
+      // never a database constraint violation from a double-delete.
+      const loserReason = (rejected[0] as PromiseRejectedResult).reason;
+      expect(loserReason).toBeInstanceOf(ErasureAlreadyProcessedError);
+
+      // The winner genuinely completed the full erasure — not a partial
+      // or corrupted state.
+      const { data, error } = await (
+        await import('@/lib/supabase/service')
+      ).createServiceRoleClient().auth.admin.getUserById(user.id);
+      expect(data.user).toBeNull();
+      expect(error).not.toBeNull();
+
+      await db
+        .query(
+          "delete from retrospeq.audit_log where action = 'erasure_executed' and metadata->>'erasedUserId' = $1",
+          [user.id],
+        )
+        .catch(() => {});
+      await db.query('delete from retrospeq.erasure_tombstones where request_id = $1', [request.id]).catch(() => {});
+      await deleteTestAuthUser(env, user.id).catch(() => {});
+    },
+    30_000,
+  );
+
   it('refuses to execute before the grace period elapses without the dev bypass', async () => {
     if (!env) return;
     const { requestErasure, executeErasure, ErasureGracePeriodNotElapsedError } = await import(

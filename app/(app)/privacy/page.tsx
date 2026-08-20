@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getProfilePrivacy } from '@/lib/privacy/profile-repository';
 import { listDataRequestsForUser, type DataRequestRow } from '@/lib/privacy/data-requests-repository';
 import { getPendingErasureRequest } from '@/lib/privacy/erasure';
+import { getActiveRestriction } from '@/lib/privacy/restriction';
 import { devPrivacyToolsEnabled } from '@/lib/privacy/dev-tools-guard';
 import type { ExportArtifactManifest } from '@/lib/privacy/export-job';
 import {
@@ -11,6 +12,8 @@ import {
   requestErasureAction,
   cancelErasureAction,
   devExecuteErasureNowAction,
+  requestRestrictionAction,
+  liftRestrictionAction,
 } from './actions';
 
 /**
@@ -30,6 +33,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   ERASURE_NOT_CANCELABLE: 'This deletion request can no longer be canceled.',
   ERASURE_NOT_EXECUTABLE: 'This deletion request cannot be executed right now.',
   DEV_TOOL_DISABLED: 'That control is not available in this environment.',
+  RESTRICTION_ALREADY_ACTIVE: 'Processing is already restricted for this account.',
+  RESTRICTION_NOT_ACTIVE: 'There is no active restriction to lift.',
 };
 
 export default async function PrivacyPage(props: PageProps<'/privacy'>) {
@@ -49,10 +54,11 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
     );
   }
 
-  const [profile, dataRequests, pendingErasure] = await Promise.all([
+  const [profile, dataRequests, pendingErasure, activeRestriction] = await Promise.all([
     getProfilePrivacy(user.id),
     listDataRequestsForUser(user.id),
     getPendingErasureRequest(user.id),
+    getActiveRestriction(user.id),
   ]);
 
   const latestExport = dataRequests.find((r) => r.kind === 'export') ?? null;
@@ -89,6 +95,16 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
           Deletion canceled. Your account is unaffected.
         </p>
       )}
+      {searchParams.restrictionRequested === '1' && (
+        <p className="rq-sub" role="status">
+          Processing restricted for this account.
+        </p>
+      )}
+      {searchParams.restrictionLifted === '1' && (
+        <p className="rq-sub" role="status">
+          Restriction lifted.
+        </p>
+      )}
 
       <div className="rq-well flex flex-col gap-3">
         <h2 className="rq-h2">Sessions &amp; two-factor authentication</h2>
@@ -99,6 +115,8 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
       </div>
 
       <TelemetrySection optedOut={telemetryOptedOut} />
+
+      <RestrictionSection activeRestriction={activeRestriction} />
 
       <ExportSection latestExport={latestExport} />
 
@@ -124,6 +142,41 @@ function TelemetrySection({ optedOut }: { optedOut: boolean }) {
           {optedOut ? 'Opt back in' : 'Opt out of telemetry'}
         </button>
       </form>
+    </div>
+  );
+}
+
+/**
+ * Story 5.3, GDPR Article 18. A standing, reversible toggle — not a
+ * grace-period flow like erasure, since restriction never destroys
+ * anything. See `lib/privacy/restriction.ts`'s own doc comment for the
+ * honest scope boundary on what "restricted" actually suspends today.
+ */
+function RestrictionSection({ activeRestriction }: { activeRestriction: DataRequestRow | null }) {
+  return (
+    <div className="rq-well flex flex-col gap-3" aria-labelledby="restriction-h">
+      <h2 id="restriction-h" className="rq-h2">
+        Restrict processing
+      </h2>
+      <p className="rq-sub">
+        {activeRestriction
+          ? 'Processing is currently restricted for this account.'
+          : "Ask us to pause processing your data (beyond what's needed to keep your account itself running) without deleting anything."}
+      </p>
+      {activeRestriction ? (
+        <form action={liftRestrictionAction}>
+          <input type="hidden" name="requestId" value={activeRestriction.id} />
+          <button type="submit" className="rq-btn rq-btn--ghost">
+            Lift restriction
+          </button>
+        </form>
+      ) : (
+        <form action={requestRestrictionAction}>
+          <button type="submit" className="rq-btn rq-btn--ghost">
+            Restrict processing
+          </button>
+        </form>
+      )}
     </div>
   );
 }
@@ -236,11 +289,11 @@ function DeleteAccountSection({ pendingErasure }: { pendingErasure: DataRequestR
       ) : (
         <>
           <p className="rq-sub">
-            Deleting your account permanently removes your connected accounts, subscription, and
-            recovery-code data. Your credential is destroyed immediately when this is requested.
-            You have <strong>7 days</strong> to change your mind before deletion actually happens
-            — cancel any time before then and nothing is removed. After 7 days, this cannot be
-            undone.
+            Deleting your account permanently removes your connected accounts (credentials
+            included), subscription, and recovery-code data. You have <strong>7 days</strong> to
+            change your mind — cancel any time before then and nothing is removed. Once the 7 days
+            pass, everything (starting with your stored credentials) is destroyed and this cannot
+            be undone.
           </p>
           <form action={requestErasureAction}>
             {/* Deliberately rq-btn--ghost, never the primary — a

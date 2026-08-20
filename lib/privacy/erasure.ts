@@ -5,6 +5,7 @@ import {
   createDataRequest,
   findActiveRequest,
   getDataRequestById,
+  markDataRequestProcessing,
   updateDataRequestStatus,
   type DataRequestRow,
 } from './data-requests-repository';
@@ -215,10 +216,24 @@ export async function executeErasure(
 
   const userId = request.user_id;
 
-  // Marks the request `processing` so a concurrent cancel attempt can no
-  // longer succeed (cancelDataRequest's own `where status = 'pending'`
-  // guard) once execution has actually begun.
-  await updateDataRequestStatus(requestId, { status: 'processing' });
+  // Atomic, conditional pending -> processing transition — fixes a
+  // retrospeq-security-reviewer FAIL (2026-08-21): the earlier check at
+  // line 202 above reads the row and checks its status in application
+  // code, which is NOT enough on its own to prevent two concurrent
+  // callers (a double-submit of the dev-tool trigger, or a future cron
+  // overlapping a manual trigger) from both passing that check before
+  // either write lands. `markDataRequestProcessing` is a single
+  // `UPDATE ... WHERE status = 'pending'`, atomic at the database level
+  // in a way two separate JS statements can never be — only ONE
+  // concurrent caller can ever see `rowCount > 0` for the same row. A
+  // caller that loses the race aborts here, before any destructive
+  // work, rather than proceeding to a redundant (and error-throwing)
+  // `auth.admin.deleteUser` call on a user the other caller already
+  // erased.
+  const wonRace = await markDataRequestProcessing(requestId);
+  if (!wonRace) {
+    throw new ErasureAlreadyProcessedError('pending (lost a concurrent execution race)');
+  }
 
   // Fetched BEFORE any deletion — needed for the tombstone hash and the
   // confirmation email, and this is the only point in the flow where the

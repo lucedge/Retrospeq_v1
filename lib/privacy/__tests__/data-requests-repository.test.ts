@@ -15,6 +15,7 @@ import {
   createDataRequest,
   findActiveRequest,
   getDataRequestById,
+  markDataRequestProcessing,
   updateDataRequestStatus,
   cancelDataRequest,
   listDataRequestsForUser,
@@ -110,6 +111,33 @@ describe('lib/privacy/data-requests-repository.ts', () => {
       expiresAt.toISOString(),
       'req-1',
     ]);
+  });
+
+  it(
+    'markDataRequestProcessing atomically transitions pending->processing and reports whether it won — ' +
+      'regression test for a retrospeq-security-reviewer FAIL: erasure.ts previously used a non-atomic ' +
+      'check-then-act sequence here instead of a single conditional UPDATE',
+    async () => {
+      queryMock.mockResolvedValueOnce({ rowCount: 1 });
+      const result = await markDataRequestProcessing('req-1');
+      // Not asserting a call COUNT on withServiceRoleConnectionMock here —
+      // it's a shared mock across this whole describe block and earlier
+      // tests already invoke it, so a count assertion would be testing
+      // test-execution order, not this function's own behavior. What
+      // matters (and is what every other test in this file checks) is
+      // that the query it actually ran has the right shape.
+      expect(queryMock).toHaveBeenCalledWith(
+        expect.stringMatching(/set\s+status\s*=\s*'processing'[\s\S]*where\s+id\s*=\s*\$1\s+and\s+status\s*=\s*'pending'/i),
+        ['req-1'],
+      );
+      expect(result).toBe(true);
+    },
+  );
+
+  it('markDataRequestProcessing returns false when the row is no longer pending — the exact signal a concurrent-execution loser checks', async () => {
+    queryMock.mockResolvedValueOnce({ rowCount: 0 });
+    const result = await markDataRequestProcessing('req-1');
+    expect(result).toBe(false);
   });
 
   it('cancelDataRequest only cancels a pending request owned by the caller — returns true on success', async () => {

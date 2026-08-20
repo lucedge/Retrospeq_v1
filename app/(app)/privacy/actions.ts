@@ -19,6 +19,12 @@ import {
   ErasureAlreadyProcessedError,
 } from '@/lib/privacy/erasure';
 import { devPrivacyToolsEnabled } from '@/lib/privacy/dev-tools-guard';
+import {
+  requestRestriction,
+  liftRestriction,
+  DuplicateRestrictionRequestError,
+  RestrictionNotActiveError,
+} from '@/lib/privacy/restriction';
 
 /**
  * Module 01 §5.1 "Privacy screen" — the export/delete/telemetry half
@@ -144,6 +150,61 @@ export async function cancelErasureAction(formData: FormData): Promise<void> {
 
   revalidatePath('/privacy');
   redirect('/privacy?erasureCanceled=1');
+}
+
+/**
+ * Story 5.3 — GDPR Article 18. Puts the account into a standing
+ * "processing restricted" state; no grace period, fully reversible via
+ * `liftRestrictionAction`. See `lib/privacy/restriction.ts`'s own doc
+ * comment for the honest scope boundary (nothing yet exists to actually
+ * suspend, since Module 02/05 aren't built — this creates and tracks
+ * the real request, which is the whole of what's buildable today).
+ */
+export async function requestRestrictionAction(_formData: FormData): Promise<void> {
+  const user = await requireUser();
+
+  try {
+    await enforceRateLimit('requestRestriction', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) errorRedirect('PRIVACY_RATE_LIMITED');
+    throw err;
+  }
+
+  try {
+    await requestRestriction(user.id);
+  } catch (err) {
+    if (err instanceof DuplicateRestrictionRequestError) errorRedirect('RESTRICTION_ALREADY_ACTIVE');
+    throw err;
+  }
+
+  revalidatePath('/privacy');
+  redirect('/privacy?restrictionRequested=1');
+}
+
+/** Story 5.3's reversal — restriction has no grace period, so this
+ *  takes effect the moment it's clicked. */
+export async function liftRestrictionAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+
+  try {
+    await enforceRateLimit('liftRestriction', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) errorRedirect('PRIVACY_RATE_LIMITED');
+    throw err;
+  }
+
+  const parsed = dataRequestIdSchema.safeParse(formData.get('requestId'));
+  if (!parsed.success) errorRedirect('PRIVACY_INVALID_INPUT');
+
+  try {
+    await liftRestriction(user.id, parsed.data);
+  } catch (err) {
+    if (err instanceof RestrictionNotActiveError) errorRedirect('RESTRICTION_NOT_ACTIVE');
+    throw err;
+  }
+
+  revalidatePath('/privacy');
+  redirect('/privacy?restrictionLifted=1');
 }
 
 /**

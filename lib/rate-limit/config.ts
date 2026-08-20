@@ -195,6 +195,19 @@ export const RATE_LIMITS = {
     ip: { limit: 5, windowSeconds: 3600 },
     email: { limit: 3, windowSeconds: 3600 },
   },
+  /** `requestRestrictionAction` (story 5.3, GDPR Article 18) — not
+   *  destructive and fully reversible (unlike erasure), so a looser
+   *  budget matching `cancelErasureRequest`'s reasoning rather than
+   *  `requestErasure`'s tight one. */
+  requestRestriction: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  /** `liftRestrictionAction` — same reasoning, the reversal direction. */
+  liftRestriction: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

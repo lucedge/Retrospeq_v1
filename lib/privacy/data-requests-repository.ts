@@ -140,6 +140,39 @@ export async function updateDataRequestStatus(
   });
 }
 
+/**
+ * Atomic, conditional `pending -> processing` transition — the fix for
+ * a retrospeq-security-reviewer FAIL (2026-08-21): `executeErasure`
+ * originally did a non-atomic check-then-act (read the row, check
+ * `status === 'pending'` in application code, THEN call
+ * `updateDataRequestStatus` unconditionally). Two concurrent calls for
+ * the same `requestId` (a double-submit of the dev-tool trigger, or a
+ * future cron overlapping a manual trigger) could both pass the
+ * application-level check before either write landed, and both proceed
+ * through the destructive erasure path — the second `auth.admin.deleteUser`
+ * call would then fail (user already gone) and throw a false "needs
+ * manual on-call follow-up" incident even though the erasure had fully
+ * succeeded.
+ *
+ * Mirrors `cancelDataRequest`'s already-correct pattern exactly: a
+ * single `UPDATE ... WHERE id = $1 AND status = 'pending'`, and the
+ * caller reads `rowCount` to know whether it actually won the race —
+ * Postgres's own row-level locking makes this atomic across concurrent
+ * connections, which two separate application-level statements can
+ * never be regardless of how carefully they're sequenced in JS.
+ */
+export async function markDataRequestProcessing(requestId: string): Promise<boolean> {
+  return withServiceRoleConnection(async (client) => {
+    const res = await client.query(
+      `update retrospeq.data_requests
+          set status = 'processing'
+        where id = $1 and status = 'pending'`,
+      [requestId],
+    );
+    return (res.rowCount ?? 0) > 0;
+  });
+}
+
 /** Owner-scoped cancel — RLS's own SELECT still applies for the read
  *  half of the check the caller does before calling this
  *  (`app/(app)/privacy/actions.ts`'s `cancelErasure`), but the actual

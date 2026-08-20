@@ -5,6 +5,7 @@ const {
   createDataRequestMock,
   findActiveRequestMock,
   getDataRequestByIdMock,
+  markDataRequestProcessingMock,
   updateDataRequestStatusMock,
   cancelDataRequestMock,
   recordAuditEventMock,
@@ -20,6 +21,7 @@ const {
   createDataRequestMock: vi.fn(),
   findActiveRequestMock: vi.fn(),
   getDataRequestByIdMock: vi.fn(),
+  markDataRequestProcessingMock: vi.fn(),
   updateDataRequestStatusMock: vi.fn(),
   cancelDataRequestMock: vi.fn(),
   recordAuditEventMock: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('../data-requests-repository', () => ({
   createDataRequest: createDataRequestMock,
   findActiveRequest: findActiveRequestMock,
   getDataRequestById: getDataRequestByIdMock,
+  markDataRequestProcessing: markDataRequestProcessingMock,
   updateDataRequestStatus: updateDataRequestStatusMock,
   cancelDataRequest: cancelDataRequestMock,
 }));
@@ -170,6 +173,7 @@ describe('executeErasure', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getDataRequestByIdMock.mockResolvedValue(PENDING_REQUEST);
+    markDataRequestProcessingMock.mockResolvedValue(true);
     devPrivacyToolsEnabledMock.mockReturnValue(true);
     createServiceRoleClientMock.mockReturnValue(fakeSupabase());
     getTransactionalEmailProviderMock.mockImplementation(() => {
@@ -255,13 +259,36 @@ describe('executeErasure', () => {
         metadata: { erasedUserId: 'user-1' },
       }),
     );
-    expect(updateDataRequestStatusMock).toHaveBeenCalledWith('req-1', { status: 'processing' });
+    // The pending -> processing transition now goes through the atomic
+    // markDataRequestProcessing (see docs/adr/0010's update / the
+    // retrospeq-security-reviewer race-condition fix), not
+    // updateDataRequestStatus — this assertion moved accordingly.
+    expect(markDataRequestProcessingMock).toHaveBeenCalledWith('req-1');
     expect(updateDataRequestStatusMock).toHaveBeenCalledWith(
       'req-1',
       expect.objectContaining({ status: 'completed' }),
     );
     expect(supabase.auth.admin.deleteUser).toHaveBeenCalledWith('user-1');
   });
+
+  it(
+    'aborts cleanly, before any destructive work, when markDataRequestProcessing reports it lost the race ' +
+      '(another concurrent call already claimed this request) — mocked complement to the live concurrency test',
+    async () => {
+      markDataRequestProcessingMock.mockResolvedValue(false);
+
+      await expect(executeErasure('req-1', { bypassGracePeriod: true })).rejects.toBeInstanceOf(
+        ErasureAlreadyProcessedError,
+      );
+
+      expect(deleteAllAccountCredentialsForUserMock).not.toHaveBeenCalled();
+      expect(deleteAllTradingAccountsForUserMock).not.toHaveBeenCalled();
+      expect(deleteAllRecoveryCodesMock).not.toHaveBeenCalled();
+      expect(deleteSubscriptionForUserMock).not.toHaveBeenCalled();
+      expect(recordErasureTombstoneMock).not.toHaveBeenCalled();
+      expect(createServiceRoleClientMock().auth.admin.deleteUser).not.toHaveBeenCalled();
+    },
+  );
 
   it('proceeds with deletion even when the confirmation email provider is not configured — never blocks erasure on it', async () => {
     await expect(executeErasure('req-1', { bypassGracePeriod: true })).resolves.toBeUndefined();
