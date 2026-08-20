@@ -1,6 +1,7 @@
 import { getSubscription } from '@/lib/entitlements/subscription-repository';
 import { canForUser } from '@/lib/entitlements/service';
 import { accountConnectLimitMessage, formatUsageFraction } from '@/lib/entitlements/messages';
+import { devEntitlementToolsEnabled } from '@/lib/entitlements/dev-tools-guard';
 import { createClient } from '@/lib/supabase/server';
 import { requestBillingPortal, devSetPlan } from './actions';
 
@@ -146,7 +147,7 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
         </form>
       )}
 
-      {process.env.NODE_ENV !== 'production' && (
+      {devEntitlementToolsEnabled() && (
         <div className="rq-well flex flex-col gap-3" data-testid="dev-plan-tool">
           <p className="rq-sub">
             <strong>Dev only.</strong> Flips your own plan directly for testing the entitlement

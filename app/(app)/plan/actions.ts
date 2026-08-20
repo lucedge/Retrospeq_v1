@@ -9,6 +9,7 @@ import { RateLimitExceededError } from '@/lib/rate-limit/errors';
 import { getSubscription, setUserPlanForTesting } from '@/lib/entitlements/subscription-repository';
 import { BillingNotConfiguredError, getBillingPortalUrl } from '@/lib/entitlements/billing';
 import { devSetPlanInputSchema } from '@/lib/entitlements/schemas';
+import { devEntitlementToolsEnabled } from '@/lib/entitlements/dev-tools-guard';
 
 /**
  * Module 01 stories 4.1-4.4 — the "Plan" screen's Server Actions.
@@ -59,17 +60,22 @@ export async function requestBillingPortal(_formData: FormData): Promise<void> {
 /**
  * DEV/TEST-ONLY. Lets a developer exercise the entitlement engine
  * (caps, the account-cap downgrade/upgrade lifecycle) end-to-end
- * without a real billing provider. Refuses to run outside development —
- * defense in depth alongside `setUserPlanForTesting`'s own identical
- * guard (docs/adr/0008) and `subscriptions`' RLS itself (no client
- * write policy exists at all, so even a compromised/bypassed guard here
- * still could not write the table directly). NEVER surface this as an
- * ordinary product affordance — `app/(app)/plan/page.tsx` only renders
- * the form that calls this when `process.env.NODE_ENV !== 'production'`,
- * matching this function's own posture.
+ * without a real billing provider. Refuses to run unless
+ * `devEntitlementToolsEnabled()` (`lib/entitlements/dev-tools-guard.ts`)
+ * returns true — TWO independent, both-explicit conditions
+ * (`NODE_ENV !== 'production'` AND an opt-in env var), not just
+ * `NODE_ENV` alone. Flagged by retrospeq-security-reviewer (2026-08-21):
+ * three call sites all checking the identical single `NODE_ENV`
+ * condition is not real defense-in-depth — a misconfigured/unset
+ * `NODE_ENV` in some future deployment would fail all three open
+ * simultaneously, at the exact point (`service_role`, RLS-bypassing)
+ * where `subscriptions`' RLS provides zero backstop. The shared
+ * two-condition gate means a single misconfigured variable leaves
+ * every layer disabled, never enabled. `app/(app)/plan/page.tsx` only
+ * renders the form that calls this under the same shared gate.
  */
 export async function devSetPlan(formData: FormData): Promise<void> {
-  if (process.env.NODE_ENV === 'production') {
+  if (!devEntitlementToolsEnabled()) {
     redirect('/plan?error=DEV_TOOL_DISABLED');
   }
 

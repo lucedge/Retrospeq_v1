@@ -135,16 +135,25 @@ function AccountCard({ account }: { account: TradingAccountRow }) {
  *  red/green pair to build a status chip out of by design (AGENTS.md). */
 function StatusChip({ status, statusDetail }: { status: string; statusDetail: string | null }) {
   const isConnected = status === 'connected';
-  const label =
-    status === 'connected'
-      ? 'Connected'
-      : status === 'syncing'
-        ? 'Syncing'
-        : status === 'attention'
-          ? 'Needs attention'
-          : status === 'disconnected'
-            ? 'Disconnected'
-            : 'Pending';
+  // Flagged by retrospeq-qa (2026-08-21): the fallback previously
+  // hardcoded 'Pending' for ANY unrecognised status, including the real
+  // 'plan_limited' value story 4.4's downgrade path now writes
+  // (lib/entitlements/downgrade.ts) — 'Pending' implies "still
+  // connecting," which is actively misleading for a downgraded account.
+  // Falls back to a readable version of the raw status string instead,
+  // so an unrecognised value degrades honestly (never silently wrong)
+  // rather than being mislabeled as something more reassuring than the
+  // truth. `plan_limited` specifically reads as "Plan limited" this way
+  // until a dedicated chip/copy exists for it (no module yet renders one
+  // — same honest-degradation posture noted in downgrade.ts's own
+  // doc comment).
+  const KNOWN_LABELS: Record<string, string> = {
+    connected: 'Connected',
+    syncing: 'Syncing',
+    attention: 'Needs attention',
+    disconnected: 'Disconnected',
+  };
+  const label = KNOWN_LABELS[status] ?? humanizeStatus(status);
 
   return (
     <span
@@ -155,4 +164,20 @@ function StatusChip({ status, statusDetail }: { status: string; statusDetail: st
       {label}
     </span>
   );
+}
+
+/** `'plan_limited'` -> `'Plan limited'`; `'some_future_status'` ->
+ *  `'Some future status'`. A readable fallback for any status value
+ *  this component doesn't have a dedicated label for yet — never
+ *  crashes, never silently mislabels, per StatusChip's own comment.
+ *  Exported for a direct unit test (`__tests__/humanize-status.test.ts`)
+ *  — this repo has no React-rendering test infra (jsdom/testing-library
+ *  aren't dependencies; UI is verified via the screenshot self-check
+ *  convention instead), so the pure string-transformation logic that
+ *  was the actual bug (mislabeling `plan_limited` as `'Pending'`) is
+ *  what gets direct coverage, not a full component render. */
+export function humanizeStatus(status: string): string {
+  const words = status.split('_').filter(Boolean);
+  if (words.length === 0) return status;
+  return words.map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(' ');
 }

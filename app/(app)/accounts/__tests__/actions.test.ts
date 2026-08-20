@@ -35,6 +35,7 @@ const {
   isAccountOwnedByUserMock,
   markAccountDisconnectedMock,
   updateTradingAccountSettingsMock,
+  canForUserMock,
   wrapDataKeyMock,
   unwrapDataKeyMock,
 } = vi.hoisted(() => ({
@@ -53,6 +54,7 @@ const {
   isAccountOwnedByUserMock: vi.fn(),
   markAccountDisconnectedMock: vi.fn(),
   updateTradingAccountSettingsMock: vi.fn(),
+  canForUserMock: vi.fn(),
   wrapDataKeyMock: vi.fn(async (dataKey: Buffer) => ({
     wrappedDek: Buffer.concat([Buffer.from('wrapped:'), dataKey]),
     kmsKeyId: 'test-kms-key',
@@ -101,6 +103,21 @@ vi.mock('@/lib/broker/envelope-encryption', async (importOriginal) => {
     })),
   };
 });
+// Module 01 story 4.4: connectAccount now checks `account.connect`
+// server-side before either the manual or credentialed branch (see
+// actions.ts's own comment at that call site). Mocked here rather than
+// left to hit a real DB — this file is explicitly a mocked-session/
+// mocked-repository unit suite, not a live-DB one (see this file's own
+// header comment); live entitlement enforcement against the real
+// `subscriptions`/`trading_accounts` tables is
+// lib/entitlements/__tests__' and lib/supabase/__tests__/subscriptions.rls.test.ts's
+// job. Defaults to "allowed" so every pre-existing test in this file
+// (written before story 4.4 landed) keeps exercising exactly the
+// behavior it already asserted, without silently starting to fail
+// closed on an unrelated dependency it never knew about.
+vi.mock('@/lib/entitlements/service', () => ({
+  canForUser: canForUserMock,
+}));
 vi.mock('server-only', () => ({}));
 
 const { connectAccount, disconnectAccount, updateAccountSettings } = await import('../actions');
@@ -153,9 +170,33 @@ beforeEach(() => {
     wrapDataKey: wrapDataKeyMock,
     unwrapDataKey: unwrapDataKeyMock,
   }));
+  canForUserMock.mockReset().mockResolvedValue({ allowed: true, reason: 'ok', limit: 1, used: 0 });
 });
 
 describe('connectAccount', () => {
+  it('story 4.4: at the account.connect cap — ENTITLEMENT_LIMIT, non-retryable, zero DB writes, checked BEFORE the manual/credentialed branch', async () => {
+    canForUserMock.mockResolvedValue({ allowed: false, reason: 'quota', limit: 1, used: 1 });
+
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.error?.code).toBe('ENTITLEMENT_LIMIT');
+    expect(result.error?.retryable).toBe(false);
+    expect(canForUserMock).toHaveBeenCalledWith(FAKE_USER.id, 'account.connect');
+    // Neither branch's writes ran — the check gates both, not just the
+    // credentialed path.
+    expect(insertTradingAccountMock).not.toHaveBeenCalled();
+    expect(insertAccountCredentialMock).not.toHaveBeenCalled();
+  });
+
+  it('story 4.4: an unlimited plan (limit: null) is never blocked even with nonzero usage', async () => {
+    canForUserMock.mockResolvedValue({ allowed: true, reason: 'ok', limit: null, used: 5 });
+
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.success).toBe(true);
+    expect(insertTradingAccountMock).toHaveBeenCalled();
+  });
+
   it('manual platform: writes a trading_accounts row directly, no adapter/KMS/credential involved', async () => {
     const result = await connectAccount(undefined, formData({ platform: 'manual' }));
 

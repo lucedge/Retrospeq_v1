@@ -1,6 +1,7 @@
 import 'server-only';
 import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import { applyAccountConnectDowngrade, reactivateAccountsOnUpgrade } from './downgrade';
+import { devEntitlementToolsEnabled } from './dev-tools-guard';
 import type { Plan } from './types';
 
 /**
@@ -83,11 +84,12 @@ export async function getUserPlan(userId: string): Promise<Plan> {
  * `trading_accounts`) — see `downgrade.ts` for the full reasoning.
  */
 export async function setUserPlanForTesting(userId: string, plan: Plan): Promise<void> {
-  if (process.env.NODE_ENV === 'production') {
+  if (!devEntitlementToolsEnabled()) {
     throw new Error(
       'setUserPlanForTesting is a dev/test-only entitlement override and must never run in production — ' +
-        'see this function\'s own doc comment. A real plan change must come from a billing-provider webhook, ' +
-        'which does not exist yet (PROGRESS.md "Infra gaps": no billing provider account).',
+        'see this function\'s own doc comment and lib/entitlements/dev-tools-guard.ts. A real plan change ' +
+        'must come from a billing-provider webhook, which does not exist yet (PROGRESS.md "Infra gaps": ' +
+        'no billing provider account).',
     );
   }
 

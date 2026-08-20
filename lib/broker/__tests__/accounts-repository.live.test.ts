@@ -275,32 +275,41 @@ describe.skipIf(!env)('lib/broker/accounts-repository.ts (live DB, via lib/supab
   // decision safe (a stranger's account id in the URL must render the
   // same not-found state as a genuinely nonexistent id, not leak
   // whether the account exists).
-  it('getTradingAccount returns the account for its owner, and null for a non-owner or a nonexistent id', async () => {
-    const { insertTradingAccount, getTradingAccount } = await import('../accounts-repository');
+  it(
+    'getTradingAccount returns the account for its owner, and null for a non-owner or a nonexistent id',
+    async () => {
+      const { insertTradingAccount, getTradingAccount } = await import('../accounts-repository');
 
-    const { id } = await insertTradingAccount({
-      userId: userA.id,
-      label: 'Live Test getTradingAccount',
-      platform: 'manual',
-      providerRef: null,
-      server: null,
-      baseCurrency: 'USD',
-      dayRollover: '00:00:00 UTC',
-      capabilities: { tier: 't0', history: false, openPositions: false, positionSnapshots: false, liveSession: false },
-    });
+      const { id } = await insertTradingAccount({
+        userId: userA.id,
+        label: 'Live Test getTradingAccount',
+        platform: 'manual',
+        providerRef: null,
+        server: null,
+        baseCurrency: 'USD',
+        dayRollover: '00:00:00 UTC',
+        capabilities: { tier: 't0', history: false, openPositions: false, positionSnapshots: false, liveSession: false },
+      });
 
-    const ownRead = await getTradingAccount(userA.id, id);
-    expect(ownRead?.id).toBe(id);
-    expect(ownRead?.label).toBe('Live Test getTradingAccount');
+      const ownRead = await getTradingAccount(userA.id, id);
+      expect(ownRead?.id).toBe(id);
+      expect(ownRead?.label).toBe('Live Test getTradingAccount');
 
-    const strangerRead = await getTradingAccount(userB.id, id);
-    expect(strangerRead).toBeNull();
+      const strangerRead = await getTradingAccount(userB.id, id);
+      expect(strangerRead).toBeNull();
 
-    const nonexistentRead = await getTradingAccount(userA.id, '00000000-0000-0000-0000-000000000000');
-    expect(nonexistentRead).toBeNull();
+      const nonexistentRead = await getTradingAccount(userA.id, '00000000-0000-0000-0000-000000000000');
+      expect(nonexistentRead).toBeNull();
 
-    await db.query('delete from retrospeq.trading_accounts where id = $1', [id]);
-  });
+      await db.query('delete from retrospeq.trading_accounts where id = $1', [id]);
+    },
+    // 5 sequential live-DB round trips (insert + 3 reads + cleanup
+    // delete) — same genuine-budget-not-a-flake reasoning already
+    // documented on the connect->disconnect lifecycle test above in
+    // this same file; vitest's 5000ms default isn't enough headroom for
+    // this many chained round trips against the live shared dev project.
+    20_000,
+  );
 });
 
 describe.skipIf(!!env)('lib/broker/accounts-repository.ts (live DB) — skipped', () => {

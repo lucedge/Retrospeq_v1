@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 slice 1 done (stories 1.1-1.3). Stories 2.x (account connection) fully built — schema, `lib/broker/`, and now the connect/account-list UI + Server Actions — coder pass complete, tester/security-reviewer/qa passes pending. Module 01 stories 1.4-1.5 (sessions, 2FA), 3.x (settings), 4.x (entitlements), 5.x (rights/privacy) and all of Module 02 remain — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 stories 1.1-1.3 (auth), 1.4-1.5 (sessions/2FA), 2.x (account connection), 3.x (settings), and 4.x (plan/entitlement) are all genuinely done — coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. Module 01 stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`) and all of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remain — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -508,16 +508,143 @@ tester/security-reviewer/qa passes pending.** No new tables/RLS/migrations
   live-DB tests" before the orchestrator's `getTradingAccount` test
   landed) — corrected above.
 
-**Still not done, not blocked, straightforward continuation:** Module 01
-stories 4.x (entitlements/`subscriptions`/`analytic_config`), 5.x
-(rights/privacy — export/erasure/`audit_log`/`data_requests`) — then all
-of Module 02 (Trade Ingestion & Model, the largest/highest-risk module in
-v1: fills, blocks, the grouping engine, trade events, confirmation
-freeze).
+**Module 01 stories 4.x (plan and entitlement) — built, security-reviewed
+with one FAIL then a re-review FAIL on the testing bar specifically, both
+now fixed. Genuinely done as of this session, not just coder-complete.**
 
-**Next slice:** Module 01 stories 4.x (plan/entitlement resolution —
-`subscriptions`, `analytic_config`, the `can(user, capability)` check
-per §4.3's table), then 5.x (rights/privacy — export, erasure,
+- `lib/entitlements/` (`can()`, `capability-table.ts`'s exact transcription
+  of §4.3's table, `resolve.ts`'s pure resolution functions,
+  `account-usage.ts`'s real `account.connect` counter, `downgrade.ts`'s
+  §4.4 downgrade/upgrade logic on `trading_accounts`, `subscription-
+  repository.ts`, `billing.ts`'s honest "not configured yet" failure,
+  `messages.ts`, `schemas.ts`), `supabase/migrations/20260821020000_subscriptions.sql`
+  (`subscriptions` + `analytic_config`, ADR 0008's read-only-to-owner RLS
+  shape), `supabase/migrations/20260821030000_trading_accounts_status_plan_limited.sql`,
+  `app/(app)/plan/{actions,page}.tsx`. Committed as an emergency checkpoint
+  when the prior session hit its usage limit mid-run — coder-complete and
+  unit-tested at the time (321 passing), but explicitly **not yet**
+  security-reviewed or tester-reviewed per that commit's own message.
+- **retrospeq-security-reviewer reviewed it in two passes.** First FAIL
+  (hardening): the dev-only entitlement-override tool
+  (`setUserPlanForTesting`/`devSetPlan`/the plan page's render gate) each
+  checked `process.env.NODE_ENV !== 'production'` independently — not real
+  defense-in-depth, since all three are the same single condition and a
+  misconfigured/unset `NODE_ENV` would fail all three open simultaneously
+  at the exact point (`service_role`, RLS-bypassing) where RLS provides
+  zero backstop. Fixed same-session (prior to this entry) with
+  `lib/entitlements/dev-tools-guard.ts`'s `devEntitlementToolsEnabled()` —
+  a single shared gate requiring TWO independent, both-explicit conditions
+  (`NODE_ENV !== 'production'` AND an opt-in env var, unset/misconfigured
+  always meaning OFF). Second FAIL (this session, testing bar
+  specifically, not a code defect): two concrete missing-test items —
+  (1) `docs/adr/0008-subscriptions-read-only-rls.md` and the subscriptions
+  migration's own closing comment both referenced
+  `lib/supabase/__tests__/subscriptions.rls.test.ts` as proof of the RLS
+  shape against the live DB, but that file did not exist; (2) zero unit
+  tests existed anywhere under `lib/entitlements/` despite Module 01
+  §7.1 explicitly requiring "entitlement resolution across every plan ×
+  capability pair" and "downgrade deactivates without deleting; upgrade
+  restores exactly."
+- **Both gaps closed for real this session, dispatched to retrospeq-tester:**
+  - `lib/supabase/__tests__/subscriptions.rls.test.ts` (18 tests, live DB):
+    proves `subscriptions`' RLS shape exactly as ADR 0008 claims — a user
+    reads their own row (confirming the `handle_new_user` trigger's
+    `plan='free'`/`status='active'` defaults), cannot read a second user's
+    row, an anonymous client reads nothing, and critically **cannot
+    self-write `plan='pro'` via a direct `UPDATE ... WHERE user_id =
+    auth.uid()`** (zero rows affected — the core security property the
+    whole RLS shape exists to prevent, a free self-granted paid plan with
+    no billing event). Also covers INSERT/DELETE (both correctly blocked;
+    INSERT throws an explicit RLS-violation error rather than affecting
+    zero rows — a real, verified distinction from UPDATE/DELETE's silent
+    no-op, matching the same shape `trading-accounts.rls.test.ts` already
+    established for `account_credentials`) and the service-role bypass
+    (read + write both work as `service_role`, proving
+    `setUserPlanForTesting`'s real write path). `analytic_config`'s RLS
+    covered in the same file: every authenticated user reads every row
+    (`using (true)`, no `user_id` column), no client role can write.
+  - 11 new unit-test files under `lib/entitlements/__tests__/`
+    (`resolve.test.ts`, `can.test.ts`, `downgrade.test.ts` +
+    `downgrade.live.test.ts`, `subscription-repository.test.ts`,
+    `billing.test.ts`, `account-usage.test.ts`, `messages.test.ts`,
+    `schemas.test.ts`, `service.test.ts`, plus the pre-existing
+    `dev-tools-guard.test.ts`): every plan × capability pair from §4.3's
+    table asserted literally (boolean capabilities' yes/no per plan;
+    quantity capabilities' under/at/over-cap and the `null`-unlimited and
+    `limit=0`-plan-exclusion branches), including the `'not_yet_checkable'`
+    fail-closed case for `rules.create`/`rules.hard`/`strategy.create`/
+    `fields.custom` (no backing table yet) asserted explicitly rather than
+    skipped. `account.connect` tested with an injected fake `UsageCounter`
+    (under/at/over cap, unlimited-on-pro). `downgrade.ts` gets BOTH a
+    mocked SQL-shape test (exact query text/params — `order by
+    connected_at asc nulls last, created_at asc`, `offset $2`, the
+    null-free-cap defensive branch) AND a live-DB scenario per this task's
+    own "prefer the live-DB version" guidance: 3 real accounts with
+    staggered `connected_at`, downgrade to Free (cap=1) — proves the
+    OLDEST-connected account is the one kept `connected` and the other two
+    become `plan_limited` (not deleted — all 3 rows still exist), then
+    upgrading reactivates both exactly. `getUserPlan`'s fail-closed
+    default (missing/unrecognised plan → `'free'`, with a `console.warn`)
+    and `setUserPlanForTesting`'s guard (mocking `dev-tools-guard.ts`
+    itself, not re-testing its internals) both covered.
+  - **Result: `lib/entitlements/` now at 100% line/branch/function
+    coverage** (was 0% before this session). Full repo suite: **424
+    passing, 9 skipped** (all 9 are the deliberate `describe.skipIf(!!env)`
+    skip-acknowledgment blocks paired with every live-DB suite in this
+    repo — the env IS present here, so every real live-DB test actually
+    ran, nothing silently faked). Overall repo coverage **98.82%
+    lines / 94.25% branch** — both comfortably above 00-foundation §9.1's
+    70% overall bar.
+- **A third, separate finding, not one of the two dispatched gaps but
+  caught while running the required checks:** `npm run build` /
+  `npx tsc --noEmit` were genuinely broken on `main` before this session's
+  fix — `lib/entitlements/__tests__/dev-tools-guard.test.ts` (written
+  during the earlier hardening fix, "unit tests already written and
+  passing" per that fix's own description, but only ever run via
+  `vitest`, never `tsc`) directly assigned/`delete`d `process.env.NODE_ENV`,
+  which current `@types/node` types as a readonly property of
+  `NodeJS.ProcessEnv` — `tsc` genuinely rejects this (TS2540/TS2704) even
+  though it works at runtime under plain Node, and `next build`'s own
+  type-check step runs `tsc` over every `.ts` file in the repo including
+  test files, so this was a real, verified build break (confirmed via
+  `git stash` against the untouched committed tree before writing anything
+  new), not hypothetical. Fixed by switching to vitest's built-in
+  `vi.stubEnv`/`vi.unstubAllEnvs()` (designed exactly for this, sidesteps
+  the readonly-property issue entirely) — same test coverage, now
+  type-clean. `npm run build`, `npx tsc --noEmit`, and `npm run lint`
+  (0 errors; the only warnings are the repo's existing pre-existing-pattern
+  `_prefixed`-unused-param warnings, unrelated to this slice) all
+  confirmed clean after the fix, not just claimed.
+- **retrospeq-qa reviewed it: PASS with one quick fix, applied and
+  re-verified same session.** `app/(app)/accounts/page.tsx`'s `StatusChip`
+  hardcoded the label `'Pending'` for any status it didn't specifically
+  recognise — which now includes the real `'plan_limited'` value
+  `lib/entitlements/downgrade.ts` writes on a downgrade. `'Pending'`
+  reads as "still connecting," actively misleading for a downgraded
+  account (the opposite of the "degrades honestly" claim `downgrade.ts`'s
+  own doc comment made about this exact fallback). Fixed with
+  `humanizeStatus()` — a readable fallback derived from the actual status
+  string (`'plan_limited'` → `'Plan limited'`) instead of a reassuring
+  guess — exported and unit-tested directly
+  (`app/(app)/accounts/__tests__/humanize-status.test.ts`, 5 tests; this
+  repo has no React-rendering test infra, so the pure string-
+  transformation logic that was the actual bug gets direct coverage, not
+  a full component render). Every other area QA checked — non-negotiables,
+  story 4.1's honest "not enough data" framing for not-yet-checkable
+  capabilities, story 4.2's dev-tool timing claims, `analytic_config`
+  seeding nothing fake, ADR 0008 matching the live SQL — passed outright.
+- **Module 01 stories 4.x is now genuinely done**: coded, security-reviewed
+  (two rounds, both resolved), tested (both testing-bar gaps closed with
+  real live-DB and unit-test evidence), QA-reviewed (one quick fix, applied),
+  429 passing overall. Committed and pushed.
+
+**Still not done, not blocked, straightforward continuation:** Module 01
+stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`)
+— then all of Module 02 (Trade Ingestion & Model, the largest/highest-risk
+module in v1: fills, blocks, the grouping engine, trade events,
+confirmation freeze).
+
+**Next slice:** Module 01 stories 5.x (rights/privacy — export, erasure,
 `audit_log`, `data_requests`), then all of Module 02.
 
 ## Needs-your-input signal
@@ -541,6 +668,43 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — retrospeq-qa's pass on Module 01 stories 4.x found one
+  real, if minor, correctness bug: `app/(app)/accounts/page.tsx`'s
+  `StatusChip` fallback hardcoded `'Pending'` for any status it didn't
+  specifically recognise. That fallback predates story 4.4's downgrade
+  logic (`lib/entitlements/downgrade.ts`, committed earlier this session)
+  writing a real `'plan_limited'` status — `StatusChip` was never updated
+  to know about it, so a downgraded account would render as "Pending,"
+  actively misleading (implies still-connecting, not downgraded).
+  `downgrade.ts`'s own doc comment had claimed the fallback "degrades
+  honestly," which was true when written but became false the moment a
+  real caller of the unrecognised-status path existed — a reminder that
+  a doc comment describing another file's behavior can go stale exactly
+  when that behavior changes and nobody re-checks the comment that
+  depended on it. Fixed with `humanizeStatus()`, deriving a readable
+  label from the actual status string rather than a fixed guess.
+
+- 2026-08-21 — Closed the two testing-bar gaps retrospeq-security-reviewer
+  flagged on Module 01 stories 4.x (entitlements): built the missing
+  `lib/supabase/__tests__/subscriptions.rls.test.ts` (18 live-DB tests,
+  proving ADR 0008's RLS shape for real, including the core "cannot
+  self-write plan=pro" property) and 11 new unit-test files under
+  `lib/entitlements/__tests__/` (every plan × capability pair from §4.3,
+  the `not_yet_checkable` fail-closed contract, `account.connect` with an
+  injected fake counter, `downgrade.ts` proven both by mocked SQL-shape
+  assertions and a real live-DB 3-account scenario). `lib/entitlements/`
+  went from 0% to 100% line/branch/function coverage; full repo suite 424
+  passing, 98.82% overall line coverage. One real finding along the way,
+  not one of the two dispatched gaps: `npm run build`/`tsc --noEmit` were
+  already broken on `main` (verified via `git stash` against the
+  untouched tree) — `dev-tools-guard.test.ts` (from the earlier
+  security-reviewer hardening fix) directly assigned `process.env.NODE_ENV`,
+  which current `@types/node` types as readonly; `next build`'s
+  type-check step runs `tsc` over test files too, so this was a genuine
+  build break, not hypothetical. Fixed with `vi.stubEnv`/`vi.unstubAllEnvs`
+  instead of direct assignment — same coverage, type-clean. Full detail in
+  "Current task" above, under "Module 01 stories 4.x."
 
 - 2026-08-21 — Module 01 stories 3.1-3.4 (account settings) built —
   editing `trading_accounts.label`/`day_rollover`/`account_kind` after
