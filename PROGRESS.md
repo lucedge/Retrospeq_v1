@@ -297,19 +297,109 @@ Built (not yet UI-wired — that's the next slice):
   manually, not synced"; re-screenshotted and visually confirmed
   (`tmp/dev-screenshots/connect-success.png`).
 
-**Still not done, not blocked, straightforward continuation:** Module 01
-stories 1.4 (session list/revoke) and 1.5 (2FA/TOTP), 3.x (account
-settings — label/rollover editing), 4.x (entitlements/`subscriptions`/
-`analytic_config`), 5.x (rights/privacy — export/erasure/`audit_log`/
-`data_requests`) — then all of Module 02 (Trade Ingestion & Model, the
-largest/highest-risk module in v1: fills, blocks, the grouping engine,
-trade events, confirmation freeze).
+**Module 01 stories 1.4 (session list/revoke) + 1.5 (2FA/TOTP) — coder
+pass complete, tester/security-reviewer/qa passes pending.**
 
-**Next slice:** Module 01 stories 1.4 (session list/revoke) and 1.5
-(2FA/TOTP) — reasonable to pair, both live on a "security" account
-screen. Then 3.x (account settings), 4.x (entitlements), 5.x
-(rights/privacy), in that order per the build order's own module
-numbering, before moving to Module 02.
+- `supabase/migrations/20260821010000_mfa_recovery_codes.sql` —
+  `retrospeq.mfa_recovery_codes` (standard owner RLS policy per
+  00-foundation §3.1 default; no §3.3 exception applies since only
+  SHA-256 hashes are stored, never plaintext — see the migration's own
+  comment). Applied to and verified against the live shared dev
+  Supabase project (RLS-enabled flag and the exact policy confirmed via
+  `pg_policies`, same verification method as every prior migration).
+- `lib/auth/mfa-recovery-codes.ts` (10-code batch generation/hashing,
+  pure functions), `lib/auth/mfa-recovery-repository.ts` (direct-pg
+  reads/writes via `withUserConnection`, per ADR 0002/0003/0006 — this
+  table lives in the `retrospeq` schema too), `lib/auth/mfa-admin.ts`
+  (the one new `createServiceRoleClient(` call site — service-role
+  `auth.admin.mfa.listFactors`/`deleteFactor`, used only for recovery-
+  code redemption), `lib/auth/mfa-schemas.ts` (Zod boundary schemas).
+  `docs/adr/0007-mfa-recovery-codes-own-system.md` records why: Supabase
+  Auth's MFA API issues no recovery codes of its own (verified directly
+  against `node_modules/@supabase/auth-js`'s shipped types, not
+  assumed), and why redemption removes 2FA entirely (via the admin API)
+  rather than granting a one-time step-up (`mfa.unenroll()` itself
+  requires an aal2 session, which a trader who lost their device cannot
+  reach — the exact scenario recovery exists for).
+- `app/(app)/security/actions.ts` + `page.tsx` + `SecurityScreenClient.tsx`
+  — the "Privacy screen"'s session/2FA half (export/delete/telemetry are
+  stories 5.x, out of scope this slice). `beginTotpEnrollment` /
+  `confirmTotpEnrollment` / `disableTotp` wrap `supabase.auth.mfa.*`
+  directly; `revokeOtherSessions`/`revokeAllSessions` wrap
+  `signOut({scope: 'others' | 'global'})` — see the decision-log entry
+  below for why that, not a device list, is story 1.4's real shape.
+- `app/(auth)/actions.ts`'s `signInWithEmail` now checks
+  `supabase.auth.mfa.getAuthenticatorAssuranceLevel()` after a
+  successful password sign-in and redirects to the new
+  `app/(auth)/mfa-challenge/` route (TOTP entry,
+  `challengeAndVerify()`) when a verified factor exists and the session
+  is still `aal1`; `app/(auth)/mfa-challenge/recovery/` is the paired
+  lost-device path (`redeemRecoveryCodeAction`). Both routes re-derive
+  the AAL check themselves rather than trusting the redirect that led
+  there, so a direct/bookmarked visit never traps a trader who doesn't
+  need to be there.
+- **Real bug found and fixed via the mandatory screenshot self-check,
+  not a code read:** `enroll()`'s own TS doc comment says to prepend
+  `data:image/svg+xml;utf-8,` to the returned `totp.qr_code` before
+  using it as an `<img src>` — but a live probe against this project's
+  actual Supabase Auth response showed `qr_code` **already comes back
+  with that prefix included**. Following the doc comment literally
+  double-prefixed the data URI, rendering a broken image
+  (`naturalWidth: 0`) with only the alt text visible — caught by the
+  screenshot showing a blank QR area, not by inspecting the code.
+  `toQrCodeDataUri()` in `app/(app)/security/actions.ts` now normalizes
+  either shape defensively; a regression test asserts no double-prefix.
+- Tests: 63 new unit tests (`lib/auth/__tests__/mfa-*.test.ts`,
+  `app/(app)/security/__tests__/actions.test.ts`,
+  `app/(auth)/mfa-challenge/__tests__/actions.test.ts`,
+  `app/(auth)/mfa-challenge/recovery/__tests__/actions.test.ts`, plus 6
+  new cases in the existing `app/(auth)/__tests__/actions.test.ts` for
+  `signInWithEmail`'s step-up redirect) — 100% line coverage on every
+  new `lib/auth/` file. Plus 10 new live-DB RLS tests
+  (`lib/supabase/__tests__/mfa-recovery-codes.rls.test.ts`, cross-user
+  isolation + the service-role bypass, same pattern as
+  `trading-accounts.rls.test.ts`). `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+  allowlist updated for the one new `createServiceRoleClient(` call
+  site. Full suite: **277 passing**, 6 skip-guard fallbacks (env
+  present, nothing actually skipped). `npm run build`, `tsc --noEmit`,
+  and `npm run lint` all clean (lint: only the same pre-existing
+  `_prefixed`-unused-param warning pattern already noted elsewhere).
+- Screenshot self-check against the real dev server + real Supabase
+  Auth (a confirmed test user via the GoTrue admin API, plus a
+  self-contained RFC 6238 TOTP implementation in the throwaway
+  `tmp/screenshot-security.mjs` — no new npm dependency — to compute
+  real 6-digit codes from the enrollment secret and drive the whole
+  enroll -> verify -> recovery-codes-shown-once -> sign-out ->
+  sign-in -> MFA-challenge -> home flow end-to-end): 2FA off, QR-code
+  mid-enrollment (post-fix, rendering correctly), recovery codes shown
+  once, 2FA on with "10 of 10 recovery codes remaining", the sign-in
+  step-up screen, and the recovery-code redemption screen — all
+  reviewed and matched the design system (amber accent only, no
+  red/green, exactly one primary `.rq-btn` visible in every rendered
+  state even though the page as a whole has several actions, `.rq-num`
+  on every number/code). Also directly confirmed an *unverified*
+  (started-but-not-confirmed) TOTP factor correctly does NOT trigger the
+  sign-in step-up — only a verified one does.
+- **Not yet done: retrospeq-tester/security-reviewer/qa passes.**
+  Security review is mandatory here (touches auth/session security,
+  MFA, a new service-role call site). Noted for retrospeq-tester: a real
+  E2E suite for this flow needs the same real-TOTP-code-generation
+  approach the screenshot script above already proves out (RFC 6238
+  against the enrollment secret) — `speakeasy`/`otplib` or an equivalent
+  would be a reasonable dependency to add for that pass rather than
+  reimplementing it a second time; neither is installed yet.
+
+**Still not done, not blocked, straightforward continuation:** Module 01
+stories 3.x (account settings — label/rollover editing), 4.x
+(entitlements/`subscriptions`/`analytic_config`), 5.x (rights/privacy —
+export/erasure/`audit_log`/`data_requests`) — then all of Module 02
+(Trade Ingestion & Model, the largest/highest-risk module in v1: fills,
+blocks, the grouping engine, trade events, confirmation freeze).
+
+**Next slice:** once stories 1.4/1.5 clear tester/security-reviewer/qa,
+3.x (account settings), 4.x (entitlements), 5.x (rights/privacy), in
+that order per the build order's own module numbering, before moving to
+Module 02.
 
 ## Needs-your-input signal
 
@@ -332,6 +422,54 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — Module 01 stories 1.4/1.5 (sessions, 2FA) built. Two
+  spec-reconciliation findings, both verified directly against the
+  actual `@supabase/auth-js` SDK shipped in this repo before writing any
+  code, per AGENTS.md's "never fake it":
+  (1) **Story 1.4's literal wording — "Device list with last-seen;
+  revoke individually or all" — is only partially buildable against
+  Supabase Auth's real client API, and this is now the honest, final
+  shape, not a placeholder.** `GoTrueClient.d.ts`/`GoTrueAdminApi.d.ts`
+  expose no method — for the current user's own sessions, not an admin
+  enumerating someone else's — that returns per-device metadata (user
+  agent, IP, last-seen). GoTrue's refresh-token model has no such
+  surface at all; even the admin user-fetch response carries no session
+  list. What IS real: `signOut({scope: 'others'})` (already used by
+  `confirmPasswordReset`) and `signOut({scope: 'global'})`. Built
+  exactly and only those two, presented plainly as "Sign out other
+  devices" / "Sign out everywhere" — never a fabricated device list.
+  This is the "device list" half of the acceptance criterion **not
+  met**, and the "revoke individually or all" half **met** in the only
+  form the phrase can literally take without individual devices to
+  target. If a real device-list requirement matters later, it needs a
+  bespoke session-tracking scheme this project would have to build and
+  maintain itself (recording user-agent/IP per refresh-token issuance
+  somewhere) — not something Supabase Auth will ever surface, tracked
+  as a possible future addition, not a current gap to chase further.
+  (2) **Story 1.5's "recovery codes issued once" is met, but by
+  Retrospeq's own system, not a Supabase Auth feature** — `auth-js` has
+  no recovery-code concept anywhere (confirmed via a full-package
+  `grep -rn "recovery"`, turning up only unrelated password-recovery OTP
+  types). Built a real one: `retrospeq.mfa_recovery_codes` +
+  `lib/auth/mfa-recovery-codes.ts`/`mfa-recovery-repository.ts`, and
+  since `mfa.unenroll()` itself requires an aal2 session (unreachable by
+  definition for a trader who lost their authenticator), redemption uses
+  the GoTrue ADMIN api's `auth.admin.mfa.deleteFactor` instead — full
+  reasoning in `docs/adr/0007-mfa-recovery-codes-own-system.md`. The
+  rest of story 1.5 (TOTP enroll/challenge/verify/unenroll, the sign-in
+  step-up via `getAuthenticatorAssuranceLevel()`) is met against
+  Supabase Auth's real, documented API, no gap.
+  A third, smaller finding caught by the mandatory screenshot
+  self-check, not a code read: `enroll()`'s own doc comment says to
+  prepend `data:image/svg+xml;utf-8,` to `totp.qr_code`, but this
+  project's actual Supabase Auth response already includes that prefix
+  — trusting the doc comment literally produced a broken (blank)
+  QR-code image. Fixed with a defensive normalizer
+  (`toQrCodeDataUri()`) that never double-prefixes.
+  Coder pass only — retrospeq-tester/retrospeq-security-reviewer/qa
+  passes still needed (security review is mandatory here) before this
+  slice can be marked done.
 
 - 2026-08-20 — Module 01 stories 2.x UI/Server-Action layer built
   (connect screen, account list, `connectAccount`/`disconnectAccount`

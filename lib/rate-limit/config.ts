@@ -73,6 +73,47 @@ export const RATE_LIMITS = {
     ip: { limit: 30, windowSeconds: 3600 },
     email: { limit: 20, windowSeconds: 3600 },
   },
+  /**
+   * Module 01 story 1.4/1.5 — app/(app)/security/actions.ts.
+   * `mfaEnroll`: starting a new TOTP enrollment (issues a fresh secret/QR
+   * each call) — loose but real, a trader retrying a scan a few times is
+   * normal.
+   */
+  mfaEnroll: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 10, windowSeconds: 3600 },
+  },
+  /** Confirming enrollment or a sign-in step-up challenge with a 6-digit
+   *  code — this is exactly the kind of endpoint an offline TOTP-guessing
+   *  script would hammer (10^6 code space), so it's the tightest scope
+   *  here. Keyed on user id (post-enrollment-confirm/mid-signin) via the
+   *  `email` field's generic-identifier reuse, same pattern as
+   *  `connectAccount`. */
+  mfaVerify: {
+    ip: { limit: 15, windowSeconds: 900 },
+    email: { limit: 8, windowSeconds: 900 },
+  },
+  /** Disabling an enrolled factor — destructive, account-scoped. */
+  mfaUnenroll: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 10, windowSeconds: 3600 },
+  },
+  /** Redeeming a recovery code — same tight budget as `mfaVerify` and for
+   *  the same reason (a guessable-in-bulk secret), plus this one also
+   *  disables 2FA entirely on success, so it gets the tighter of the two
+   *  windows. */
+  mfaRecoveryRedeem: {
+    ip: { limit: 10, windowSeconds: 3600 },
+    email: { limit: 5, windowSeconds: 3600 },
+  },
+  /** Session revocation ("sign out other devices" / "sign out
+   *  everywhere") — not credential-guessing-shaped, but still a real,
+   *  security-relevant endpoint per Module 01 §7.2's blanket "auth
+   *  endpoints throttle" requirement. */
+  sessionRevoke: {
+    ip: { limit: 30, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

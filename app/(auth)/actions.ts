@@ -114,6 +114,30 @@ export async function signInWithEmail(
     return { error: mapAuthError(error) };
   }
 
+  // Module 01 story 1.5: a password-only sign-in only ever reaches
+  // `aal1`. If this trader has an enrolled, verified TOTP factor,
+  // `getAuthenticatorAssuranceLevel()`'s own doc comment is explicit:
+  // "If the user has a verified factor, the `nextLevel` field will
+  // return `aal2`" — i.e. Supabase itself is telling us a step-up is
+  // required, not something this app is inferring from `listFactors()`
+  // itself (which would need a second round trip and duplicate logic
+  // GoTrue already centralizes). Sent to `/mfa-challenge` instead of
+  // home; that route re-derives the same check server-side before
+  // rendering anything, so this redirect is a UX shortcut, not the
+  // actual enforcement boundary. A failure of the AAL check itself
+  // (network blip) fails toward the home redirect rather than blocking
+  // sign-in — the same fail-open posture lib/rate-limit/limiter.ts takes
+  // for its own infra, and `/mfa-challenge`'s own re-check remains the
+  // real gate if any protected surface later depends on aal2.
+  const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (aalError) {
+    console.warn('[signInWithEmail] AAL check failed, proceeding to home:', aalError.message);
+    redirect('/');
+  }
+  if (aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+    redirect('/mfa-challenge');
+  }
+
   redirect('/');
 }
 

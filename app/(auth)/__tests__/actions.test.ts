@@ -10,17 +10,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * after a successful password update — not resting on the comment
  * alone this time.
  */
-const { updateUserMock, signOutMock, createClientMock, headersMock, redirectMock, enforceRateLimitMock } =
-  vi.hoisted(() => ({
-    updateUserMock: vi.fn(),
-    signOutMock: vi.fn(),
-    createClientMock: vi.fn(),
-    headersMock: vi.fn(),
-    redirectMock: vi.fn((url: string) => {
-      throw new Error(`NEXT_REDIRECT:${url}`);
-    }),
-    enforceRateLimitMock: vi.fn().mockResolvedValue(undefined),
-  }));
+const {
+  updateUserMock,
+  signOutMock,
+  createClientMock,
+  headersMock,
+  redirectMock,
+  enforceRateLimitMock,
+  signInWithPasswordMock,
+  getAuthenticatorAssuranceLevelMock,
+} = vi.hoisted(() => ({
+  updateUserMock: vi.fn(),
+  signOutMock: vi.fn(),
+  createClientMock: vi.fn(),
+  headersMock: vi.fn(),
+  redirectMock: vi.fn((url: string) => {
+    throw new Error(`NEXT_REDIRECT:${url}`);
+  }),
+  enforceRateLimitMock: vi.fn().mockResolvedValue(undefined),
+  signInWithPasswordMock: vi.fn(),
+  getAuthenticatorAssuranceLevelMock: vi.fn(),
+}));
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: createClientMock,
@@ -107,5 +117,100 @@ describe('confirmPasswordReset — session revocation on reset (Module 01 story 
 
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+/**
+ * Module 01 story 1.5's sign-in step-up. Supabase Auth's own
+ * `getAuthenticatorAssuranceLevel()` doc comment: "If the user has a
+ * verified factor, the `nextLevel` field will return `aal2`" — that's
+ * the exact signal `signInWithEmail` branches on, checked here without
+ * duplicating GoTrue's own factor-detection logic.
+ */
+describe('signInWithEmail — MFA step-up redirect (Module 01 story 1.5)', () => {
+  function signInFormData(): FormData {
+    const fd = new FormData();
+    fd.set('email', 'trader@example.com');
+    fd.set('password', 'a-strong-password-123');
+    return fd;
+  }
+
+  beforeEach(() => {
+    signInWithPasswordMock.mockReset();
+    getAuthenticatorAssuranceLevelMock.mockReset();
+    createClientMock.mockReset();
+    enforceRateLimitMock.mockClear().mockResolvedValue(undefined);
+    redirectMock.mockClear();
+    headersMock.mockResolvedValue(new Headers({ 'x-forwarded-for': '203.0.113.4' }));
+
+    createClientMock.mockResolvedValue({
+      auth: {
+        signInWithPassword: signInWithPasswordMock,
+        mfa: { getAuthenticatorAssuranceLevel: getAuthenticatorAssuranceLevelMock },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('redirects to / when the trader has no enrolled MFA factor (nextLevel stays aal1)', async () => {
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+    getAuthenticatorAssuranceLevelMock.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [] },
+      error: null,
+    });
+    const { signInWithEmail } = await import('../actions');
+
+    await expect(signInWithEmail(undefined, signInFormData())).rejects.toThrow('NEXT_REDIRECT:/');
+  });
+
+  it('redirects to /mfa-challenge when a verified factor exists and the session is still aal1', async () => {
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+    getAuthenticatorAssuranceLevelMock.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal2', currentAuthenticationMethods: [] },
+      error: null,
+    });
+    const { signInWithEmail } = await import('../actions');
+
+    await expect(signInWithEmail(undefined, signInFormData())).rejects.toThrow(
+      'NEXT_REDIRECT:/mfa-challenge',
+    );
+  });
+
+  it('redirects to / (not the challenge) when the session has already reached aal2', async () => {
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+    getAuthenticatorAssuranceLevelMock.mockResolvedValue({
+      data: { currentLevel: 'aal2', nextLevel: 'aal2', currentAuthenticationMethods: [] },
+      error: null,
+    });
+    const { signInWithEmail } = await import('../actions');
+
+    await expect(signInWithEmail(undefined, signInFormData())).rejects.toThrow('NEXT_REDIRECT:/');
+  });
+
+  it('fails open to / (does not block sign-in) if the AAL check itself errors', async () => {
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+    getAuthenticatorAssuranceLevelMock.mockResolvedValue({
+      data: null,
+      error: { message: 'network blip' },
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { signInWithEmail } = await import('../actions');
+
+    await expect(signInWithEmail(undefined, signInFormData())).rejects.toThrow('NEXT_REDIRECT:/');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('never checks AAL at all if the password sign-in itself fails', async () => {
+    signInWithPasswordMock.mockResolvedValue({ error: { message: 'invalid_credentials', code: 'invalid_credentials' } });
+    const { signInWithEmail } = await import('../actions');
+
+    const result = await signInWithEmail(undefined, signInFormData());
+    expect(result.error).toBeDefined();
+    expect(getAuthenticatorAssuranceLevelMock).not.toHaveBeenCalled();
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 });

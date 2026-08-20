@@ -23,6 +23,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const oauthError = searchParams.get('error');
   const resetOk = searchParams.get('reset') === 'success';
+  const mfaRecovered = searchParams.get('mfa_recovered') === '1';
 
   return (
     <div className="flex flex-col gap-6">
@@ -36,7 +37,13 @@ function LoginForm() {
           Password updated. Sign in with your new password.
         </p>
       )}
-      {oauthError && !resetOk && (
+      {mfaRecovered && !resetOk && (
+        <p className="rq-sub" role="status">
+          Two-factor authentication was removed from your account using your recovery
+          code. Sign in, then turn it back on from Security if you&apos;d like.
+        </p>
+      )}
+      {oauthError && !resetOk && !mfaRecovered && (
         <p className="rq-sub" role="alert">
           {oauthError === 'AUTH_RATE_LIMITED'
             ? 'Too many attempts. Please wait a few minutes and try again.'

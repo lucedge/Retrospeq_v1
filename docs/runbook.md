@@ -183,3 +183,77 @@ resolved by an agent). Once a real KMS exists, this entire runbook entry
 becomes moot and should be removed rather than left stale (AGENTS.md
 `NEEDS_YOUR_INPUT.md` convention: "Don't let it accumulate stale
 resolved entries").
+
+---
+
+## MFA verification failures at volume
+
+**Source:** not a line item 00-foundation §7.3's alerting table names
+verbatim (that table predates Module 01 story 1.5) — added because
+Module 01 §7.2's "auth endpoints throttle per user and per IP" and §9's
+error taxonomy both treat credential-guessing surfaces as a named
+security concern, and a TOTP code (10^6 space, `lib/rate-limit/config.ts`'s
+`mfaVerify`/`mfaRecoveryRedeem` scopes) is exactly that kind of surface.
+Owning code: `app/(auth)/mfa-challenge/actions.ts`'s `verifyMfaChallenge`,
+`app/(app)/security/actions.ts`'s `confirmTotpEnrollment`, and
+`app/(auth)/mfa-challenge/recovery/actions.ts`'s `redeemRecoveryCodeAction`.
+
+**What this means operationally:** a sustained run of
+`AUTH_MFA_CODE_INVALID` / `AUTH_MFA_RECOVERY_CODE_INVALID` responses
+against one identifier (a specific user id, or one IP fanning out across
+many accounts) is the shape a brute-force or credential-stuffing attempt
+against a specific trader's second factor would take, distinct from
+ordinary user error (a mistyped code, a clock-drifted authenticator
+app). `lib/rate-limit/config.ts`'s `mfaVerify` (15/900s per IP, 8/900s
+per user) and `mfaRecoveryRedeem` (10/3600s per IP, 5/3600s per user)
+scopes already throttle this mechanically; this entry is about noticing
+a pattern *within* budget, not just rejecting requests over it.
+
+**How to check:** query `retrospeq.rate_limit_hits` for the `mfaVerify`/
+`mfaRecoveryRedeem` scopes, grouped by `identifier` — a single `email:`
+(user-id-keyed, per this codebase's identifier-tag convention) bucket
+repeatedly hitting its ceiling across multiple windows is the signal;
+one bucket hitting the ceiling once is ordinary user error, not an
+incident.
+
+**Action:** investigate (00-foundation §7.3's "Investigate, consider
+kill switch" tier fits this — there is no per-user kill switch for MFA
+specifically yet, so the closest available action is forcing a password
+reset, which also revokes other sessions, `app/(auth)/actions.ts`'s
+`confirmPasswordReset`). Escalate to page only if the pattern spans many
+distinct accounts from a small set of IPs (credential-stuffing shape),
+not a single account being probed.
+
+---
+
+## Degraded session-revocation reliability
+
+**Source:** Module 01 story 1.4's acceptance criterion ("revoke
+individually or all") depends entirely on Supabase Auth's own
+`signOut({ scope: 'others' | 'global' })` succeeding — this repo has no
+independent session store to fall back to if that call fails. Owning
+code: `app/(app)/security/actions.ts`'s `revokeOtherSessions`/
+`revokeAllSessions`.
+
+**What this means operationally:** unlike `lib/rate-limit/limiter.ts`'s
+deliberate fail-open posture for its own infrastructure (ADR 0004), a
+failed `signOut()` call here has a real security consequence — a trader
+who believes they just revoked a stolen session's access has not
+actually done so if the call silently failed. Both actions already
+surface a Supabase error through `mapAuthError` rather than swallowing
+it (unlike `confirmPasswordReset`'s deliberately-swallowed
+`signOut({ scope: 'others' })` failure, which is acceptable there only
+because the primary security-relevant action — the password change —
+already succeeded independently of it; there is no equivalent
+independent primary action here).
+
+**How to check:** any repeated `AUTH_*` error surfaced from
+`revokeOtherSessions`/`revokeAllSessions` in server logs, or a report
+from a trader that "sign out everywhere" did not actually end a
+session elsewhere.
+
+**Action:** investigate as a genuine security-relevant Supabase Auth
+degradation, not routine noise — if `signOut()` itself is unreliable
+project-wide, every session-boundary guarantee in Module 01 (password
+reset's "all sessions invalidated," this story's revoke controls) is
+compromised simultaneously, which raises this above a single-feature bug.

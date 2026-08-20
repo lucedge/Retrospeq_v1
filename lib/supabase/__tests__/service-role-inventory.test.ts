@@ -40,11 +40,15 @@ const THIS_FILE = __filename.replace(/\\/g, '/');
 // header comment.
 const CREATE_SERVICE_ROLE_CLIENT_ALLOWLIST = new Set<string>([
   // Definition site only — `createServiceRoleClient(` appears in its own
-  // declaration/doc comment, not a call. No real call site exists yet
-  // (Module 01's current slices all use `withServiceRoleConnection`
-  // instead — see ADR 0006 for why `lib/supabase/service.ts`'s
-  // PostgREST-based client can't reach `retrospeq` tables today).
+  // declaration/doc comment, not a call.
   'lib/supabase/service.ts',
+  // Module 01 story 1.5 recovery-code redemption: force-unenrolls a
+  // user's MFA factors via `auth.admin.mfa.deleteFactor`, a GoTrue admin
+  // API call (not a `retrospeq`-schema table read), so this is the first
+  // real call site of this factory — see lib/auth/mfa-admin.ts's own doc
+  // comment for why service role (not `withServiceRoleConnection`) is
+  // the right mechanism here.
+  'lib/auth/mfa-admin.ts',
 ]);
 
 const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
