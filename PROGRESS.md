@@ -86,24 +86,118 @@ email/Google signup, sign-in, sign-out, password reset):
   assuming `updateUser` does it, with a test proving the call happens
   in the right order and doesn't block the redirect on its own failure).
 
-**Not done yet, not blocked, straightforward continuation:** Module 01
-stories 1.4 (session list/revoke) and 1.5 (2FA/TOTP), stories 2.x
-(trading-account connection, `BrokerAdapter` interface, envelope
-encryption, `account_credentials`), 3.x (account settings), 4.x
+**Module 01 stories 2.x — backend foundation done and reviewed.**
+Built (not yet UI-wired — that's the next slice):
+
+- `supabase/migrations/20260820040000_trading_accounts.sql` —
+  `retrospeq.trading_accounts` (standard owner RLS policy) and
+  `retrospeq.account_credentials` (RLS enabled, owner INSERT+DELETE
+  policies only, deliberately **no** SELECT or UPDATE policy for any
+  client role, per Module 01 §3.3) exactly per spec §3.1. Applied to and
+  verified against the live shared dev Supabase project (tables, RLS
+  enabled flags, exact policy predicates, and table-level GRANTs all
+  confirmed via `information_schema`/`pg_policies` — same verification
+  method as prior migrations).
+- `lib/broker/adapter.ts` — the `BrokerAdapter` interface
+  (00-foundation §10.1) with full TypeScript types for
+  `Fill`/`Position`/`PositionSnap`/`TierFlags`/`AccountHandle`, informed
+  by Module 02's golden fixtures' fill shape and the `fills`/
+  `position_snapshots` table DDL. A conforming `connect()` implementation
+  must perform Module 01 §4.1's mandatory read-only verification
+  internally (there's no separate adapter method for it — the interface
+  itself fixes this) and throw one of four typed errors
+  (`BrokerAuthFailedError`, `BrokerCredentialTooPermissiveError`,
+  `BrokerServerUnknownError`, `BrokerVendorUnavailableError`) for the
+  taxonomy in Module 01 §9.
+- `lib/broker/fixture-adapter.ts` — a deterministic, clearly-named
+  fixture/test-only `BrokerAdapter` (`import 'server-only'`), never a
+  stand-in silently presented as a real broker; `behavior` is a required
+  config field (`connect_ok` | `auth_failed` |
+  `credential_too_permissive` | `server_unknown` | `vendor_unavailable`),
+  so a caller must explicitly choose which scenario it exercises.
+- `lib/broker/envelope-encryption.ts` — the crypto layer
+  (`encryptCredential`/`decryptCredential`, Node's built-in `crypto`,
+  AES-256-GCM). `createKmsMasterKeyProvider()` throws
+  `KmsNotConfiguredError` unconditionally — no external KMS vendor
+  chosen yet (infra gap) — with a `TODO(kms)` marking exactly where the
+  real vendor SDK call goes once one exists. No static/local
+  fallback key exists anywhere in this file.
+- `lib/broker/connect.ts` — the connection-flow orchestration (Module 01
+  §4.1 steps 2-6): Zod-validated input, `adapter.connect()`, the
+  mandatory read-only check (enforced by the adapter's own contract,
+  plus a defence-in-depth re-check on `handle.verifiedReadonly` here),
+  `adapter.capabilities()`, `encryptCredential`. Returns what to persist;
+  does not touch Postgres itself (kept out of scope for this slice).
+- **Real, load-bearing finding, not just a test artifact:** while writing
+  the live-DB RLS test for `account_credentials`, discovered and verified
+  (Postgres 17.6, reproduced on an isolated scratch table) that a table
+  with INSERT+DELETE policies but no SELECT policy cannot support a
+  WHERE-qualified UPDATE/DELETE under RLS at all — Postgres folds the
+  query to "One-Time Filter: false" regardless of whether the row would
+  match the DELETE policy's own USING clause. `docs/adr/0005-account-
+  credentials-writes-via-service-role.md` documents this and the
+  consequence: the real connect/disconnect Server Action (next slice)
+  must use the service-role client for `account_credentials` writes,
+  with ownership checked at the application layer — not a direct
+  RLS-scoped client call. `lib/broker/connect.ts`'s doc comment points
+  at this ADR so it isn't rediscovered the hard way again.
+- Tests: 30 unit tests in `lib/broker/__tests__/` (envelope round-trip +
+  tamper detection on all four fields, fixture-adapter behavior
+  coverage, and `connect.ts`'s master-credential-rejection path tested
+  at the weight Module 01 §7.2/§8 requires — including a defence-in-depth
+  case for a hypothetically misbehaving adapter, plus a regression test
+  for the Zod fix below) — 98.68% line coverage on `lib/broker/`. Plus
+  19 live-DB RLS tests in `lib/supabase/__tests__/trading-accounts.rls.test.ts`
+  (cross-user isolation on both tables, the check-constraint backstop,
+  and the service-role-only access pattern for credentials, including
+  the ADR 0005 behavior). Full suite: **180 passing**, 4 skip-guard
+  fallbacks (unaffected — env is present). `npm run build` and
+  `tsc --noEmit` both clean; lint has only pre-existing-pattern warnings
+  (unused `_prefixed` params, matching an existing warning already in
+  `app/(auth)/actions.ts`).
+- **Security-reviewed: one FAIL, fixed, re-reviewed PASS.**
+  `connectTradingAccountInputSchema` used plain `z.object()`, which
+  silently strips unrecognised keys instead of rejecting them —
+  violates 00-foundation §4.2's "reject unknown keys," verbatim.
+  Switched to `z.strictObject()`; added a regression test proving an
+  unrecognised key blocks the flow before the adapter is ever called.
+  Re-reviewed: PASS. Every other area (RLS shape, envelope encryption,
+  the read-only-verification chain, vendor-type isolation, no-credential-
+  in-errors, ADR 0005's RLS reasoning) passed on the first review.
+- **QA-reviewed: PASS**, with one forward-looking note (not a fix
+  needed now): story 2.3 ("crypto trader ... keys with trade or
+  withdrawal scope rejected with a named reason") isn't fully
+  representable yet — the current error taxonomy folds every
+  too-permissive credential (MT master password or an overprivileged
+  crypto API key alike) into one `CONNECT_CREDENTIAL_TOO_PERMISSIVE`
+  with one fixed, MT-investor-vs-master-worded message. Reasonable for
+  this broker-generic slice; whichever future slice builds a real
+  crypto-exchange adapter needs a scope-specific rejection reason, not
+  reuse of this exact message unchanged.
+- `docs/runbook.md` — two new entries for alerting conditions this
+  slice's code makes real: "Any credential decryption failure" (pages
+  on-call, 00-foundation §7.3) and "Broker/vendor connection outage
+  during connect" (`CONNECT_VENDOR_UNAVAILABLE`).
+- **Explicitly NOT built in this slice** (by design, per the dispatch):
+  any UI screen, the Server Action that actually performs the
+  `trading_accounts`/`account_credentials` INSERT (the next slice —
+  must follow ADR 0005's service-role guidance), and Module 02's
+  sync/import.
+**Not done yet, not blocked, straightforward continuation:** the UI/
+Server-Action slice for stories 2.x (connect screen, account list,
+the actual DB write per ADR 0005), Module 01 stories 1.4 (session
+list/revoke) and 1.5 (2FA/TOTP), 3.x (account settings), 4.x
 (entitlements/`subscriptions`/`analytic_config`), 5.x (rights/privacy —
 export/erasure/`audit_log`/`data_requests`) — then all of Module 02
 (Trade Ingestion & Model, the largest/highest-risk module in v1: fills,
 blocks, the grouping engine, trade events, confirmation freeze).
 
-**Next slice:** Module 01 stories 2.x — `trading_accounts` +
-`account_credentials` schema/RLS, the `BrokerAdapter` TS interface
-(00-foundation §10.1, vendor-agnostic, no real vendor selected — build
-against the interface + a test/fixture adapter, not a real broker), and
-the connect flow including the mandatory read-only verification step.
-Envelope encryption (AES-256-GCM per-credential key wrapped by an
-external KMS master key) is buildable in interface/logic form now but
-has no real KMS account yet (infra gap) — build it to fail loudly
-without one, don't stub a fake master key.
+**Next slice:** the UI/Server-Action layer for Module 01 stories 2.x
+(the connect screen per §5.2's reference markup, the account list, and
+the actual `trading_accounts`/`account_credentials` Server Action
+writes — per ADR 0005, through the service-role client, not a direct
+RLS-scoped client call). UI slice — needs the screenshot self-check
+before it can be marked done.
 
 ## Needs-your-input signal
 
@@ -119,13 +213,43 @@ the owner — never fake it, always flag it."
 - [ ] No Vercel project for Retrospeq. Owner needs to create one and either connect this repo via Vercel's GitHub integration or supply a deploy token.
 - [x] ~~No Supabase project for Retrospeq~~ — **dev/test only, as of 2026-08-20, and now actually verified, not just configured.** Sharing the existing LuceEdge project (`vbuzudbipftgsuosreuy`), isolated via a dedicated `retrospeq` Postgres schema — see `docs/adr/0002-shared-dev-supabase-project.md`. `.env.local` has the URL, keys, and `SUPABASE_DB_URL` (direct connection). The `retrospeq` schema has been created for real (`20260819010000_init_schema.sql` applied and confirmed via `information_schema`). **Still open, not closed by this:** a dedicated paid-tier project is required before real launch (00-foundation §1.1) — this only unblocks local RLS/migration verification.
 - [ ] No external KMS account (AWS KMS / GCP KMS / equivalent) for the envelope-encryption master key. Cannot be created by an agent — needs owner action.
-- [ ] No git remote for this repo. Parent repo's remote (`origin` → `lucedge_v1.git`) is a different product; do not push this project there. Owner needs to create a new GitHub repo and add it as `origin` here.
+- [x] ~~No git remote for this repo~~ — **resolved**, `origin` now points at `https://github.com/lucedge/Retrospeq_v1.git` (a dedicated repo, not the LuceEdge one — confirmed 2026-08-20). **New, smaller gap:** `git push` to `origin main` is being blocked in this environment by a local permission-system classifier (not a git/GitHub-side rejection — the command was denied before it ran). Commits are landing locally and are safe; they are not reaching the remote. Flagged for the owner to check the permission/auto-mode settings for this session type if pushes are expected to go through automatically per the autonomy policy above.
 - [ ] Broker integration vendor undecided (00-foundation §10). Build against `BrokerAdapter` only; do not let a vendor type leak past the adapter.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-20 — Module 01 stories 2.x backend foundation built
+  (`trading_accounts`/`account_credentials` migration,
+  `lib/broker/{adapter,fixture-adapter,envelope-encryption,connect}.ts`).
+  One real architectural finding surfaced while writing the live-DB RLS
+  tests, not a hypothetical: a table with INSERT+DELETE RLS policies but
+  no SELECT policy (Module 01 §3.3's literal spec for
+  `account_credentials`) cannot support a WHERE-qualified UPDATE/DELETE
+  under `authenticated` at all — verified against the live project
+  (Postgres 17.6) and reproduced on an isolated scratch table to rule out
+  anything specific to this table. Resolution, recorded in
+  `docs/adr/0005-account-credentials-writes-via-service-role.md`: keep
+  the RLS policies exactly as spec'd (still a real backstop, and
+  cross-user isolation is unaffected), but the actual connect/disconnect
+  write path (next slice's Server Action) must use the service-role
+  client with application-layer ownership checks, matching 00-foundation
+  §3.2's existing service-role guidance rather than a new pattern.
+
+  **Follow-up (same day, orchestrator):** retrospeq-security-reviewer
+  reviewed this slice and returned one FAIL — `connectTradingAccountInputSchema`
+  used plain `z.object()`, silently stripping unrecognised keys instead
+  of rejecting them per 00-foundation §4.2's "reject unknown keys."
+  Fixed with `z.strictObject()` + a regression test; re-reviewed PASS.
+  retrospeq-qa then reviewed and also PASSed, with one forward-looking
+  note (not a blocking fix): story 2.3's crypto-specific rejection
+  reason isn't representable in the current broker-generic error
+  taxonomy yet — tracked for whichever future slice builds a real
+  crypto-exchange adapter, not a gap in this slice as scoped. Module 01
+  stories 2.x backend foundation is now genuinely done (schema + `lib/broker/`
+  only — no UI, no Server Action DB write yet, both are the next slice).
 
 - 2026-08-20 — Removed `module-docs-github/` (the old superseded LuceEdge
   spec) from the repo, owner request ("confusing to have it sitting
