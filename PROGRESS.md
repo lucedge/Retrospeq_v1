@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done — every story group (1.1-1.3 auth, 1.4-1.5 sessions/2FA, 2.x account connection, 3.x settings, 4.x entitlements, 5.x rights/privacy) coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. All of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remains — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slice 1 (schema + block derivation, §4.2) is done — coded, tested, security-reviewed, QA-reviewed. Slices 2-7 (grouping engine, sync pipeline, trade events/arm-matching, confirm/freeze transaction, corrections + manual entry, UI) remain — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -876,18 +876,204 @@ capability.
   `retrospeq-docs` dispatch) once Module 02 also lands, per AGENTS.md
   step 5 ("before marking a *phase* — not every slice — complete").
 
-**Next slice:** all of Module 02 (Trade Ingestion & Model — the
-largest/highest-risk module in v1: sync pipeline, fill storage/dedup,
-block derivation, the grouping engine, the trade event model, pre-entry
-capture matching, close-out confirmation, evaluation-freeze triggering,
-corrections/not-a-decision, open position state, manual trade entry).
-Build order: golden fixtures already exist (Phase 0) — start from the
-schema (`fills`/`blocks`/`trades`/`trade_fills`/`trade_events`/
-`arm_events`/`trade_captures`/`sync_runs`/`coverage_gaps`/
-`day_closeouts`/`position_snapshots`, Module 02 §3.1) and the sync
-pipeline skeleton against `BrokerAdapter` before the grouping engine
-itself, per Module 02's own "largest and highest-risk" framing and
-00-foundation §9.3's fixture-first testing bar.
+**Module 02 (Trade Ingestion & Model) — slice 1 of several: schema +
+block derivation only, by deliberate dispatch scope (the grouping engine
+is a separate, later slice on purpose, per Module 02's own "largest and
+highest-risk module in v1" framing). Genuinely done as of this session:
+coded, tested, security-reviewed (one FAIL round, fixed, re-reviewed
+PASS), QA-reviewed (PASS). Committed and pushed.**
+
+- `supabase/migrations/20260822010000_ingestion_schema.sql` — all 11
+  tables from Module 02 §3.1 (`fills`, `blocks`, `trades`, `trade_fills`,
+  `trade_events`, `arm_events`, `trade_captures`, `sync_runs`,
+  `coverage_gaps`, `day_closeouts`, `position_snapshots`), §3.2's indexes
+  verbatim, check constraints transcribing every enum-like text column's
+  documented vocabulary. Applied to and verified against the live shared
+  dev Supabase project (11/11 tables, RLS-enabled flags, exact policy
+  predicates, and the delete-trigger's behaviour all confirmed via
+  `information_schema`/`pg_policies` plus a live trigger-behaviour test —
+  same verification method as every prior migration).
+- **RLS is deliberately NOT the uniform "for all" default on every
+  table** — `docs/adr/0011-ingestion-rls-shape.md` reasons through three
+  shapes from each table's own DDL comment: append-only (`fills`,
+  `trade_events` — owner SELECT+INSERT, no UPDATE/DELETE, per
+  00-foundation §2.4's "frozen on write"), derived/never-user-editable
+  (`blocks`, `trade_fills`, `sync_runs`, `coverage_gaps`, `day_closeouts`,
+  `position_snapshots` — owner SELECT only), and genuinely user-driven
+  (`trades`, `arm_events`, `trade_captures` — standard owner "for all,"
+  since §4.7 names real client corrections: the `not_a_decision` toggle,
+  manual split/join, deleting a manual trade before freeze). `trade_fills`
+  gains a `user_id` column not in the spec's literal DDL — the one table
+  missing one, needed to avoid a join-based RLS policy (00-foundation
+  §3.1 names this as a specific anti-pattern). Two mechanical
+  referential-integrity reconciliations also applied (not their own
+  ADR — logged here): `blocks.account_id`/`position_snapshots.account_id`
+  gained the same `references trading_accounts(id) on delete cascade`
+  every other `account_id` column in this migration already has (the
+  spec's own DDL block omits it inconsistently, with nothing in the
+  module text explaining why), and `arm_events.account_id`'s FK gained an
+  explicit `on delete cascade` (the spec gives it a bare `references`
+  with no delete action, which would silently block account erasure once
+  this table has rows).
+- **`trades` gets a `BEFORE DELETE` trigger**
+  (`forbid_broker_confirmed_trade_delete`) enforcing §4.7's "Delete a
+  broker-confirmed trade: Never" / "Delete a manual trade: Before freeze
+  only" — checked across both `trade_fills` AND `trade_events` for a
+  non-`manual:`-prefixed backing fill, since a flip-opened trade
+  (`docs/adr/0001`) has its entry-side fact in `trade_events` only. **A
+  real gap found via this slice's own live-DB test, not hypothetical:**
+  Postgres fires row triggers on CASCADE-originated deletes too, so this
+  trigger would have silently blocked account erasure (`trading_accounts`
+  → `trades` cascade) for any user with a broker-confirmed trade —
+  directly contradicting 00-foundation §5.4 ("immutability is a product
+  invariant, not a legal one... Erasure deletes; it does not tombstone").
+  Fixed with a transaction-local escape hatch
+  (`set_config('retrospeq.erasure_in_progress', 'true', true)`) the
+  trigger checks first — documented in the trigger's own body and in ADR
+  0011, as a required step for whichever future slice extends
+  `lib/privacy/erasure.ts` to cover Module 02's tables. The "regrouping
+  blocked after freeze" invariant (00-foundation §9.2) is explicitly
+  **not** enforced by a trigger yet — flagged inline in the migration as
+  deferred to the grouping-engine slice, which needs to exist first to
+  know the real column set to lock.
+- `lib/ingestion/server-day.ts` — the `server_day` computation, generalized
+  from `fixtures/README.md`'s documented formula to handle BOTH real
+  `day_rollover` literal shapes in this repo (`'HH:MM:SS UTC'`, every
+  fixture; `'<IANA zone> HH:MM'`, `lib/broker/platform-defaults.ts`'s real
+  connect-flow default). Proved algebraically equivalent to the fixture
+  README's `date(filled_at − 22h) + 1 day` formula for any non-midnight
+  rollover, with local-midnight rollovers (crypto's `00:00:00 UTC`)
+  special-cased explicitly (the general `>=`/`+1` rule degenerates to
+  "always +1" at exactly `R=0`, which is wrong and directly contradicted
+  by the fixture's own crypto formula) — full derivation in the file's own
+  header comment, not just asserted.
+- `lib/ingestion/blocks.ts` — block derivation per Module 02 §4.2,
+  verbatim algorithm, using `decimal.js` (new dependency, `10.6.0`, chosen
+  over hand-rolled string arithmetic for correctness/readability — no
+  real tradeoff worth its own ADR) throughout for the running-volume
+  comparison to exact zero, never JS `number`. Handles the flip/no-flat-point
+  case (a single fill crossing zero closes one block and opens another
+  "at the same instant," §4.2) by splitting the crossing fill's
+  contribution across two `FillBlockAssignment` entries — one closing,
+  one opening — without ever creating a second physical fill row (this is
+  purely block-boundary logic, deliberately distinct in scope from ADR
+  0001's `trade_fills`/`trade_events` resolution, which the file's own
+  header comment cross-references so the two don't get confused later).
+  Defensive re-run/dedup-by-`id` built in (idempotency), since real
+  callers will feed it output from `fills` re-fetches that may overlap.
+- Tests: **`lib/ingestion/__tests__/golden-fixtures.test.ts`** replays
+  literally all 8 golden fixtures (not a subset) — asserts every fixture's
+  `fills[].server_day` and `blocks[]` (matched by instrument/opened_at/
+  account, not array position, since real UUIDs aren't in the fixture
+  files) match `expected.json` exactly: **17/17 passing**
+  (`simple_daytrades`, `scaled_in_out`, `swing_with_intraday`,
+  `flip_no_flat`, `partial_fills_subsecond`, `overnight_weekend`,
+  `multi_currency`, `gapped_history` — 2 tests each + 1 harness-sanity
+  test). `lib/ingestion/__tests__/server-day.test.ts` (12 tests, both
+  `day_rollover` formats, boundary-second cases). `lib/ingestion/__tests__/blocks.property.test.ts`
+  (`fast-check`, 200 runs each) — "no block spans a flat point except at
+  its own boundaries," "deterministic for identical input" (including
+  arrival-order independence), "re-running over an overlapping window
+  changes nothing" (exact-duplicate and superset cases), a dedicated
+  flip-fixture-shape unit test, and input-validation coverage. Combined:
+  **`lib/ingestion/` at 100% line coverage on `blocks.ts`, 97.61% on
+  `server-day.ts`** (well above 00-foundation §9.1's 90% engine bar) —
+  the one uncovered branch is a defensive `Intl.DateTimeFormat`
+  malformed-output guard, not reachable via any real input.
+  `lib/supabase/__tests__/ingestion-schema.rls.test.ts` (originally 19
+  live-DB tests: RLS-enabled + exact policy-shape audit across all 11
+  tables, cross-user isolation on `fills`/`blocks`/`trades`, and the
+  delete trigger's three real behaviours — reject a broker-originated
+  trade (even for `service_role`), allow a manual trade before freeze,
+  reject a manual trade after freeze). Full repo suite at coder-handoff:
+  **611 passing**, 10 skip-guard fallbacks (env present, nothing actually
+  skipped). `npm run build`, `npx tsc --noEmit`, and `npm run lint` all
+  clean (lint: only the same pre-existing `_prefixed`-unused-param
+  warning pattern already noted elsewhere).
+- **retrospeq-security-reviewer: one blocking FAIL, fixed, re-reviewed
+  PASS.** Three real findings, all fixed by the orchestrator directly
+  (not re-dispatched to coder, per the same pattern used for smaller
+  fixes elsewhere this session): (1) `signedVolume()` in
+  `lib/ingestion/blocks.ts` guarded against negative/zero volume but not
+  `NaN`/`Infinity` — `Decimal('NaN')` passes `isNegative()`, `isZero()`,
+  and `isPositive()` all as false, so a malformed `numeric` value (which
+  Postgres genuinely accepts — no CHECK constraint prevents it) would
+  silently poison the running-volume total instead of failing loudly as
+  the function's own error message promised. Fixed with an added
+  `!magnitude.isFinite()` check; 6 new adversarial-input tests in the new
+  `lib/ingestion/__tests__/blocks.test.ts` (NaN, Infinity, zero,
+  negative, garbage text, and a large-but-finite non-regression case).
+  (2) `fills`' client-INSERT policy (`fills_owner_insert`) checked
+  `user_id = auth.uid()` but not that `provider_ref` actually carries the
+  `manual:` prefix the delete-trigger's broker-vs-manual classification
+  depends on — a client could self-insert a fill with an arbitrary
+  `provider_ref`, colliding with a real broker deal id. Fixed by adding
+  `and provider_ref like 'manual:%'` to the `WITH CHECK` clause, both in
+  the migration file and applied live against the running database
+  (verified via `pg_policies`). (3) 8 of the 11 tables
+  (`trade_fills`/`trade_events`/`arm_events`/`trade_captures`/
+  `sync_runs`/`coverage_gaps`/`day_closeouts`/`position_snapshots`) had
+  zero actual cross-user-isolation test coverage — the original RLS test
+  file only checked `pg_policies` metadata for those 8, never a real
+  row-level access attempt. Fixed by seeding real rows for all 8 in
+  `beforeAll` and adding 5 new `describe` blocks (~14 new test cases)
+  proving user B genuinely cannot read/write user A's rows, and that
+  direct client INSERTs are correctly rejected on the SELECT-only tables.
+  Re-reviewed (a fresh, focused pass): **PASS** — the NaN/Infinity fix
+  independently confirmed correct with non-tautological tests, three
+  spot-checked isolation tests confirmed to use a genuine Postgres role
+  switch (`SET LOCAL ROLE` + `request.jwt.claims`, not a mock), the
+  `manual:%` policy confirmed live via `pg_policies` and confirmed
+  compatible with Module 02 §4.8's manual-entry `provider_ref = 'manual:'
+  || uuid` shape (would not false-block a legitimate future manual entry).
+- **retrospeq-qa: PASS**, no blocking findings. Confirmed 11/11 RLS
+  coverage with shapes matching each table's actual data semantics (not
+  copy-pasted), the block-derivation algorithm's exact-decimal posture,
+  and that deferring golden-fixture `trades[]` replay to the (not-yet-built)
+  grouping-engine slice is a genuine pipeline-stage boundary per §4.2 vs
+  §4.3, not a gap in this review's scope — `golden-fixtures.test.ts`
+  already replays `fills[].server_day` and `blocks[]` across all 8
+  fixtures today. One minor non-blocking note: this PROGRESS.md section's
+  prose undercounted the RLS test file's test count after the
+  security-fix round grew it — corrected in this update.
+- **Module 02 Slice 1 is now genuinely done.** Full repo suite after all
+  fixes: **630 passing**, 10 skip-guard fallbacks (env present, nothing
+  actually skipped), `npm run build`/`npx tsc --noEmit`/`npm run lint`
+  all clean.
+- **Explicitly NOT built in this slice, by design per the dispatch:** the
+  sync pipeline (§4.1), the grouping engine's confidence scoring/signals/
+  resting-baseline split (§4.3 — this slice only derives block
+  boundaries, the *upper bound* on a trade, not trades themselves), the
+  trade-event/arm-matching/confirm-freeze transaction logic (§4.5/§4.6),
+  manual entry's Server Action, and any UI (no rendered surface exists for
+  this slice — screenshot self-check explicitly skipped, matching how
+  Module 01's account-settings *backend* slice handled the same
+  situation).
+- No new `docs/runbook.md` entry: 00-foundation §7.3's alerting
+  conditions (sync failure rate, credential decryption failure, missed
+  scheduled job, analytic/shadow-analytic error rates) all require a
+  running sync pipeline or analytics engine, neither of which exists yet
+  in this repo — stated explicitly rather than inventing an entry ahead
+  of the code that would trigger it, same posture as the account-settings
+  slice's "no new runbook entry" note.
+- **Flagged for the orchestrator: a `retrospeq-security-reviewer` pass is
+  warranted here**, not skipped — this slice adds RLS to 11 new financial-data
+  tables (AGENTS.md's own trigger list example), including a
+  non-default RLS shape reasoned out per-table (ADR 0011) and a delete
+  trigger with a security-relevant escape hatch
+  (`retrospeq.erasure_in_progress`) that a future slice must remember to
+  set correctly — exactly the kind of judgment call this repo's own
+  security-review trigger list exists to catch a second pair of eyes on.
+
+**Next slice:** the Module 02 grouping engine (§4.3 — confidence scoring,
+the weighted signal table, the resting-baseline algorithm, ambiguous-band
+handling, split-propensity learning) plus the sync pipeline skeleton
+against `BrokerAdapter`/`fixture-adapter.ts`, building on this slice's
+`fills`/`blocks` schema and `lib/ingestion/blocks.ts`'s
+`FillBlockAssignment` output. The golden-fixture harness
+(`lib/ingestion/__tests__/golden-fixtures.test.ts`) already exists and
+should be extended to assert `expected.json`'s `trades[]` array once the
+engine exists, rather than rebuilding fixture-loading from scratch.
 
 ## Needs-your-input signal
 
@@ -907,10 +1093,76 @@ the owner — never fake it, always flag it."
 - [ ] Broker integration vendor undecided (00-foundation §10). Build against `BrokerAdapter` only; do not let a vendor type leak past the adapter.
 - [ ] No transactional email provider configured (00-foundation §10's "Email provider" row — a separate dependency from Supabase Auth's own, already-broken mailer). `lib/privacy/email-provider.ts` (Module 01 stories 5.x, 2026-08-21) throws `EmailProviderNotConfiguredError` unconditionally rather than faking a send. Not currently blocking anything real: `lib/privacy/erasure.ts`'s confirmation email is best-effort and never gates the actual deletion, so this is a standing gap, not a stalled task — see that file's own doc comment. Needs an owner-created account with a real provider (Resend/SendGrid/Postmark/etc) plus its API key wired into env vars.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
+- [ ] **Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's ingestion schema: `lib/privacy/erasure.ts`'s `deleteAllTradingAccountsForUser` deletes `trading_accounts` directly, which now cascades into `retrospeq.trades` (via `ON DELETE CASCADE`) — Postgres fires row-level `BEFORE DELETE` triggers on cascade-originated deletes too, and `trades` now has `forbid_broker_confirmed_trade_delete` (docs/adr/0011). The trigger has an escape hatch (`set_config('retrospeq.erasure_in_progress', 'true', true)`, transaction-local) specifically for this, but `erasure.ts` does not set it — it was written before Module 02's tables existed. **Inert today** (no code path writes a real `trades` row yet — no sync pipeline, no grouping engine), so nothing is broken in practice right now. **Must be fixed as part of whichever slice adds the first real trade-write path** (the sync pipeline or the grouping-engine confirm transaction) — that slice needs to also extend `lib/privacy/erasure.ts` to set the escape hatch before deleting `trading_accounts`/`profiles`, mirroring `docs/adr/0010`'s existing "explicit delete order, not cascade reliance" posture. Tracked here so it surfaces in the build order rather than being rediscovered via a failing erasure test later.
+- [ ] **Repo-wide: several RLS INSERT/"for all" policies check `user_id = auth.uid()` but not that referenced foreign keys (`account_id`, `trade_id`, etc.) actually belong to that same user.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's `fills`/`trade_events` INSERT policies and `trades`/`arm_events`/`trade_captures`'s "for all" policies — a client could theoretically INSERT a row self-assigning `user_id` correctly while pointing `account_id`/`trade_id` at a row it doesn't actually own. Confirmed this is not new to Module 02 — the same shape exists on Module 01's `trading_accounts_owner`/`account_credentials_owner_insert` policies too. Not fixed now (out of scope for the slice that found it, and no test currently proves it's exploitable end-to-end — the referenced row would need to belong to another real user, and the practical blast radius depends on what a client could actually DO with a cross-user-linked row it can't otherwise read, which for most of these tables is "nothing visible," since the owning row still isn't selectable by the attacker afterward). Worth a dedicated pass adding `and exists (select 1 from retrospeq.trading_accounts where id = account_id and user_id = auth.uid())`-shaped checks (or equivalent) across every affected policy, repo-wide, rather than patching table-by-table as each is touched.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-22 — Owner offered explicit authorization to reorder Module 04
+  (Rulebook & Evaluation) + Module 08 (Onboarding) ahead of finishing
+  Module 02, conditional on Module 02 "proving too large/complex to make
+  good continuous progress" — with instructions to check the actual
+  spec dependencies, not reflexively reorder. Checked both specs
+  directly before deciding: **did not reorder, continuing Module 02 as
+  originally planned.** Reasoning:
+  - Module 04's own §11 "Dependencies" names Module 02 explicitly
+    ("trade facts, `trade.confirmed`"), and §13 "Relationships" states
+    Module 02 "owns the freeze trigger" — the event that causes
+    `rule_evaluations` to be written at all. The security-critical
+    `evaluate(rule_version, trade_facts)` function (§5.3) operates on
+    exactly the derived columns Module 02's `trades` table produces
+    (`risk_pct`, `r_multiple`, `hold_seconds`, etc.) — there is no
+    synthetic stand-in that would make this a real test of the actual
+    evaluator the way Phase 0's shadow harness used synthetic analytics
+    for genuinely generic infrastructure. Preview (§5.8) reads
+    `operand_distributions`, which the ERD (§3.2) states is
+    "materialised from trades." Tighten-only/satisfiability validation
+    (§5.2) doesn't need trades, but that's a small fraction of the
+    module — the evaluation engine and preview are its actual point.
+  - Module 08's own onboarding sequence (§5.1) is *literally*
+    "Connect account → Module 01 → Import history → Module 02 → THE
+    HOOK." Its dashboard state machine (§7) is defined entirely in
+    terms of `trades.status`, unconfirmed trades, and close-out — all
+    Module 02 concepts. §13 states this module "composes and does not
+    compute" — without Module 02 there is nothing real to compose.
+  - Module 02 was not actually stuck at the time of this check — Slice
+    1 (schema + block derivation) had just landed clean: 611 tests
+    passing, all 8 golden fixtures replaying correctly individually,
+    live-DB verified, one ADR written for a real RLS-shape judgment
+    call. The owner's own guidance was conditional on genuine
+    difficulty, and that condition wasn't met.
+  - This reasoning should be revisited if a later Module 02 slice (the
+    grouping engine specifically, the highest-risk piece) genuinely
+    stalls — the owner's offer to reorder remains standing, this is a
+    decision for right now, not a closed door.
+
+- 2026-08-22 — Module 02 schema + block-derivation slice. Two spec-internal
+  reconciliations, both mechanical, not genuine design tensions like ADR
+  0001's: (1) `blocks.account_id`/`position_snapshots.account_id` in
+  Module 02 §3.1's literal DDL carry no `references trading_accounts(id)`
+  at all, inconsistent with every other `account_id` column in the same
+  DDL block (`fills`, `trades`, `sync_runs`, `coverage_gaps`,
+  `day_closeouts` all have it) — added the FK for consistency, read as an
+  omission rather than a deliberate choice (nothing in the module text
+  explains a difference). (2) `arm_events.account_id` has a bare
+  `references trading_accounts(id)` with no `on delete cascade`, which
+  would silently block account erasure once this table has rows — added
+  the cascade to match every other cascading FK in this file. Full
+  per-table RLS-shape reasoning (why `fills`/`trade_events` are
+  append-only-restricted, `blocks`/`trade_fills`/the sync-bookkeeping
+  cluster are owner-SELECT-only, and `trades`/`arm_events`/`trade_captures`
+  keep the 00-foundation §3.1 default) is in
+  `docs/adr/0011-ingestion-rls-shape.md`, along with the `trade_fills.user_id`
+  addition (the one table in this migration missing a `user_id` column,
+  needed to avoid a join-based RLS policy per 00-foundation §3.1's own
+  anti-join guidance) and the broker-confirmed-trade delete trigger's
+  erasure escape hatch (a real gap found via this slice's own live-DB
+  test: Postgres fires row triggers on FK-cascade deletes too, so the
+  trigger would otherwise have silently blocked account erasure for any
+  user with a broker-confirmed trade — 00-foundation §5.4 is explicit that
+  immutability must never win against a hard-delete erasure request).
 
 - 2026-08-21 — Closed out Module 01 stories 5.x's review findings.
   **Security (blocking):** `executeErasure`'s pending->processing

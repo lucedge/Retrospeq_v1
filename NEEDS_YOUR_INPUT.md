@@ -47,6 +47,41 @@ real and correctly mapped; this is purely an external service check.
 
 ---
 
+## This machine's C: drive is completely full (0 bytes free)
+
+**What's needed:** Free up space on C: — it's not a "getting low" warning
+anymore, it hit literal zero free bytes during this session (2026-08-21)
+and has started intermittently breaking tool calls with `ENOSPC` (the
+agent harness's own scratch/temp directory lives under `C:\Users\...\
+AppData\Local\Temp`, which needs a few free bytes to write to even when
+the actual work is happening on E:). It's intermittent, not constant —
+most commands still succeed — but it will get worse, not better, as more
+temp files accumulate through a long session, and it isn't limited to
+this agent session; anything else running on this machine that touches
+C:\ temp space is exposed to the same risk.
+
+**Why an agent can't fix this:** this is a general Windows disk-space
+problem, not specific to this repo — cleaning it safely needs someone who
+knows what else is on this machine (this session found large `.tmp`
+files and app caches under `AppData\Local\Temp` but has no way to tell
+what's safe to delete vs. mid-use by another program). The project itself
+already lives entirely on E: (`E:\LuceEdge\retrospeq-app`) and its own
+npm cache/tmp were already redirected to `E:` early in this build
+(PROGRESS.md decision log, 2026-08-19) specifically because of this same
+underlying constraint — that redirect doesn't help here because the
+harness's own scratch directory is fixed to `C:\Users\...\AppData\Local\
+Temp`, not something this repo's config controls.
+
+**What's stalled:** nothing yet, definitively — every failure so far
+(this one, and an earlier Playwright browser-install `ENOSPC` this same
+session, worked around by installing to `E:\playwright-browsers`
+instead) has had a workaround. Flagging now, before it does stall
+something, since "the temp filesystem is full" is exactly the kind of
+failure that looks like a code bug if it's hit mid-task without this
+context.
+
+---
+
 _(`SUPABASE_DB_URL` was supplied 2026-08-20 and connection/migration verification is done, see PROGRESS.md decision log. The `retrospeq` schema is real.)_
 
 One still-open, non-blocking item whenever convenient: the "Exposed schemas" dashboard toggle (Project Settings → API → add `retrospeq`) — only needed for the app's own client-side/REST access at runtime (e.g. `.from()`/`.rpc()` calls), not for anything happening right now. `lib/rate-limit/limiter.ts` (added 2026-08-20) works around this by using a direct Postgres connection instead, so this is not blocking that either.
