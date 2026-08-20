@@ -110,3 +110,18 @@ export async function setUserPlanForTesting(userId: string, plan: Plan): Promise
     await reactivateAccountsOnUpgrade(userId);
   }
 }
+
+/**
+ * Module 01 stories 5.2/5.3 — erasure execution
+ * (`lib/privacy/erasure.ts`), part of the explicit FK-safe delete list
+ * (docs/adr/0010-erasure-explicit-delete-order.md). Service role, per
+ * this table's RLS shape (ADR 0008 — no client write policy exists at
+ * all, this table's ONLY other writer is `setUserPlanForTesting` above).
+ * `subscriptions.user_id` is itself the primary key, so this deletes at
+ * most one row.
+ */
+export async function deleteSubscriptionForUser(userId: string): Promise<void> {
+  await withServiceRoleConnection(async (client) => {
+    await client.query('delete from retrospeq.subscriptions where user_id = $1', [userId]);
+  });
+}

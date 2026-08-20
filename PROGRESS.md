@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 stories 1.1-1.3 (auth), 1.4-1.5 (sessions/2FA), 2.x (account connection), 3.x (settings), and 4.x (plan/entitlement) are all genuinely done — coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. Module 01 stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`) and all of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remain — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 stories 1.1-1.3 (auth), 1.4-1.5 (sessions/2FA), 2.x (account connection), 3.x (settings), and 4.x (plan/entitlement) are all genuinely done — coded, tested, security-reviewed, QA-reviewed, committed, and pushed to `origin/main`. Module 01 stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`) are **coder-complete this session** (real live-DB-tested erasure execution, real export bundle by signed URL) — retrospeq-tester/security-reviewer/qa passes still needed before the module as a whole is "done." All of Module 02 (Trade Ingestion & Model — the largest/highest-risk module in v1) remains — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -638,14 +638,192 @@ now fixed. Genuinely done as of this session, not just coder-complete.**
   real live-DB and unit-test evidence), QA-reviewed (one quick fix, applied),
   429 passing overall. Committed and pushed.
 
-**Still not done, not blocked, straightforward continuation:** Module 01
-stories 5.x (rights/privacy — export/erasure/`audit_log`/`data_requests`)
-— then all of Module 02 (Trade Ingestion & Model, the largest/highest-risk
-module in v1: fills, blocks, the grouping engine, trade events,
-confirmation freeze).
+**Module 01 stories 5.x (rights/privacy) — coder pass complete, real
+end-to-end functionality, not stubs. retrospeq-tester/security-reviewer/qa
+passes still needed before this slice (and Module 01 as a whole) can be
+marked done. Mandatory security review flagged explicitly** — this
+slice touches credential destruction, RLS on two new tables plus a new
+service-role-only table, and a real hard-delete account-erasure
+capability.
 
-**Next slice:** Module 01 stories 5.x (rights/privacy — export, erasure,
-`audit_log`, `data_requests`), then all of Module 02.
+- `supabase/migrations/20260821040000_audit_privacy.sql` — `audit_log`
+  (Module 01 §3.3's literal shape: owner SELECT, service-role-only
+  writes), `data_requests` (owner SELECT + owner INSERT, service-role-only
+  status transitions — a genuine judgment call, `docs/adr/0009-data-requests-rls-shape.md`),
+  and `erasure_tombstones` (new, not in the spec's own DDL — service-role-only
+  for every command, no client policy at all; exists because
+  `data_requests` itself cascades away with the account it was about, so
+  a tombstone needs a table that doesn't — `docs/adr/0010-erasure-explicit-delete-order.md`
+  reasons through this and the FK-safe-explicit-list-vs-cascade tension
+  in full). Applied to and verified against the live shared dev Supabase
+  project (RLS-enabled flags and exact policy predicates confirmed via
+  `pg_policies`).
+- **Real bug found and fixed, not hypothetical — `createServiceRoleClient()`
+  (`lib/supabase/service.ts`) was broken for any REAL (non-mocked) call
+  on this repo's pinned Node 20.11.0**, discovered while researching this
+  slice (needed the factory for `auth.admin.getUserById`/`deleteUser`,
+  this repo's actual first *tested* real call site of it). `@supabase/supabase-js`'s
+  `SupabaseClient` constructor unconditionally builds a `RealtimeClient`,
+  which unconditionally resolves a native `WebSocket` constructor —
+  unavailable on Node <21 — so ANY real call to this factory (including
+  `lib/auth/mfa-admin.ts`'s recovery-code redemption, shipped in an
+  earlier slice) has been silently broken in this environment since it
+  was introduced, masked only because every prior test/screenshot pass
+  either mocked this module directly or never happened to exercise
+  recovery-code redemption for real. Fixed with a harmless
+  `realtime.transport` placeholder (verified directly: `.auth.admin.*`
+  and `.storage.*` both work end-to-end against the live project with
+  the fix; neither is ever used for realtime channels in this codebase).
+  `lib/supabase/__tests__/service.test.ts` updated to assert the fix.
+- **A second real bug, also found via the mandatory screenshot self-check,
+  not a code read: `pg`'s default type parsers deserialize `timestamp`/
+  `timestamptz` columns into JS `Date` objects, but every `Row` interface
+  in this codebase (`TradingAccountRow`, `SubscriptionRow`,
+  `DataRequestRow`, etc.) types those columns as `string`** — matching
+  how PostgREST/`supabase-js` actually serialize them, the shape this
+  codebase has always assumed. Silent and dormant until
+  `app/(app)/privacy/page.tsx` tried to render `data_requests.expires_at`
+  directly as JSX text, which crashed React ("Objects are not valid as a
+  React child"). The identical latent risk exists in
+  `app/(app)/accounts/page.tsx`'s `last_sync_at` rendering too — dormant
+  only because no account has ever had a non-null `last_sync_at` yet
+  (Module 02's sync worker doesn't exist). Fixed once, globally, not
+  patched per call site: `lib/supabase/pg-type-parsers.ts` overrides the
+  two relevant OIDs to return the raw ISO-8601 text Postgres already
+  sends, imported for its side effect by `lib/supabase/direct.ts` and
+  `lib/rate-limit/limiter.ts` (both `pg.Pool` owners) and by the live-DB
+  test helpers. `lib/supabase/__tests__/pg-type-parsers.test.ts` proves
+  it directly.
+- `lib/privacy/` — `audit-repository.ts`, `data-requests-repository.ts`,
+  `tombstone-repository.ts`, `profile-repository.ts` (story 5.4's
+  telemetry toggle — a plain owner-scoped write against the existing
+  `profiles` RLS, no new pattern), `export.ts` (the pure-ish
+  bundle-assembly logic, deliberately separable from I/O so a future
+  queue worker can call it unchanged once Module 02 makes this genuinely
+  need to be async — §11's "<5 min p95" budget is trivially met at
+  today's real data volume: profile + trading accounts minus credentials
+  + subscription + MFA recovery-code metadata minus the codes themselves,
+  **no `fills`/`trades` section exists because Module 02 doesn't exist —
+  never fabricated**), `export-job.ts` (Storage upload/signed-URL/status-transition
+  orchestration), `storage.ts` (Supabase Storage via the now-fixed
+  `createServiceRoleClient()` — **the export bucket is created via code**,
+  verified directly that a service-role key can create a Storage bucket
+  through the REST API with no owner/dashboard action needed), `erasure.ts`
+  (§4.6's full flow — request/grace/cancel/execute), `email-provider.ts`
+  (the confirmation-email dependency, honestly unconfigured — see below),
+  `dev-tools-guard.ts` (mirrors `lib/entitlements/dev-tools-guard.ts`'s
+  two-condition shape, its own separate env var), `schemas.ts`.
+- **Story 5.1 (export):** `requestExport` runs the whole job synchronously
+  inside the Server Action today (explicitly noted in the code as needing
+  to become async/queued once Module 02 adds real trade volume — no queue
+  infra exists yet, per PROGRESS.md's own standing gap, so nothing was
+  built that doesn't exist). Produces a real JSON file and a real CSV file,
+  uploaded to a real Supabase Storage bucket, delivered via two real
+  30-day signed URLs (stored as a JSON manifest in `data_requests.artifact_url`,
+  since one text column has to hold two files' URLs — documented in the
+  migration).
+- **Stories 5.2/5.3 (erasure) — the highest-stakes code in this slice:**
+  `requestErasure` (7-day grace, `EXPORT_IN_PROGRESS`-style duplicate
+  guard), `cancelErasure` (only while still `pending`), `executeErasure`
+  (destroys credentials FIRST, then an EXPLICIT FK-safe delete list —
+  not cascade reliance, per `docs/adr/0010` — for `mfa_recovery_codes`/
+  `trading_accounts`/`subscriptions`, unlinks telemetry pseudonyms
+  (documented no-op — no pipeline exists), records a tombstone
+  (`hash(email)`, timestamp, request id — new `erasure_tombstones` table),
+  registers backup-replay deletion (documented no-op — no backup system
+  exists for this free-tier project, 00-foundation §1.1), writes an
+  `audit_log` entry that survives the account (`user_id` nulled, not
+  cascaded), attempts a best-effort confirmation email (never blocks
+  deletion on it), and finally deletes the `auth.users` row via the
+  now-fixed `createServiceRoleClient()`). A dev/test-only immediate-execution
+  path (`{ bypassGracePeriod: true }`) exists for testing, gated by its
+  own two-condition guard (`lib/privacy/dev-tools-guard.ts`), same
+  honesty posture as `setUserPlanForTesting`.
+- **Honest scope boundaries, stated explicitly rather than silently
+  omitted, per this slice's own dispatch:** grace-period "no sync, no
+  analytics" restriction is not independently enforceable (Module 02/05
+  don't exist) — only the request-exists/cancellable half is real.
+  Telemetry opt-out has nothing to gate yet (no telemetry pipeline
+  exists) — the toggle itself, persisted and immediately effective the
+  moment any future telemetry code checks it, is the correct and
+  complete scope. "Immutability does not survive erasure" has nothing to
+  apply to (no frozen evaluations/fills exist yet) — noted in
+  `docs/adr/0010`, not built for data that doesn't exist.
+- **Confirmation email is honestly unconfigured, not faked.**
+  `lib/privacy/email-provider.ts` throws `EmailProviderNotConfiguredError`
+  unconditionally (same shape as `createKmsMasterKeyProvider`/
+  `getBillingPortalUrl`) — this is a genuinely separate dependency from
+  Supabase Auth's own (already-known-broken) mailer, per 00-foundation
+  §10's own "Email provider" row. `executeErasure` calls it, catches the
+  failure, logs it loudly, and proceeds with deletion regardless — a
+  missing confirmation email is never a valid reason to retain a
+  trader's data. Tracked in PROGRESS.md's "Infra gaps" below (not
+  `NEEDS_YOUR_INPUT.md` — nothing is stalled by this; the erasure flow
+  works correctly without it).
+- `app/(app)/privacy/` — `page.tsx` (telemetry toggle, export status/download,
+  delete-account request/pending/cancel states) + `actions.ts`. Linked from
+  `app/(app)/layout.tsx`'s nav alongside Plan/Security. Design-system
+  check: the default (no pending request) state has **zero** primary
+  `.rq-btn`s — telemetry/export/delete are peer, independent controls,
+  not one task flow, so none is elevated (README.md: "if a screen needs
+  two primary actions, it's doing two jobs"); the one exception is
+  "Cancel deletion," the sole primary `.rq-btn` and only while a deletion
+  is actually pending — reassuring a trader out of an in-progress
+  deletion is the opposite of the dark-pattern risk `.rq-btn--equal`
+  exists to prevent, so elevating it there is deliberate, not an
+  oversight.
+- `lib/rate-limit/config.ts` — six new scopes (`telemetryToggle`,
+  `requestExport`, `requestErasure`, `cancelErasureRequest`,
+  `devExecuteErasure`), every write endpoint in this slice throttled per
+  §7.2's blanket posture, `devExecuteErasure` tightest of all (the single
+  most destructive real action in this slice).
+- Tests: **99 new tests** across `lib/privacy/__tests__/` (unit, mocked —
+  every repository, `erasure.ts`'s full branch set including the
+  destructive-order proof via call-order tracking, `export-job.ts`,
+  `storage.ts`, `email-provider.ts`, `dev-tools-guard.ts`, `schemas.ts`),
+  `app/(app)/privacy/__tests__/actions.test.ts` (16 tests, mocked Server
+  Actions), `lib/supabase/__tests__/audit-privacy.rls.test.ts` (19
+  live-DB RLS tests — 100% coverage on all three new tables, cross-user
+  isolation, the core "cannot self-write status=completed" property for
+  `data_requests`), and **`lib/privacy/__tests__/erasure.live.test.ts`
+  (4 live-DB tests against a real disposable GoTrue test user) — the
+  highest-value test in this slice: proves credentials are destroyed,
+  every owned row is gone, the tombstone survives with a one-way-hashed
+  email, the `audit_log` entry survives with `user_id` nulled, and the
+  real `auth.users` row is genuinely gone (confirmed via
+  `auth.admin.getUserById` returning 404, not just a local table check)
+  — full destructive lifecycle, real data, not a mock.** Full repo
+  suite: **540 passing**, 9 skip-guard fallbacks (env present, nothing
+  actually skipped). `npm run build`, `npx tsc --noEmit`, and
+  `npm run lint` all clean (lint: only the same pre-existing-pattern
+  `_prefixed`-unused-param warnings already noted elsewhere). Overall
+  coverage 99.02% lines / 94.41% branch; `lib/privacy/` itself 99.43%
+  lines / 94.53% branch.
+- Screenshot self-check (`tmp/screenshot-privacy.mjs`, real dev server +
+  real Supabase Auth test user): default privacy screen, telemetry
+  opted-out, export-ready with real download links, erasure-pending with
+  the grace-period date and the one primary "Cancel deletion" button, and
+  erasure-canceled — all reviewed and matched the design system (amber
+  accent only, no red/green, `.rq-well` sections matching the plan/security
+  screens' established look). **Both real bugs above (the service-role
+  WebSocket throw and the pg Date-object crash) were caught by this
+  self-check, not a code read** — the flow silently redirected without
+  actually completing until both were fixed, exactly the "wait, that's
+  wrong" class of finding this convention exists to catch.
+- `docs/adr/0009-data-requests-rls-shape.md`, `docs/adr/0010-erasure-explicit-delete-order.md`
+  — both genuine judgment calls, reasoned through in full. `docs/runbook.md`'s
+  new "Erasure execution stuck or failed" entry (the two failure
+  severities, how to check, action for each) — "Any credential decryption
+  failure" and "Broker/vendor connection outage during connect" already
+  existed from an earlier slice, not duplicated.
+- **Not yet done: retrospeq-tester/retrospeq-security-reviewer/qa passes.**
+  Security review is mandatory here per this slice's own dispatch
+  (credential destruction, RLS on new tables, real hard-delete erasure).
+
+**Next slice:** finish Module 01 stories 5.x's review gates
+(retrospeq-tester/security-reviewer/qa), then all of Module 02 (Trade
+Ingestion & Model, the largest/highest-risk module in v1: fills, blocks,
+the grouping engine, trade events, confirmation freeze).
 
 ## Needs-your-input signal
 
@@ -663,11 +841,56 @@ the owner — never fake it, always flag it."
 - [ ] No external KMS account (AWS KMS / GCP KMS / equivalent) for the envelope-encryption master key. Cannot be created by an agent — needs owner action.
 - [x] ~~No git remote for this repo~~ — **resolved**, `origin` now points at `https://github.com/lucedge/Retrospeq_v1.git` (a dedicated repo, not the LuceEdge one — confirmed 2026-08-20). **New, smaller gap:** `git push` to `origin main` is being blocked in this environment by a local permission-system classifier (not a git/GitHub-side rejection — the command was denied before it ran). Commits are landing locally and are safe; they are not reaching the remote. Flagged for the owner to check the permission/auto-mode settings for this session type if pushes are expected to go through automatically per the autonomy policy above.
 - [ ] Broker integration vendor undecided (00-foundation §10). Build against `BrokerAdapter` only; do not let a vendor type leak past the adapter.
+- [ ] No transactional email provider configured (00-foundation §10's "Email provider" row — a separate dependency from Supabase Auth's own, already-broken mailer). `lib/privacy/email-provider.ts` (Module 01 stories 5.x, 2026-08-21) throws `EmailProviderNotConfiguredError` unconditionally rather than faking a send. Not currently blocking anything real: `lib/privacy/erasure.ts`'s confirmation email is best-effort and never gates the actual deletion, so this is a standing gap, not a stalled task — see that file's own doc comment. Needs an owner-created account with a real provider (Resend/SendGrid/Postmark/etc) plus its API key wired into env vars.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — Module 01 stories 5.x (rights/privacy) built: `audit_log`/
+  `data_requests`/`erasure_tombstones` (new migration), export (real JSON+CSV
+  bundle by real Supabase Storage signed URL), erasure (real §4.6 flow,
+  live-DB-tested end to end against a real disposable GoTrue user),
+  telemetry opt-out. Two real, non-hypothetical bugs found and fixed via
+  the mandatory screenshot self-check, both now regression-tested: (1)
+  `createServiceRoleClient()` (`lib/supabase/service.ts`) has been broken
+  for any REAL (non-mocked) call on this repo's pinned Node 20.11.0 since
+  it was first introduced for `lib/auth/mfa-admin.ts` — `@supabase/supabase-js`
+  unconditionally builds a `RealtimeClient` needing a native `WebSocket`
+  constructor, unavailable before Node 21. Fixed with a harmless
+  `realtime.transport` placeholder (this codebase never uses realtime
+  channels). Silently masked until now because every prior test mocked
+  this factory and no screenshot pass had exercised recovery-code
+  redemption for real. (2) `pg`'s default parsers turn
+  `timestamp`/`timestamptz` columns into `Date` objects, but every `Row`
+  interface in this codebase types those columns `string` (matching
+  PostgREST/`supabase-js`'s actual serialization) — silently dormant
+  until `app/(app)/privacy/page.tsx` rendered a `data_requests.expires_at`
+  value directly as JSX text, crashing React. Fixed once, globally
+  (`lib/supabase/pg-type-parsers.ts`, imported for its side effect by
+  every `pg.Pool`/`Client` owner in the repo), not per call site — the
+  identical latent risk exists in `app/(app)/accounts/page.tsx`'s
+  `last_sync_at` rendering, dormant only because no account has a
+  non-null value yet. Two ADRs: `docs/adr/0009-data-requests-rls-shape.md`
+  (owner SELECT + owner INSERT, no client UPDATE/DELETE — the client
+  needs to create a request but must never self-write its own completion
+  status) and `docs/adr/0010-erasure-explicit-delete-order.md` (explicit
+  FK-safe delete list, not `on delete cascade` reliance, even though this
+  schema's existing cascades WOULD reach the same end state — the real
+  reasons are credential-destruction-first ordering, partial-failure
+  inspectability, and needing the email address to survive through the
+  tombstone/confirmation-email steps before the final purge; also
+  explains why the tombstone needs its own table, decoupled from
+  `data_requests`, which cascades away with the account by design).
+  Confirmation email is honestly unconfigured (`lib/privacy/email-provider.ts`,
+  new "Infra gaps" entry) — `executeErasure` proceeds with deletion
+  regardless, per AGENTS.md's "never fake it, always flag it" and the
+  product-level truth that a missing confirmation email is not a valid
+  reason to retain a trader's data. Full detail in "Current task" above.
+  **Not yet reviewed by retrospeq-tester/security-reviewer/qa** — flagged
+  explicitly, security review mandatory (credential destruction, new RLS,
+  real hard-delete erasure).
 
 - 2026-08-21 — retrospeq-qa's pass on Module 01 stories 4.x found one
   real, if minor, correctness bug: `app/(app)/accounts/page.tsx`'s

@@ -1,6 +1,7 @@
 import 'server-only';
 import { Pool, type PoolClient } from 'pg';
 import { requireEnv } from './errors';
+import './pg-type-parsers';
 
 /**
  * Direct-Postgres helpers for `retrospeq.trading_accounts` /

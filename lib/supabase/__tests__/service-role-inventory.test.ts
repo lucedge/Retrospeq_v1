@@ -49,6 +49,19 @@ const CREATE_SERVICE_ROLE_CLIENT_ALLOWLIST = new Set<string>([
   // comment for why service role (not `withServiceRoleConnection`) is
   // the right mechanism here.
   'lib/auth/mfa-admin.ts',
+  // Module 01 stories 5.1: Supabase Storage (`.storage.*`) for the export
+  // bundle — bucket create/upload/sign, none of which are
+  // `retrospeq`-schema PostgREST reads, so this is the same "GoTrue/
+  // non-PostgREST API" shape as mfa-admin.ts above, not a new pattern.
+  // See lib/supabase/service.ts's own doc comment for the Node
+  // 20.11.0/`realtime.transport` fix this call site depends on.
+  'lib/privacy/storage.ts',
+  // Module 01 stories 5.2/5.3: erasure execution needs
+  // `auth.admin.getUserById` (to fetch the email for the tombstone/
+  // confirmation email before anything is deleted) and
+  // `auth.admin.deleteUser` (the final, irreversible step) — both GoTrue
+  // admin API calls, same reasoning as the two call sites above.
+  'lib/privacy/erasure.ts',
 ]);
 
 const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
@@ -66,8 +79,33 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // comment and docs/adr/0008-subscriptions-read-only-rls.md). RLS on
   // this table deliberately has no client-writable policy at all, per
   // that ADR, so this is the sole legitimate route to a plan change
-  // until a real billing webhook exists.
+  // until a real billing webhook exists. Module 01 stories 5.2/5.3 added
+  // `deleteSubscriptionForUser` to this same file (erasure execution) —
+  // same table, same reasoning, no new allowlist entry needed since the
+  // file was already listed.
   'lib/entitlements/subscription-repository.ts',
+  // Module 01 §3.3, verbatim: "audit_log is insert-only for the service
+  // role" — no client INSERT policy exists at all, so `recordAuditEvent`
+  // (the only writer in this codebase) must run as service_role.
+  'lib/privacy/audit-repository.ts',
+  // Module 01 stories 5.1/5.2/5.3: every `data_requests` status
+  // transition (processing/completed/failed/canceled, `completed_at`,
+  // `artifact_url`, `expires_at`) after the initial owner INSERT — see
+  // docs/adr/0009-data-requests-rls-shape.md for why the client can
+  // create but never update its own request row.
+  'lib/privacy/data-requests-repository.ts',
+  // Module 01 story 5.1: `buildExportBundle` reads `profiles`/
+  // `trading_accounts`/`subscriptions` for a user with no live session
+  // to scope `withUserConnection` to (the function is written to be
+  // callable by a future queue worker unchanged — see that file's own
+  // doc comment) — every query still filters explicitly on `userId`
+  // sourced from the export request's own owner-INSERTed row, never a
+  // client-supplied value at this call site.
+  'lib/privacy/export.ts',
+  // Module 01 stories 5.2/5.3: `erasure_tombstones` has no client policy
+  // at all (see the migration's own comment) — service role only, for
+  // both the write here and (hypothetically) any future read.
+  'lib/privacy/tombstone-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

@@ -152,6 +152,49 @@ export const RATE_LIMITS = {
     ip: { limit: 20, windowSeconds: 3600 },
     email: { limit: 10, windowSeconds: 3600 },
   },
+  /**
+   * Module 01 stories 5.1-5.4 — app/(app)/privacy/actions.ts.
+   * `telemetryToggle`: not credential- or destruction-shaped, loosest
+   * budget here, matching `accountSettings`'s reasoning (a trader may
+   * flip this a few times while deciding).
+   */
+  telemetryToggle: {
+    ip: { limit: 40, windowSeconds: 3600 },
+    email: { limit: 30, windowSeconds: 3600 },
+  },
+  /** `requestExportAction` — runs the whole export job synchronously
+   *  today (lib/privacy/export-job.ts), so this is also, incidentally,
+   *  the real backstop against a trader hammering "export" repeatedly
+   *  and re-running the job each time before `EXPORT_IN_PROGRESS`'s own
+   *  duplicate-request guard would otherwise let a second request queue
+   *  up. */
+  requestExport: {
+    ip: { limit: 10, windowSeconds: 3600 },
+    email: { limit: 6, windowSeconds: 3600 },
+  },
+  /** `requestErasureAction` — starts a real, destructive 7-day-grace
+   *  flow. Tight, matching `disconnectAccount`'s destructive-action
+   *  posture rather than a settings-edit one. */
+  requestErasure: {
+    ip: { limit: 10, windowSeconds: 3600 },
+    email: { limit: 5, windowSeconds: 3600 },
+  },
+  /** `cancelErasureAction` — not destructive (the opposite), looser. */
+  cancelErasureRequest: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  /** `devExecuteErasureNowAction` — DEV/TEST-ONLY (also gated by
+   *  `lib/privacy/dev-tools-guard.ts`), but rate-limited regardless per
+   *  §7.2's blanket "every write endpoint" posture, same as
+   *  `devSetPlan`. This is the single most destructive action in this
+   *  slice (a real `auth.admin.deleteUser` call), so it gets the
+   *  tightest budget in this file.
+   */
+  devExecuteErasure: {
+    ip: { limit: 5, windowSeconds: 3600 },
+    email: { limit: 3, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

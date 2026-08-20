@@ -23,6 +23,13 @@ vi.mock('pg', () => ({
     }
     query = queryMock;
   },
+  // limiter.ts imports lib/supabase/pg-type-parsers.ts for its side
+  // effect (2026-08-21, Module 01 stories 5.x — fixes a real bug where
+  // pg's default Date-parsing for timestamptz columns crashed React when
+  // rendered directly, see that file's own doc comment) — this mock
+  // needs a `types` export for that import to resolve under this file's
+  // full-module `pg` mock, even though nothing in THIS test exercises it.
+  types: { setTypeParser: vi.fn(), getTypeParser: vi.fn() },
 }));
 
 describe('lib/rate-limit/limiter.ts', () => {

@@ -226,6 +226,90 @@ not a single account being probed.
 
 ---
 
+## Erasure execution stuck or failed
+
+**Source:** Module 01 §14's documentation requirement ("runbook entries
+for credential decryption failure, vendor outage and erasure
+execution") and §8's quality benchmark ("Erasure completion < 24 h").
+Owning code: `lib/privacy/erasure.ts`'s `executeErasure`
+(docs/adr/0010-erasure-explicit-delete-order.md explains the exact
+delete order this entry assumes).
+
+**What "stuck" looks like:** a `retrospeq.data_requests` row with
+`kind = 'erasure'` whose `status` is `'processing'` for longer than a
+few seconds (the whole flow — credential destruction, the explicit
+delete list, tombstone, audit event, confirmation email, and the final
+`auth.admin.deleteUser` call — normally completes in well under a
+second against this project's real data volumes) and never reaches
+`'completed'`. Because `executeErasure` marks the row `'processing'`
+*before* doing any deletion (so a concurrent `cancelErasure` attempt
+correctly fails once execution has genuinely begun — see
+`cancelDataRequest`'s own `where status = 'pending'` guard), a row stuck
+at `'processing'` means the process crashed or errored partway through
+the destructive sequence, not that nothing happened yet.
+
+**What "failed" looks like:** `executeErasure` throws (never swallows an
+error mid-flow) in exactly two cases worth distinguishing by severity:
+
+1. **Cannot even fetch the account's email
+   (`auth.admin.getUserById` fails or returns no email).** Nothing is
+   deleted in this case — `executeErasure` refuses to proceed before any
+   destructive step, per its own guard. Low severity: the request stays
+   `'pending'`/`'processing'` (whichever it was at), retryable once
+   whatever broke `auth.admin.getUserById` (e.g. a GoTrue outage) is
+   fixed.
+2. **The FINAL `auth.admin.deleteUser` call fails, after every other
+   step already succeeded.** This is the severe case: credentials are
+   destroyed, every owned row is deleted, the tombstone is written, but
+   the `auth.users` row (and the trader's email address) still exists —
+   an orphaned, data-less, credential-less account. `executeErasure`'s
+   own thrown error message names this exact state explicitly and points
+   back to this runbook entry.
+
+**How to check:**
+
+1. Query `retrospeq.data_requests where kind = 'erasure' and status =
+   'processing'` — any row here for more than a few minutes is
+   actionable.
+2. Check whether `retrospeq.erasure_tombstones` has a row with a
+   matching `request_id` and whether `retrospeq.audit_log` has a matching
+   `action = 'erasure_executed'` entry (`metadata->>'erasedUserId'`) — if
+   both exist but the `auth.users` row for that user id still resolves
+   via `auth.admin.getUserById`, this is severity-2 above: every owned
+   row is already gone, only the final purge failed.
+3. Check application logs for `[erasure] request <id>: all owned data was
+   deleted, but auth.admin.deleteUser(...) failed` — this exact string is
+   the severity-2 signature.
+
+**Action:**
+
+- Severity 2 (final purge failed after everything else succeeded): page
+  on-call — this is functionally identical to a credential-decryption
+  failure in spirit (a state the system cannot self-heal from without
+  intervention) even though it isn't literally that alerting condition.
+  Manual remediation: retry `auth.admin.deleteUser(userId)` directly once
+  the underlying GoTrue issue is resolved; the request row and tombstone
+  are already correct and need no further action once the user row is
+  actually gone.
+- Severity 1 (nothing deleted yet, blocked on fetching the email):
+  investigate as a GoTrue availability issue, not urgent on its own — the
+  request is safely un-executed and can be retried once GoTrue is
+  healthy again. Do not manually mark it `'completed'`; that would falsely
+  claim data was erased that wasn't.
+- **A failed confirmation email is never, by itself, a reason to
+  investigate or block anything** — `executeErasure` sends it as a
+  best-effort step and always proceeds to the final purge regardless
+  (see `sendErasureConfirmationEmail`'s own doc comment). This project
+  has no transactional email provider configured yet
+  (`lib/privacy/email-provider.ts`, `NEEDS_YOUR_INPUT.md`), so **every**
+  real erasure execution today logs a "could not send the confirmation
+  email" warning — this is the expected, 100%-of-attempts outcome until a
+  provider is wired in, the same standing-gap shape as this file's
+  "Every credentialed connect attempt fails because KMS isn't
+  configured" entry above. Not alert-worthy by itself.
+
+---
+
 ## Degraded session-revocation reliability
 
 **Source:** Module 01 story 1.4's acceptance criterion ("revoke

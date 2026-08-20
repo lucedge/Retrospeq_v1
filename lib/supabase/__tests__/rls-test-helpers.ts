@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import '../pg-type-parsers';
 
 /**
  * Shared helpers for RLS cross-user-isolation tests (00-foundation §9.1 /

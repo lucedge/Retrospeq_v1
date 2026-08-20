@@ -72,6 +72,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/security" className="rq-sub underline">
             Security
           </Link>
+          <Link href="/privacy" className="rq-sub underline">
+            Privacy
+          </Link>
           <form action={signOut}>
             <button type="submit" className="rq-btn rq-btn--ghost">
               Sign out

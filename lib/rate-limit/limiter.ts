@@ -1,6 +1,7 @@
 import 'server-only';
 import { Pool } from 'pg';
 import { requireEnv, SupabaseNotConfiguredError } from '@/lib/supabase/errors';
+import '@/lib/supabase/pg-type-parsers';
 import { RateLimitExceededError } from './errors';
 import { RATE_LIMITS, type RateLimitScope } from './config';
 

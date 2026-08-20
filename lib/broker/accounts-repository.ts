@@ -321,3 +321,37 @@ export async function updateTradingAccountSettings(
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
+
+// ---------------------------------------------------------------------
+// Module 01 stories 5.2/5.3 — erasure execution (lib/privacy/erasure.ts).
+// §4.6 step 3a: "Destroy credentials first" — user-wide, not the
+// single-`accountId` shape `deleteAccountCredential` above needs for a
+// normal disconnect. Both go through `withServiceRoleConnection` per ADR
+// 0005 (no client SELECT/UPDATE policy exists for `account_credentials`
+// at all), filtered explicitly on `user_id` sourced from the caller's own
+// authenticated session — never accept it from anywhere else
+// (00-foundation §3.2).
+// ---------------------------------------------------------------------
+
+/** Erasure step 3a: destroys every credential this user owns, across all
+ *  their accounts, in one statement — the FIRST thing erasure execution
+ *  does, before any other owned row is touched. */
+export async function deleteAllAccountCredentialsForUser(userId: string): Promise<void> {
+  await withServiceRoleConnection(async (client) => {
+    await client.query('delete from retrospeq.account_credentials where user_id = $1', [userId]);
+  });
+}
+
+/** Erasure step 3b (part of the explicit FK-safe delete list, see
+ *  docs/adr/0010-erasure-explicit-delete-order.md) — deletes every
+ *  trading account this user owns. Must run AFTER
+ *  `deleteAllAccountCredentialsForUser`, not rely on
+ *  `account_credentials(account_id) references trading_accounts(id) on
+ *  delete cascade` to do it implicitly — the ADR explains why the
+ *  explicit order matters even though the cascade would eventually reach
+ *  the same end state. */
+export async function deleteAllTradingAccountsForUser(userId: string): Promise<void> {
+  await withServiceRoleConnection(async (client) => {
+    await client.query('delete from retrospeq.trading_accounts where user_id = $1', [userId]);
+  });
+}
