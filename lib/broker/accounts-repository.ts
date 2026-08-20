@@ -1,8 +1,16 @@
 import 'server-only';
+import { z } from 'zod';
 import type { PoolClient } from 'pg';
 import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import type { EncryptedCredential } from './envelope-encryption';
 import type { CredentialKind, Platform, TierFlags } from './adapter';
+import { ACCOUNT_KINDS, type AccountKind } from './platform-defaults';
+
+// Re-exported so existing server-side call sites can keep importing
+// these from this file — `platform-defaults.ts` is the actual source of
+// truth (see that file's own comment on why: client-bundle safety).
+export { ACCOUNT_KINDS };
+export type { AccountKind };
 
 /**
  * Read/write access to `retrospeq.trading_accounts` /
@@ -210,6 +218,103 @@ export async function markAccountDisconnected(userId: string, accountId: string)
         where id = $1 and user_id = $2`,
       [accountId, userId],
     );
+  });
+}
+
+// ---------------------------------------------------------------------
+// Module 01 §2 stories 3.1-3.4 — "Account settings" (rename, rollover,
+// prop-challenge label). Editing the same three columns story 2.x's
+// connect flow defaults (`lib/broker/platform-defaults.ts`), not new
+// schema — see supabase/migrations/20260820040000_trading_accounts.sql's
+// column comments for the source of truth on each column's shape.
+// ---------------------------------------------------------------------
+
+/**
+ * `day_rollover`'s real, existing shape in this repo — there are two
+ * literal formats already in live use (not invented for this slice),
+ * confirmed by grepping `fixtures/golden/*\/input.json`,
+ * `lib/broker/platform-defaults.ts`, and the live-DB RLS tests before
+ * writing this regex:
+ *   1. `'<IANA zone> HH:MM'` — e.g. `'America/New_York 17:00'`,
+ *      `'UTC 00:00'` (forex/broker-class default, story 3.1).
+ *   2. `'HH:MM:SS UTC'` — e.g. `'00:00:00 UTC'`, `'22:00:00 UTC'`
+ *      (crypto default and every golden fixture's crypto account,
+ *      story 3.2's literal "00:00 UTC" spelled with seconds throughout
+ *      the fixture library — matched here, not "corrected" to a third
+ *      shape this slice would be inventing on its own).
+ * Validating against both, rather than picking one, is what "don't
+ * invent a new format" means in practice here: either shape already
+ * exists in real data this app has to keep reading.
+ */
+const IANA_ZONE_TIME = /^[A-Za-z_]+(?:\/[A-Za-z_]+){0,2} (?:[01]\d|2[0-3]):[0-5]\d$/;
+const UTC_SECONDS_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d UTC$/;
+
+export const dayRolloverSchema = z
+  .string()
+  .refine((v) => IANA_ZONE_TIME.test(v) || UTC_SECONDS_TIME.test(v), {
+    message: "Enter a rollover like 'America/New_York 17:00' or '00:00:00 UTC'.",
+  });
+
+/** Story 3.3: "Free-text label, 40 chars." `.trim()` before the length
+ *  check so trailing whitespace can't be used to sneak past the cap. */
+export const updateTradingAccountSettingsInputSchema = z.strictObject({
+  label: z
+    .string()
+    .trim()
+    .min(1, 'Label is required.')
+    .max(40, 'Label must be 40 characters or fewer.'),
+  dayRollover: dayRolloverSchema,
+  accountKind: z.enum(ACCOUNT_KINDS),
+});
+export type UpdateTradingAccountSettingsInput = z.infer<
+  typeof updateTradingAccountSettingsInputSchema
+>;
+
+/** Read one account scoped to the caller — used by the settings screen
+ *  to prefill current values and to distinguish "not found / not yours"
+ *  from every other state before rendering a form. RLS-enforced the same
+ *  way as `listTradingAccounts`. */
+export async function getTradingAccount(
+  userId: string,
+  accountId: string,
+): Promise<TradingAccountRow | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<TradingAccountRow>(
+      `select ${TRADING_ACCOUNT_COLUMNS}
+         from retrospeq.trading_accounts
+        where id = $1 and user_id = $2`,
+      [accountId, userId],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+/**
+ * Stories 3.1-3.4: update `label`/`day_rollover`/`account_kind` for one
+ * account. `where id = $4 and user_id = $5` scopes the write to the
+ * caller even before RLS's own identical `trading_accounts_owner`
+ * policy re-checks it — this table (unlike `account_credentials`) has a
+ * real owner `SELECT` policy, so `returning` works here the same way it
+ * does in `insertTradingAccount` (ADR 0005's `RETURNING` caveat is
+ * specific to `account_credentials`'s no-select-policy shape, not this
+ * table). Returns `null` if the row doesn't exist or isn't owned by
+ * `userId` — the caller maps that to a "not found" response, same
+ * pattern as `isAccountOwnedByUser` elsewhere in this file.
+ */
+export async function updateTradingAccountSettings(
+  userId: string,
+  accountId: string,
+  input: UpdateTradingAccountSettingsInput,
+): Promise<TradingAccountRow | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<TradingAccountRow>(
+      `update retrospeq.trading_accounts
+          set label = $1, day_rollover = $2, account_kind = $3
+        where id = $4 and user_id = $5
+        returning ${TRADING_ACCOUNT_COLUMNS}`,
+      [input.label, input.dayRollover, input.accountKind, accountId, userId],
+    );
+    return res.rows[0] ?? null;
   });
 }
 

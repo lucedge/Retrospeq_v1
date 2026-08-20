@@ -34,6 +34,7 @@ const {
   deleteAccountCredentialMock,
   isAccountOwnedByUserMock,
   markAccountDisconnectedMock,
+  updateTradingAccountSettingsMock,
   wrapDataKeyMock,
   unwrapDataKeyMock,
 } = vi.hoisted(() => ({
@@ -51,6 +52,7 @@ const {
   deleteAccountCredentialMock: vi.fn(),
   isAccountOwnedByUserMock: vi.fn(),
   markAccountDisconnectedMock: vi.fn(),
+  updateTradingAccountSettingsMock: vi.fn(),
   wrapDataKeyMock: vi.fn(async (dataKey: Buffer) => ({
     wrappedDek: Buffer.concat([Buffer.from('wrapped:'), dataKey]),
     kmsKeyId: 'test-kms-key',
@@ -83,6 +85,7 @@ vi.mock('@/lib/broker/accounts-repository', async (importOriginal) => {
     deleteAccountCredential: deleteAccountCredentialMock,
     isAccountOwnedByUser: isAccountOwnedByUserMock,
     markAccountDisconnected: markAccountDisconnectedMock,
+    updateTradingAccountSettings: updateTradingAccountSettingsMock,
   };
 });
 // The real envelope-encryption module, except `createKmsMasterKeyProvider`
@@ -100,7 +103,7 @@ vi.mock('@/lib/broker/envelope-encryption', async (importOriginal) => {
 });
 vi.mock('server-only', () => ({}));
 
-const { connectAccount, disconnectAccount } = await import('../actions');
+const { connectAccount, disconnectAccount, updateAccountSettings } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { DuplicateAccountError } = await import('@/lib/broker/accounts-repository');
 const { createKmsMasterKeyProvider, KmsNotConfiguredError } = await import(
@@ -128,6 +131,23 @@ beforeEach(() => {
   deleteAccountCredentialMock.mockReset().mockResolvedValue(undefined);
   isAccountOwnedByUserMock.mockReset().mockResolvedValue(true);
   markAccountDisconnectedMock.mockReset().mockResolvedValue(undefined);
+  updateTradingAccountSettingsMock.mockReset().mockResolvedValue({
+    id: 'account-1',
+    label: 'Updated label',
+    platform: 'mt5',
+    account_kind: 'personal',
+    provider_ref: null,
+    server: null,
+    base_currency: 'USD',
+    day_rollover: 'America/New_York 17:00',
+    sync_tier: 't0',
+    status: 'connected',
+    status_detail: null,
+    last_sync_at: null,
+    connected_at: null,
+    disconnected_at: null,
+    created_at: new Date().toISOString(),
+  });
   wrapDataKeyMock.mockClear();
   vi.mocked(createKmsMasterKeyProvider).mockReset().mockImplementation(() => ({
     wrapDataKey: wrapDataKeyMock,
@@ -354,4 +374,113 @@ describe('disconnectAccount', () => {
     );
     expect(revalidatePathMock).toHaveBeenCalledWith('/accounts');
   });
+});
+
+describe('updateAccountSettings', () => {
+  function settingsFormData(fields: Partial<Record<'label' | 'dayRollover' | 'accountKind', string>>) {
+    return formData({
+      label: 'FTMO Challenge',
+      dayRollover: 'America/New_York 17:00',
+      accountKind: 'personal',
+      ...fields,
+    });
+  }
+
+  it('happy path: validates, writes via the repository, revalidates both routes', async () => {
+    const result = await updateAccountSettings('account-1', undefined, settingsFormData({}));
+
+    expect(result.success).toBe(true);
+    expect(result.account?.id).toBe('account-1');
+    expect(updateTradingAccountSettingsMock).toHaveBeenCalledWith(FAKE_USER.id, 'account-1', {
+      label: 'FTMO Challenge',
+      dayRollover: 'America/New_York 17:00',
+      accountKind: 'personal',
+    });
+    expect(revalidatePathMock).toHaveBeenCalledWith('/accounts');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/accounts/account-1/settings');
+  });
+
+  it('story 3.4: accountKind = prop is accepted and passed through as data plumbing only, no rulebook call anywhere', async () => {
+    const result = await updateAccountSettings(
+      'account-1',
+      undefined,
+      settingsFormData({ accountKind: 'prop' }),
+    );
+    expect(result.success).toBe(true);
+    expect(updateTradingAccountSettingsMock).toHaveBeenCalledWith(
+      FAKE_USER.id,
+      'account-1',
+      expect.objectContaining({ accountKind: 'prop' }),
+    );
+  });
+
+  it('story 3.3: rejects a label over 40 characters at the Zod boundary, no repository call', async () => {
+    const result = await updateAccountSettings(
+      'account-1',
+      undefined,
+      settingsFormData({ label: 'x'.repeat(41) }),
+    );
+    expect(result.fieldErrors?.label).toBeDefined();
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty label', async () => {
+    const result = await updateAccountSettings('account-1', undefined, settingsFormData({ label: '' }));
+    expect(result.fieldErrors?.label).toBeDefined();
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a day_rollover that matches neither real format in this repo', async () => {
+    const result = await updateAccountSettings(
+      'account-1',
+      undefined,
+      settingsFormData({ dayRollover: 'not-a-real-rollover' }),
+    );
+    expect(result.fieldErrors?.dayRollover).toBeDefined();
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts the crypto HH:MM:SS UTC shape already used by every golden fixture', async () => {
+    const result = await updateAccountSettings(
+      'account-1',
+      undefined,
+      settingsFormData({ dayRollover: '00:00:00 UTC' }),
+    );
+    expect(result.fieldErrors).toBeUndefined();
+    expect(updateTradingAccountSettingsMock).toHaveBeenCalled();
+  });
+
+  it('rejects an unknown accountKind value', async () => {
+    const result = await updateAccountSettings(
+      'account-1',
+      undefined,
+      settingsFormData({ accountKind: 'challenge' }),
+    );
+    expect(result.fieldErrors?.accountKind).toBeDefined();
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('not owned / not found: repository returns null, named error, no throw', async () => {
+    updateTradingAccountSettingsMock.mockResolvedValue(null);
+    const result = await updateAccountSettings('someone-elses-account', undefined, settingsFormData({}));
+    expect(result.error?.code).toBe('ACCOUNT_NOT_FOUND');
+    expect(result.success).toBeUndefined();
+  });
+
+  it('session missing: named error, no repository call', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+    const result = await updateAccountSettings('account-1', undefined, settingsFormData({}));
+    expect(result.error?.code).toBe('ACCOUNT_SESSION_MISSING');
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limited: named error, no repository call', async () => {
+    enforceRateLimitMock.mockRejectedValue(
+      new RateLimitExceededError('accountSettings', 'ip:1.2.3.4', 3600),
+    );
+    const result = await updateAccountSettings('account-1', undefined, settingsFormData({}));
+    expect(result.error?.code).toBe('ACCOUNT_RATE_LIMITED');
+    expect(updateTradingAccountSettingsMock).not.toHaveBeenCalled();
+  });
+
 });

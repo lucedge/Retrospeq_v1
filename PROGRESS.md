@@ -389,17 +389,136 @@ pass complete, tester/security-reviewer/qa passes pending.**
   would be a reasonable dependency to add for that pass rather than
   reimplementing it a second time; neither is installed yet.
 
-**Still not done, not blocked, straightforward continuation:** Module 01
-stories 3.x (account settings — label/rollover editing), 4.x
-(entitlements/`subscriptions`/`analytic_config`), 5.x (rights/privacy —
-export/erasure/`audit_log`/`data_requests`) — then all of Module 02
-(Trade Ingestion & Model, the largest/highest-risk module in v1: fills,
-blocks, the grouping engine, trade events, confirmation freeze).
+**Module 01 stories 3.x (account settings) — coder pass complete,
+tester/security-reviewer/qa passes pending.** No new tables/RLS/migrations
+— edits the existing `trading_accounts` columns (`label`, `day_rollover`,
+`account_kind`) that stories 2.x's connect flow already defaults.
 
-**Next slice:** once stories 1.4/1.5 clear tester/security-reviewer/qa,
-3.x (account settings), 4.x (entitlements), 5.x (rights/privacy), in
-that order per the build order's own module numbering, before moving to
-Module 02.
+- `lib/broker/accounts-repository.ts` — `updateTradingAccountSettings(userId, accountId, input)`
+  (`WHERE id = ... AND user_id = ...`, `RETURNING`, under `withUserConnection`
+  — this table has a real owner SELECT policy, unlike `account_credentials`,
+  so `RETURNING` works here, ADR 0005's caveat doesn't apply) and
+  `getTradingAccount(userId, accountId)` for the settings screen's prefill
+  read. `dayRolloverSchema`/`updateTradingAccountSettingsInputSchema`
+  (Zod, `z.strictObject`) validate the write.
+- **Real finding, not invented for this slice:** `day_rollover` already
+  has two distinct literal formats in live use across this repo —
+  `'<IANA zone> HH:MM'` (`'America/New_York 17:00'`) and `'HH:MM:SS UTC'`
+  (`'00:00:00 UTC'`, every golden fixture's crypto account and
+  `platform-defaults.ts`'s crypto default). `dayRolloverSchema` validates
+  against both rather than picking one — "don't invent a new format"
+  meant matching real existing data, not normalizing it to a third shape.
+- `ACCOUNT_KINDS`/`AccountKind` (`personal | prop | demo`, migration's own
+  comment) now live in `lib/broker/platform-defaults.ts`, not
+  `accounts-repository.ts` — a real build failure caught this:
+  `accounts-repository.ts` pulls in `import 'server-only'` + direct-`pg`
+  at module scope, and the settings form (a client component) needs the
+  enum. `accounts-repository.ts` re-exports both so server call sites are
+  unaffected; only the client form imports from `platform-defaults.ts`
+  directly.
+- `app/(app)/accounts/actions.ts`'s `updateAccountSettings` Server Action
+  (session check, `accountSettings` rate-limit scope, Zod parse, repository
+  call, `revalidatePath` on both `/accounts` and the settings route) and
+  a new `app/(app)/accounts/[id]/settings/` route (server `page.tsx` +
+  client `AccountSettingsForm.tsx`, same split as `security/page.tsx` +
+  `SecurityScreenClient.tsx`) reached from a new "Settings" action on each
+  account card in `app/(app)/accounts/page.tsx`, per Module 01 §5.1's
+  literal "Actions: rename, settings, disconnect."
+- `lib/rate-limit/config.ts`'s new `accountSettings` scope: looser than
+  `connectAccount`/`disconnectAccount` (40/hr IP, 30/hr user) — not
+  credential- or auth-shaped, not destructive, a trader plausibly retries
+  a label/rollover edit a few times while getting it right. Still
+  throttled, not exempt, per §7.2's blanket write-endpoint posture.
+- Story 3.4 (prop marking, v1.1 stub), scope boundary logged explicitly
+  per the dispatch: setting `account_kind = 'prop'` is data plumbing only
+  — the settings form shows "Firm rulebook features are coming soon. This
+  only labels the account for now." No rulebook logic, no Module 09 code,
+  exactly per spec's "in v1 this stores the label and surfaces 'coming
+  soon' — it does not create a rulebook."
+- **Real bug found and fixed via the mandatory screenshot self-check, not
+  a code read:** the settings form originally used uncontrolled
+  `defaultValue` inputs. A prior *successful* save's `revalidatePath` call
+  could cause Next to refetch the route's server props before a
+  *subsequent failed* submission's own re-render landed, which reset the
+  label field back to the last-saved server value and silently discarded
+  whatever invalid text the trader had just typed — right on top of the
+  validation error telling them to fix it. Caught by a screenshot of the
+  40-char rejection showing "FTMO Challenge" (the prior save) in the field
+  instead of the 41-`x` string actually submitted. Fixed by making
+  `label`/`dayRollover`/`accountKind` controlled state that only
+  re-syncs from the server on a confirmed successful save (React's
+  documented "adjusting state during render" pattern, not a `useEffect` —
+  the latter tripped `react-hooks/set-state-in-effect`), never on an
+  unrelated revalidation. Re-screenshotted and confirmed the typed value
+  now survives a validation error (`tmp/dev-screenshots/account-settings-label-too-long.png`).
+- Tests: 24 new pure unit tests for the Zod schemas
+  (`lib/broker/__tests__/account-settings-schemas.test.ts` — every real
+  `day_rollover` shape accepted/rejected correctly, the 40-char boundary,
+  `strictObject`'s unknown-key rejection, every `account_kind` value), 11
+  new Server Action unit tests in `app/(app)/accounts/__tests__/actions.test.ts`
+  (happy path, story 3.4's prop-label-only path, validation failures,
+  not-found/not-owned, session-missing, rate-limited), and 3 new live-DB
+  tests in `lib/broker/__tests__/accounts-repository.live.test.ts`
+  (owner update succeeds and returns the updated row; a second user's
+  call against user A's account touches zero rows and returns `null` —
+  cross-user isolation proven against the real shared dev DB, not
+  assumed from the table's existing RLS coverage; plus a third,
+  orchestrator-added test for `getTradingAccount` itself — flagged by
+  retrospeq-qa as having zero direct coverage despite being exactly what
+  the settings page uses to decide "render the form" vs "we couldn't
+  find that account," which is the safety property that keeps a
+  stranger's account id in the URL from leaking whether it exists).
+  Full suite: **321 passing**, 7 skip-guard fallbacks (env present,
+  nothing actually skipped). `npm run build`, `npm run lint` both clean
+  (lint: only the same pre-existing `_prefixed`-unused-param warning
+  pattern already noted elsewhere).
+- Screenshot self-check (`tmp/screenshot-account-settings.mjs`, real dev
+  server + real Supabase Auth test user, same established pattern as
+  `tmp/screenshot-accounts.mjs`): account list with the new "Settings"
+  action visible, the settings screen prefilled with the connect flow's
+  defaults, the prop-challenge "coming soon" state, a successful save,
+  and the 40-char validation error (post-fix, preserving the typed value)
+  — all reviewed and matched the design system (amber accent only, no
+  red/green, exactly one primary `.rq-btn` per view — "Settings"/
+  "Disconnect"/"Back to accounts" are all `.rq-btn--ghost`, "Save" is the
+  one primary — `.rq-num` on the day-rollover value matching the account
+  list's own numeric-time-display precedent, `.rq-pill` account-type
+  picker matching the connect screen's platform picker).
+- Does not touch credentials, encryption, or new RLS/migrations — the
+  existing `trading_accounts` RLS (already tested) covers the new write
+  path, proven again here at the repository-function level, not just
+  assumed. Per AGENTS.md's security-review trigger list ("auth,
+  credentials, RLS, or the rule engine"), a full security-reviewer pass
+  is likely not strictly required for this slice; flagged for the
+  orchestrator to decide, not skipped unilaterally.
+- No new runbook entry — Module 01 §9's error table already covers every
+  code this Server Action can surface (`ACCOUNT_NOT_FOUND`,
+  `ACCOUNT_RATE_LIMITED`, `ACCOUNT_SESSION_MISSING`, none of them new
+  alerting conditions per §7.3), and this is a low-risk settings edit
+  with no credential/decryption/vendor-outage path — stated explicitly
+  rather than inventing an entry for the sake of one.
+- **QA-reviewed: PASS**, two quick fixes applied same-session: (1) the
+  label `<input>` had no `maxLength` HTML attribute (only static hint
+  text) — server-side Zod validation was always the real authority, but
+  added `maxLength={40}` anyway for the UX affordance, matching this
+  repo's own precedent elsewhere (`MfaChallengeForm.tsx`). Confirmed the
+  existing 40-char-rejection tests exercise the schema/Server Action
+  directly and are unaffected by the browser-level cap. (2) this
+  PROGRESS.md section itself was stale (said "320 passing" / "2 new
+  live-DB tests" before the orchestrator's `getTradingAccount` test
+  landed) — corrected above.
+
+**Still not done, not blocked, straightforward continuation:** Module 01
+stories 4.x (entitlements/`subscriptions`/`analytic_config`), 5.x
+(rights/privacy — export/erasure/`audit_log`/`data_requests`) — then all
+of Module 02 (Trade Ingestion & Model, the largest/highest-risk module in
+v1: fills, blocks, the grouping engine, trade events, confirmation
+freeze).
+
+**Next slice:** Module 01 stories 4.x (plan/entitlement resolution —
+`subscriptions`, `analytic_config`, the `can(user, capability)` check
+per §4.3's table), then 5.x (rights/privacy — export, erasure,
+`audit_log`, `data_requests`), then all of Module 02.
 
 ## Needs-your-input signal
 
@@ -422,6 +541,44 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — Module 01 stories 3.1-3.4 (account settings) built —
+  editing `trading_accounts.label`/`day_rollover`/`account_kind` after
+  connect, no new schema. Two things worth recording explicitly:
+  (1) **Story 3.4's v1 scope boundary, spec-mandated, not an omission:**
+  marking an account `account_kind = 'prop'` stores the label and shows
+  "Firm rulebook features are coming soon" — no rulebook logic, no
+  Module 09 code, exactly per the spec's own "in v1 this stores the label
+  and surfaces 'coming soon' — it does not create a rulebook." Logged so
+  a future reader doesn't mistake the absent rulebook for a gap in this
+  slice.
+  (2) `day_rollover` genuinely has two different literal formats already
+  in live use across this repo (`'<IANA zone> HH:MM'` and
+  `'HH:MM:SS UTC'` — confirmed by grepping `fixtures/golden/`,
+  `lib/broker/platform-defaults.ts`, and the live-DB RLS tests before
+  writing the validator), not one canonical shape as the migration
+  comment's single worked example might suggest. `dayRolloverSchema`
+  validates against both rather than normalizing to a third shape this
+  slice would have invented on its own.
+  Also: `ACCOUNT_KINDS`/`AccountKind` moved to `lib/broker/platform-defaults.ts`
+  (a real `npm run build` failure, not a style choice — the settings
+  form is a client component and `accounts-repository.ts` pulls in
+  `import 'server-only'` + direct-`pg` at module scope, which cannot
+  reach a client bundle); `accounts-repository.ts` re-exports both so no
+  server call site needed to change. And a real bug caught by the
+  mandatory screenshot self-check: uncontrolled `defaultValue` inputs on
+  the settings form let a prior successful save's `revalidatePath` reset
+  a *later, failed* submission's field back to the last-saved value,
+  silently discarding what the trader had just typed alongside the
+  validation error telling them to fix it — fixed with controlled state
+  that only re-syncs on a confirmed successful save. Full detail on all
+  of the above in "Current task" above.
+  Coder pass only — retrospeq-tester/qa passes still needed; per
+  AGENTS.md's security-review trigger list this slice doesn't touch
+  auth/credentials/RLS/the rule engine (existing `trading_accounts` RLS
+  already covers the new write path), so a full security-reviewer pass
+  is likely not strictly required — flagged for the orchestrator to
+  decide rather than skipped unilaterally.
 
 - 2026-08-21 — Module 01 stories 1.4/1.5 (sessions, 2FA) built. Two
   spec-reconciliation findings, both verified directly against the

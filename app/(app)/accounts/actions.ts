@@ -37,6 +37,9 @@ import {
   insertTradingAccount,
   isAccountOwnedByUser,
   markAccountDisconnected,
+  updateTradingAccountSettings,
+  updateTradingAccountSettingsInputSchema,
+  type TradingAccountRow,
 } from '@/lib/broker/accounts-repository';
 
 /**
@@ -394,4 +397,78 @@ export async function disconnectAccount(accountId: string, _formData: FormData):
 
   revalidatePath('/accounts');
   redirect('/accounts');
+}
+
+// ---------------------------------------------------------------------
+// Module 01 §2 stories 3.1-3.4 — "Account settings" (rename, rollover,
+// prop-challenge label). Editing already-connected accounts, not the
+// connect flow above.
+// ---------------------------------------------------------------------
+
+export interface AccountSettingsActionState {
+  fieldErrors?: Partial<Record<string, string[]>>;
+  error?: { code: string; user_message: string };
+  success?: boolean;
+  account?: TradingAccountRow;
+}
+
+/**
+ * `useActionState`-driven (same pattern as `connectAccount`), bound to
+ * `accountId` from the settings page's form `action`. Ownership is
+ * enforced two ways: `updateTradingAccountSettings`'s own `WHERE id = ...
+ * AND user_id = ...`, itself running under `withUserConnection` so
+ * `trading_accounts_owner`'s RLS policy re-checks the same predicate —
+ * a caller can never edit another user's row no matter what `accountId`
+ * is submitted, matching `disconnectAccount`'s established shape rather
+ * than trusting the client-submitted id alone.
+ */
+export async function updateAccountSettings(
+  accountId: string,
+  _prevState: AccountSettingsActionState | undefined,
+  formData: FormData,
+): Promise<AccountSettingsActionState> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return {
+      error: { code: 'ACCOUNT_SESSION_MISSING', user_message: 'Your session expired. Please sign in again.' },
+    };
+  }
+
+  try {
+    await enforceRateLimit('accountSettings', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) {
+      return {
+        error: {
+          code: 'ACCOUNT_RATE_LIMITED',
+          user_message: 'Too many attempts. Please wait a few minutes and try again.',
+        },
+      };
+    }
+    throw err;
+  }
+
+  const parsed = updateTradingAccountSettingsInputSchema.safeParse({
+    label: formData.get('label'),
+    dayRollover: formData.get('dayRollover'),
+    accountKind: formData.get('accountKind'),
+  });
+  if (!parsed.success) {
+    return { fieldErrors: issuesToFieldErrors(parsed.error.issues) };
+  }
+
+  const updated = await updateTradingAccountSettings(user.id, accountId, parsed.data);
+  if (!updated) {
+    return {
+      error: { code: 'ACCOUNT_NOT_FOUND', user_message: "We couldn't find that account." },
+    };
+  }
+
+  revalidatePath('/accounts');
+  revalidatePath(`/accounts/${accountId}/settings`);
+  return { success: true, account: updated };
 }

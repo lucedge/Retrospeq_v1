@@ -81,3 +81,17 @@ export function defaultBaseCurrencyForPlatform(_platform: Platform): string {
 export function defaultLabelForPlatform(platform: Platform): string {
   return `${PLATFORM_LABELS[platform]} account`;
 }
+
+/**
+ * Module 01 §3.1's `trading_accounts.account_kind` values (migration
+ * comment: `personal | prop | demo`). Defined here, not in
+ * `lib/broker/accounts-repository.ts`, so client components (e.g. the
+ * account-settings form, story 3.1-3.4) can import it without pulling in
+ * that file's `import 'server-only'` + direct-`pg` dependency chain —
+ * this file is deliberately "pure domain lookups, no DB access" (see its
+ * own header comment) and safe for both server and client bundles.
+ * `accounts-repository.ts` re-exports these rather than redefining them,
+ * so there is exactly one source of truth.
+ */
+export const ACCOUNT_KINDS = ['personal', 'prop', 'demo'] as const;
+export type AccountKind = (typeof ACCOUNT_KINDS)[number];

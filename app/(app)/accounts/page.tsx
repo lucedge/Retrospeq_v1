@@ -114,7 +114,10 @@ function AccountCard({ account }: { account: TradingAccountRow }) {
       )}
 
       {!disconnected && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Link href={`/accounts/${account.id}/settings`} className="rq-btn rq-btn--ghost">
+            Settings
+          </Link>
           <form action={disconnectAccount.bind(null, account.id)}>
             <button type="submit" className="rq-btn rq-btn--ghost">
               Disconnect

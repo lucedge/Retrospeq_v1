@@ -74,6 +74,24 @@ export const RATE_LIMITS = {
     email: { limit: 20, windowSeconds: 3600 },
   },
   /**
+   * app/(app)/accounts/actions.ts's `updateAccountSettings` — Module 01
+   * stories 3.1-3.4 (rename, rollover, prop label). Not credential- or
+   * auth-shaped (no secret involved, no vendor round trip, nothing an
+   * offline-guessing script would target) and not destructive
+   * (`disconnectAccount`'s tighter budget is for something that destroys
+   * a credential) — a trader plausibly edits a label or fixes a rollover
+   * typo several times while getting it right, so this gets the loosest
+   * budget in this file rather than reusing `connectAccount`'s. Still
+   * throttled, not exempt: Module 01 §7.2's "throttle" posture is a
+   * blanket one for every write endpoint in this module, not an
+   * auth-only rule, and a real per-user/per-IP scope costs nothing to
+   * add here versus leaving this one path uncovered.
+   */
+  accountSettings: {
+    ip: { limit: 40, windowSeconds: 3600 },
+    email: { limit: 30, windowSeconds: 3600 },
+  },
+  /**
    * Module 01 story 1.4/1.5 — app/(app)/security/actions.ts.
    * `mfaEnroll`: starting a new TOTP enrollment (issues a fresh secret/QR
    * each call) — loose but real, a trader retrying a scan a few times is

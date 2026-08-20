@@ -201,6 +201,106 @@ describe.skipIf(!env)('lib/broker/accounts-repository.ts (live DB, via lib/supab
     },
     20_000,
   );
+
+  // Module 01 stories 3.1-3.4 (account settings). `trading_accounts`
+  // carries a real owner SELECT policy (unlike `account_credentials`),
+  // so this exercises `updateTradingAccountSettings`'s own
+  // `WHERE id = ... AND user_id = ...` layered under a genuinely
+  // RLS-enforced `withUserConnection` call — proving the settings write
+  // path, not just the schema/action-layer mocks in
+  // app/(app)/accounts/__tests__/actions.test.ts.
+  it('updateTradingAccountSettings updates label/day_rollover/account_kind for the owner and returns the updated row', async () => {
+    const { insertTradingAccount, updateTradingAccountSettings } = await import('../accounts-repository');
+
+    const { id } = await insertTradingAccount({
+      userId: userA.id,
+      label: 'Original Label',
+      platform: 'mt5',
+      providerRef: `live-test-settings-${Date.now()}`,
+      server: 'ICMarketsSC-Live02',
+      baseCurrency: 'USD',
+      dayRollover: 'America/New_York 17:00',
+      capabilities: { tier: 't0', history: true, openPositions: true, positionSnapshots: false, liveSession: false },
+    });
+
+    const updated = await updateTradingAccountSettings(userA.id, id, {
+      label: 'FTMO Challenge',
+      dayRollover: '00:00:00 UTC',
+      accountKind: 'prop',
+    });
+
+    expect(updated).not.toBeNull();
+    expect(updated?.label).toBe('FTMO Challenge');
+    expect(updated?.day_rollover).toBe('00:00:00 UTC');
+    expect(updated?.account_kind).toBe('prop');
+
+    await db.query('delete from retrospeq.trading_accounts where id = $1', [id]);
+  });
+
+  it("cross-user isolation: a second user's updateTradingAccountSettings call against user A's account touches zero rows and returns null — RLS enforced, not just app-layer filtering", async () => {
+    const { insertTradingAccount, updateTradingAccountSettings } = await import('../accounts-repository');
+
+    const { id } = await insertTradingAccount({
+      userId: userA.id,
+      label: 'User A Original Label',
+      platform: 'manual',
+      providerRef: null,
+      server: null,
+      baseCurrency: 'USD',
+      dayRollover: '00:00:00 UTC',
+      capabilities: { tier: 't0', history: false, openPositions: false, positionSnapshots: false, liveSession: false },
+    });
+
+    const attackerResult = await updateTradingAccountSettings(userB.id, id, {
+      label: 'Hijacked Label',
+      dayRollover: 'UTC 00:00',
+      accountKind: 'prop',
+    });
+    expect(attackerResult).toBeNull();
+
+    // Confirm nothing actually changed, via the owner connection.
+    const row = await db.query('select label, account_kind from retrospeq.trading_accounts where id = $1', [
+      id,
+    ]);
+    expect(row.rows[0].label).toBe('User A Original Label');
+    expect(row.rows[0].account_kind).toBe('personal');
+
+    await db.query('delete from retrospeq.trading_accounts where id = $1', [id]);
+  });
+
+  // `getTradingAccount` had zero direct test coverage despite being the
+  // exact function `app/(app)/accounts/[id]/settings/page.tsx` uses to
+  // decide between rendering the settings form and "We couldn't find
+  // that account" — the cross-user case below is what makes that
+  // decision safe (a stranger's account id in the URL must render the
+  // same not-found state as a genuinely nonexistent id, not leak
+  // whether the account exists).
+  it('getTradingAccount returns the account for its owner, and null for a non-owner or a nonexistent id', async () => {
+    const { insertTradingAccount, getTradingAccount } = await import('../accounts-repository');
+
+    const { id } = await insertTradingAccount({
+      userId: userA.id,
+      label: 'Live Test getTradingAccount',
+      platform: 'manual',
+      providerRef: null,
+      server: null,
+      baseCurrency: 'USD',
+      dayRollover: '00:00:00 UTC',
+      capabilities: { tier: 't0', history: false, openPositions: false, positionSnapshots: false, liveSession: false },
+    });
+
+    const ownRead = await getTradingAccount(userA.id, id);
+    expect(ownRead?.id).toBe(id);
+    expect(ownRead?.label).toBe('Live Test getTradingAccount');
+
+    const strangerRead = await getTradingAccount(userB.id, id);
+    expect(strangerRead).toBeNull();
+
+    const nonexistentRead = await getTradingAccount(userA.id, '00000000-0000-0000-0000-000000000000');
+    expect(nonexistentRead).toBeNull();
+
+    await db.query('delete from retrospeq.trading_accounts where id = $1', [id]);
+  });
 });
 
 describe.skipIf(!!env)('lib/broker/accounts-repository.ts (live DB) — skipped', () => {
