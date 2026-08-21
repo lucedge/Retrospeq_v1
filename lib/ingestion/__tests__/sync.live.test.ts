@@ -579,7 +579,7 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
         target_at_fill: null,
         provider_position_ref: null,
         provider_parent_ref: null,
-        close_reason: 'manual',
+        close_reason: 'manual' as const,
         raw: {},
       };
       const secondAdapter = createFixtureBrokerAdapter({ behavior: 'connect_ok', fills: [exitFill] });

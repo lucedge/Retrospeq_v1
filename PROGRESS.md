@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1 (schema + block derivation, §4.2), 2 (grouping engine §4.3 + derived trade facts §4.4), and 3 (sync pipeline §4.1 DB-writing orchestration) are all done — coded, tested, security-reviewed (mandatory pass, PASS), QA-reviewed. A concrete follow-up requirement for Slice 4/6 is tracked: a trade that closes across a resync boundary currently sits `status: 'open'` indefinitely (`BLOCK_EXTENSION_DEFERRED`) until confirm/freeze or block-extension logic addresses it — see "Current task". Slices 4-7 (trade events/arm-matching §4.5, confirm/freeze transaction §4.6, corrections + manual entry §4.7/§4.8, UI) remain |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-4 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock) are all done — coded, tested, security-reviewed (Slice 4 had one blocking FAIL on `trade_captures`' DB-level lock enforcement, fixed with a real trigger, re-reviewed PASS), QA-reviewed. A concrete follow-up requirement for Slice 5/6 is tracked: a trade that closes across a resync boundary currently sits `status: 'open'` indefinitely (`BLOCK_EXTENSION_DEFERRED`) until confirm/freeze or block-extension logic addresses it. Slices 5-7 (confirm/freeze transaction §4.6, corrections + manual entry §4.7/§4.8, UI) remain |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -1479,15 +1479,294 @@ tested (tester found and closed a real coverage gap on the
 (PASS). 719 tests passing, 11 skipped, 0 failed. `sync.ts` 100% line /
 95.72% branch. Clean build/lint/tsc.
 
-**Next slice:** Module 02 Slice 4 — trade-event/arm-matching (§4.5) and
-the confirm/freeze transaction (§4.6), the two pieces this slice
-explicitly left as named, commented hooks. **Now a firm requirement, not
-just a "revisit if it becomes a blocker"** (per the tester pass above):
-Slice 4/6 must either implement in-place block extension, or make the
-confirm/freeze transaction and close-out UI explicitly detect/block on a
-live `BLOCK_EXTENSION_DEFERRED` anomaly — otherwise a trade that
-genuinely closes across a resync boundary will sit `status: 'open'`
-forever with no path back into the normal lifecycle.
+**Module 02 Slice 4 (arm-event matching §4.5 + the pre-entry capture
+lock) — genuinely done as of this session: coded, tested, security-
+reviewed (one blocking FAIL, fixed with a real DB-level trigger,
+re-reviewed PASS), QA-reviewed (PASS). See the closeout paragraph after
+the tester section below for the full FAIL→fix→PASS story.**
+
+- `lib/ingestion/arm-matching.ts` — the pure `match(arm, fills)` decision
+  from §4.5's pseudocode (`matchArmEvent`), no DB access, same posture as
+  `grouping.ts`/`trade-facts.ts`. Five judgment calls reconciling §4.5's
+  prose into code, all documented in the file's own header (full detail
+  there): (1) "candidates" is read as candidate ENTRY FILLS, literally
+  per the pseudocode's own `role = 'entry'` clause, but since an entry
+  fill maps 1:1 to its trade, this is equivalent to "candidate trades
+  identified by their entry fill" — both readings reconciled, not
+  competing; (2) the spec names outcomes for 0-candidates-window-expired
+  (`never_filled`), 1 (`matched`), and >1 (`ambiguous`) but says nothing
+  about 0-candidates-window-still-open — read as "no state change, stays
+  `pending`" per 00-foundation §6.2's silence principle, matching
+  `arm_events.match_state`'s own DDL default; (3) the window boundary
+  ("between armed_at and armed_at + WINDOW") is a closed interval on both
+  ends; (4) side/direction matching reuses `trade-facts.ts`'s exact
+  buy→long/sell→short mapping, one canonical definition, not a second
+  parallel one; (5) `WINDOW` default 30 min, overridable.
+- `lib/ingestion/trade-captures.ts` — `writeTradeCapture`/
+  `lockPreEntryCaptures`, the pre-entry lock (§4.5's second paragraph,
+  §4.7's "Edit pre-entry captures: Never after lock"). Real design
+  finding recorded in the file's own header: `trade_captures`' primary
+  key is `(trade_id, field_id)` only — NOT `(trade_id, field_id, moment)`
+  — so there is exactly one row per field per trade ever, which makes
+  "never after lock" enforceable as a flat reject-on-conflict rather than
+  a versioned append: once a `(trade_id, field_id)` row exists with
+  `moment = 'pre_entry'`, every later write attempt for that same pair is
+  rejected outright (`{ applied: false, reason: 'pre_entry_locked' }`),
+  never silently overwritten. This is also the one general write path any
+  FUTURE `trade_captures` writer (Module 03/06's capture UI) should route
+  through — nothing else writes to this table yet in this repo, so there
+  was nothing to retrofit.
+- `lib/ingestion/sync.ts` — real Step 8 wiring
+  (`matchPendingArmEvents`), replacing the prior slice's documented
+  no-op hook. **Judgment call, also documented in the file's own header:**
+  rather than tracking "new entry fills written this run" as a narrower
+  set, this re-evaluates EVERY `pending` `arm_events` row for the account
+  against its own instrument's full current entry-fill history, every
+  sync — deliberately conflating §4.1 step 8 with the `never_filled`
+  sweep the dispatch left open-ended ("a sync-triggered sweep is
+  reasonable for this slice's scope") into one pass. Cheap (bounded by
+  the account's own pending-arm count via the existing `arm_pending`
+  partial index), idempotent, and correct for both goals. `RunSyncResult`
+  gained three new fields (`armEventsMatched`/`armEventsAmbiguous`/
+  `armEventsNeverFilled`) — additive, no existing test broke.
+- **Real, unrelated pre-existing build break found and fixed while
+  running the mandatory `npm run build` check**, not caused by this
+  slice: `lib/ingestion/__tests__/sync.live.test.ts`'s `exitFill` object
+  (written in Slice 3) had `close_reason: 'manual'` widen to plain
+  `string` (no `as const`), which `tsc` rejects against `Fill`'s
+  `CloseReason | null` type when passed through `fills: Fill[]`. Verified
+  via `git stash` that this was already broken on `main` before this
+  session touched anything (Slice 3's own commit apparently only ran
+  `vitest`, never `npm run build`, so `next build`'s own type-check step
+  — which walks every `.ts` file including tests — never caught it).
+  One-line fix (`'manual' as const`).
+- Tests: 26 unit tests (`arm-matching.test.ts`) + 3 property tests
+  (`arm-matching.property.test.ts`, `fast-check`, 200 runs each — the
+  dispatch's own required invariant, "the outcome only ever depends on
+  candidates within the window, never on later fills," plus determinism
+  and a full state-vs-qualifying-candidate-count check) covering 0/1/many
+  candidates, both window boundary edges, the buy/sell↔long/short
+  mapping, and the pending-vs-never_filled distinction. Plus 5 new live-DB
+  tests (`arm-matching.live.test.ts`, against the real shared dev/test
+  Supabase project): matched (arm_events → matched, matched_trade_id set,
+  `trade_captures` pre_entry rows written), ambiguous (two qualifying
+  trades → `match_candidates` populated, matched_trade_id stays null, **no**
+  `trade_captures` written for either trade), never_filled (window expired,
+  zero candidates, row retained not discarded), still-pending (window open,
+  zero candidates, no write), and the pre-entry-lock immutability
+  invariant itself (a second write attempt to a locked field is rejected
+  byte-for-byte, a *different*, never-locked field writes and edits
+  normally). One real bug caught by the live suite itself, not by code
+  review: `arm_events.matched_trade_id` has no `ON DELETE` clause (Module
+  02 §3.1's own literal DDL), so the live test's cleanup helper had to
+  delete `arm_events` rows before deleting `trades`, and the cleanup was
+  hardened with a `try/catch` + explicit `ROLLBACK` so one test's cleanup
+  failure can't poison the shared connection's transaction state for every
+  subsequent test in the file (this actually happened once during
+  development, confirmed the fix, not hypothetical).
+  Full suite: **753 passing**, 12 skipped (all live-DB skip-guard
+  placeholders — env is present, every real live-DB test in the repo
+  actually ran). `arm-matching.ts` 100% lines / 96.15% branch,
+  `trade-captures.ts` 100% lines / 100% branch, `sync.ts` 100% lines /
+  95.23% branch — all comfortably above the 90%-line engine bar. Repo-wide:
+  99.22% lines / 94.94% branch. `npm run build`, `npx tsc --noEmit`, and
+  `npm run lint` all clean (lint: only the same pre-existing
+  `_prefixed`-unused-param warning pattern already noted elsewhere).
+- **No new tables, no new RLS shape** — `arm_events`/`trade_captures`
+  already exist with standard owner "for all" RLS from Slice 1's
+  migration; this slice only writes to them via the existing
+  `withServiceRoleConnection` (RLS-bypassing, already-reviewed) path
+  `sync.ts` already established in Slice 3. Every new SQL statement in
+  `matchPendingArmEvents`/`writeTradeCapture` is parameterised — no
+  string interpolation, no dynamic SQL construction. **This orchestrator's
+  own read: a dedicated retrospeq-security-reviewer pass is probably NOT
+  strictly required for this slice** (no new credential/RLS/injection
+  surface per AGENTS.md's trigger list), but flagged for the security
+  reviewer/qa's own call to make, not skipped unilaterally — matching
+  this repo's established precedent for lower-risk slices (e.g. Module 01
+  stories 3.x/4.x's own "flagged, not decided here" pattern).
+- No new `docs/runbook.md` entry: no new alerting condition was
+  introduced (00-foundation §7.3 / Module 02 §9) — `arm_events`
+  transitioning to `ambiguous`/`never_filled` are expected, named product
+  states ("Not an error — a question," matching `GROUPING_AMBIGUOUS`'s
+  own existing treatment in §9's error table), not failures. No ADR
+  written either — every judgment call above is a prose-to-code
+  translation of genuinely ambiguous spec wording, not a deviation FROM a
+  stated 00-foundation convention, matching `grouping.ts`'s own
+  established "recorded in the file header + this decision log, no
+  dedicated ADR" precedent.
+- **Explicitly out of scope, not built** (per the dispatch): the "arm a
+  setup" creation flow/UI (Module 03/08 territory — every `arm_events`
+  row in this slice's own live tests is seeded directly via SQL, since no
+  Server Action creates one yet), the ambiguous-arm resolution UI ("ask
+  at close-out"), and anything about `strategy_id`/`strategy_version`/
+  `trigger_state` beyond passing them through untouched.
+
+- **retrospeq-tester: independent pass complete, 2026-08-22.** Not a
+  re-read — re-derived each finding against §4.5's text and the code
+  directly.
+  - Judgment call #1 ("candidates" = candidate entry fills = candidate
+    trades, 1:1) verified correct, not just plausible: forced by the
+    spec's own `trade_fills_fill_unique` invariant (one entry fill per
+    trade, one trade per fill), so the two readings are provably the same
+    set, not a convenient reconciliation.
+  - Judgment call #2 (0 candidates, window open → stays `pending`, no
+    write) verified NOT to create a silently-skipped match: `sync.ts`'s
+    `matchPendingArmEvents` re-queries every `pending` `arm_events` row
+    against the account's FULL current entry-fill history on *every*
+    sync (not just fills new to that run), so a qualifying fill arriving
+    on any later sync is always found. Confirmed by tracing the code and
+    by the "still-pending" live test.
+  - Window boundary: both edges (`armed_at` exactly, `armed_at + WINDOW`
+    exactly) are unit-tested, plus 1ms-inside/1ms-outside on both sides —
+    genuinely exercises the edges, not just interior/exterior points.
+  - Traced `sync.ts` Step 8 confirms it does both jobs (new-fill matching
+    and the stale-pending sweep) in one pass, as documented — verified,
+    not just trusted.
+  - Pre-entry lock test (`arm-matching.live.test.ts`) is a real
+    adversarial test: seeds a locked field, issues a genuine second
+    `writeTradeCapture` call with a different value/moment, asserts
+    `{ applied: false }` and the row byte-for-byte unchanged, then proves
+    a *different*, unlocked field still writes/edits normally (so the
+    test isn't accidentally proving "writes never work").
+  - `match_candidates` on `ambiguous` is populated with real usable data
+    (`{ tradeIds: [...], fillIds: [...] }`), not a bare boolean — proven
+    by the live "two qualifying entry fills" test reading it back.
+  - **Gap found and closed:** the ADR-0001 union branch in
+    `matchPendingArmEvents` (candidate entry fills sourced from
+    `trade_events.kind = 'entry'` for a flip-opened trade, not
+    `trade_fills`) had zero test coverage — every existing test's
+    candidate set came from the `trade_fills` half of the `UNION ALL`
+    only. Added a new live test
+    (`arm-matching.live.test.ts`, "ADR-0001 flip-opened trade") that
+    reproduces `fixtures/golden/flip_no_flat`'s exact fill shape, arms a
+    `short` setup that can only match via the flip-opened trade's
+    `trade_events` entry, and asserts both the match AND that the
+    matched trade's entry really is a `trade_events` row (0 `trade_fills`
+    entry rows, 1 `trade_events` entry row) — otherwise the test wouldn't
+    actually prove the union branch works. Passes.
+  - **Real DB-level gap found, empirically proven (not just read off the
+    migration comment) — resolved same session, see the closeout
+    paragraph below, not left open:** `trade_captures`' "never after lock" invariant (§4.5's
+    second paragraph, §4.7) is enforced ONLY inside
+    `writeTradeCapture` — there is no DB trigger/CHECK backing it.
+    `trade_captures` carries the standard owner "for all" RLS policy
+    (`using/with check (user_id = auth.uid())`), so any client holding a
+    valid session for the trade's own owner can `UPDATE` an
+    already-locked `moment = 'pre_entry'` row directly via PostgREST/a
+    browser Supabase client, bypassing `writeTradeCapture` entirely. The
+    Slice-1 migration comment already flagged this ("the 'never after
+    lock' rule ... is NOT enforced here ... deferred to that slice, same
+    posture as the grouping-freeze trigger note on `trades`") and named
+    THIS slice (§4.5's arm-matching mechanism) as where it'd be
+    addressed — it wasn't, at the DB level. Added a new live test
+    (`arm-matching.live.test.ts`, "DB-level gap check") that issues a
+    direct `authenticated`-role `UPDATE` against an already-locked row
+    (via the repo's existing `asRole` RLS-test harness) and confirms it
+    is NOT rejected (`rowsAffected === 1`) — proving the gap empirically
+    rather than asserting it from the migration's own comment. No
+    exploitable path exists TODAY (no client-facing Server Action/UI
+    writes `trade_captures` yet — Module 03/06 territory), so this is not
+    a blocking finding for Slice 4 itself, but it is a real, now-provable
+    gap that whoever builds the capture UI must either route exclusively
+    through `writeTradeCapture` or close with a DB-level trigger
+    (mirroring the `trades_forbid_broker_confirmed_delete` pattern
+    already established in this schema) before that UI ships a genuine
+    client write path. Flagging for security-reviewer/qa's own call
+    rather than deciding unilaterally that it's fine to leave.
+  - Confirmed the repo-wide FK-ownership gap already logged above (2026-
+    08-22 entry, "several RLS INSERT/'for all' policies check `user_id =
+    auth.uid()` but not that referenced foreign keys ... actually belong
+    to that same user") concretely applies to `arm_events.account_id` and
+    `trade_captures.trade_id` too (both "for all" policies check only
+    `user_id`), not just the `fills`/`trade_events` tables the original
+    entry named — same repo-wide gap, wider blast radius than previously
+    written down, no new entry needed since the existing one already
+    covers "repo-wide."
+  - RLS: automated, table-list-driven (`ALL_TABLES` in
+    `ingestion-schema.rls.test.ts`), covers all 11 Module 02 tables
+    including `arm_events`/`trade_captures` — established in Slice 1,
+    still passing, not sampled.
+  - Golden fixtures: this slice does not touch the grouping engine
+    (`grouping.ts`/`blocks.ts` unmodified — confirmed via `git diff`), so
+    a replay is not the §9.3 bar's trigger here; the fixture-parity live
+    tests in `sync.live.test.ts` (Slice 3's, unaffected by this slice)
+    still pass regardless.
+  - No dedicated E2E for §7.4's "Arm → fill → in-trade → trim with
+    reason → close → close-out → confirm" flow — correctly out of reach
+    for this slice: trim-reason capture, close-out, and the confirm/
+    freeze transaction don't exist in this repo yet (Slices 5-7). No UI
+    shipped in this slice either, so no screenshot pass applies.
+  - Full suite after my two added tests: **755 passing, 12 skipped, 0
+    failed** (up from 753/12/0 — my 2 additions, no regressions).
+    Coverage unchanged from the coder's report: `arm-matching.ts` 100%
+    lines / 96.15% branch, `trade-captures.ts` 100%/100%, `sync.ts` 100%
+    lines / 95.23% branch — all comfortably above the 90%-line engine
+    bar. Repo-wide 99.22% lines / 94.94% branch, above the 70% overall
+    bar. `npm run build`, `npx tsc --noEmit`, `npm run lint` all clean
+    (same 17 pre-existing unrelated warnings, 0 errors).
+  - **Recommendation on security review:** a dedicated
+    retrospeq-security-reviewer pass IS warranted for this slice — not
+    because the new service-role write pattern itself needs re-review
+    (that part is genuinely covered by Slice 3's prior PASS, same
+    connection/parameterization posture, no new injection surface), but
+    specifically to make a documented, authoritative call on the
+    `trade_captures` DB-level lock-enforcement gap above (real, newly
+    load-bearing now that this slice is the "arm-matching mechanism" the
+    Slice-1 migration comment pointed to) before Module 03/06 builds a
+    real client write path on top of it. A narrow-scope review of that
+    one question is enough; it doesn't need to re-walk Slice 3's whole
+    checklist.
+
+- **retrospeq-security-reviewer: one blocking FAIL, fixed, re-reviewed
+  PASS, 2026-08-22.** Failed the slice on exactly the gap tester found
+  and proved empirically: `trade_captures`' "never after lock" invariant
+  (stated twice in the spec, §4.5 and §4.7, the same weight as AGENTS.md's
+  "rule evaluations freeze and are never recomputed retroactively"
+  non-negotiable) was enforced only in application code, and the
+  Slice-1 migration's own comment had already named THIS slice as where
+  it would close — deferring it a second time was judged not
+  acceptable, unlike genuinely new gaps that get tracked for later.
+  Provided ready-to-apply migration SQL modeled on the existing
+  `forbid_broker_confirmed_trade_delete` trigger. Fixed by the
+  orchestrator: `supabase/migrations/20260822030000_trade_captures_pre_entry_lock_trigger.sql`
+  (`retrospeq.forbid_pre_entry_capture_edit`, a `BEFORE UPDATE` trigger
+  rejecting any edit to a row where `OLD.moment = 'pre_entry'`), applied
+  live and verified against the real shared dev Supabase project
+  (`pg_trigger`/`pg_proc`), with `arm-matching.live.test.ts`'s
+  "DB-level gap check" test flipped from proving the bypass succeeds to
+  proving it's now rejected (`.rejects.toThrow(/cannot edit a locked
+  pre_entry capture/)`). Re-reviewed: PASS — independently confirmed the
+  trigger covers both a literal `UPDATE` and `writeTradeCapture`'s own
+  `ON CONFLICT ... DO UPDATE` path (verified live, not assumed), that it
+  is not overbroad (a legitimate edit to a non-`pre_entry` row still
+  succeeds, confirmed live), and that it doesn't interfere with the
+  erasure cascade-delete path (`BEFORE UPDATE` only, never fires on
+  `DELETE`).
+- **retrospeq-qa: PASS**, no blocking findings. Confirmed the fix
+  genuinely closes the gap (read the trigger SQL directly, didn't just
+  trust the two prior reviews), confirmed §4.5's "ambiguous... never
+  guess" and "never_filled retains the row, doesn't discard" are both
+  real, confirmed the scope boundaries (no arm-creation UI, no
+  ambiguous-resolution UI) are honestly stated. One non-blocking
+  performance note for a future pass: `matchPendingArmEvents` issues one
+  candidate-fill query per pending `arm_events` row (N+1 shape) rather
+  than one batched query — not a budget-breaker today given the
+  `arm_pending` partial index and the 30-minute window keeping the
+  pending set small, but worth batching if this ever scales to accounts
+  with many concurrently pending arms.
+- **Module 02 Slice 4 is now genuinely done.** Full suite: **755
+  passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean.
+
+**Next slice:** Module 02 Slice 5/6 — the confirm/freeze transaction
+(§4.6), the other named hook Slice 3 left as a documented no-op. **Now a
+firm requirement, not just a "revisit if it becomes a blocker"** (per the
+Slice 3 tester pass): it must either implement in-place block extension,
+or make the confirm/freeze transaction and close-out UI explicitly
+detect/block on a live `BLOCK_EXTENSION_DEFERRED` anomaly — otherwise a
+trade that genuinely closes across a resync boundary will sit
+`status: 'open'` forever with no path back into the normal lifecycle.
 
 ## Needs-your-input signal
 
@@ -1515,6 +1794,33 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-21 — Module 02 Slice 4 (arm-event matching §4.5,
+  `lib/ingestion/arm-matching.ts`/`lib/ingestion/trade-captures.ts`/
+  `lib/ingestion/sync.ts`). Five judgment calls reconciling §4.5's
+  pseudocode into code (full detail in `arm-matching.ts`'s own header,
+  summarized in "Current task" above): (1) "candidates" read as candidate
+  ENTRY FILLS per the pseudocode's literal `role = 'entry'` clause, which
+  is equivalent to "candidate trades identified by their entry fill"
+  since an entry fill maps 1:1 to its trade — reconciling two compatible
+  readings, not choosing between conflicting ones; (2) the unstated
+  "0 candidates, window not yet expired" case stays `pending` (no write),
+  per 00-foundation §6.2's silence principle and `arm_events`'
+  `match_state` DDL default; (3) the window boundary is a closed interval
+  on both ends; (4) side/direction matching reuses `trade-facts.ts`'s
+  existing buy→long/sell→short mapping verbatim, no second parallel
+  definition; (5) default WINDOW 30 min, overridable. A sixth, separate
+  judgment call in `sync.ts`'s own header: rather than tracking "new
+  entry fills written this run" as a distinct set, `matchPendingArmEvents`
+  re-evaluates every `pending` `arm_events` row against its instrument's
+  full current entry-fill history every sync, deliberately merging §4.1
+  step 8 with the open-ended `never_filled` sweep into one idempotent
+  pass. A real, load-bearing design finding, not a judgment call:
+  `trade_captures`' primary key is `(trade_id, field_id)` only (no
+  `moment` column in the key), so "never after lock" (§4.5/§4.7) is
+  enforced as an outright reject-on-conflict in `writeTradeCapture`, not
+  a versioned/append-only history — documented in `trade-captures.ts`'s
+  own header since it's the kind of thing someone will otherwise
+  "helpfully" try to fix into a `moment`-keyed composite PK later.
 - 2026-08-22 — Module 02 Slice 3 (sync pipeline §4.1 DB-writing
   orchestration, `lib/ingestion/sync.ts`). Four judgment calls reconciling
   §4.1's prose into code, all documented in the file's own header comment

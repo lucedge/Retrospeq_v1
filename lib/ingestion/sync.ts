@@ -25,6 +25,8 @@ import { deriveBlocks, type BlockDerivationFill } from './blocks';
 import { groupBlock, type GroupingInputFill } from './grouping';
 import { computeTradeFacts, type TradeFactsMember } from './trade-facts';
 import { computeServerDay } from './server-day';
+import { matchArmEvent, type ArmDirection, type CandidateEntryFill } from './arm-matching';
+import { lockPreEntryCaptures } from './trade-captures';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -130,11 +132,33 @@ import { computeServerDay } from './server-day';
  *    real value, so every trade this pipeline writes today has
  *    `risk_pct`/`initial_risk_pct`/`r_multiple` all `null`. Not a bug.
  *
+ * ## Step 8, arm-event matching (§4.5) — implemented this slice
+ *
+ * `matchPendingArmEvents` (below) runs once per `writeSyncOutcome` call,
+ * inside the same transaction as everything else, at the point §4.1's
+ * numbered list places it (after blocks/trades are recomputed, before the
+ * `sync_runs` row is written). **Judgment call, recorded per
+ * 00-foundation §12:** rather than tracking "new entry fills written THIS
+ * run" as a separate, narrower set, this function re-evaluates EVERY
+ * `arm_events` row for the account still `match_state = 'pending'`
+ * against the account's FULL current entry-fill history for that arm's
+ * own instrument, every sync. This deliberately conflates §4.1 step 8
+ * ("attempt arm-event matching for new entry fills") with the
+ * `never_filled` sweep the dispatch left as an open design choice ("a
+ * sync-triggered sweep is reasonable for this slice's scope") into ONE
+ * pass: cheap (bounded by the account's own pending-arm count, via the
+ * `arm_pending` partial index), trivially idempotent (re-evaluating an
+ * already-resolved `pending` arm a second time with the same fills
+ * produces the same `pending` result, a no-op write), and correct for
+ * both original goals — a fill that arrived on a PRIOR sync but was never
+ * matched (e.g. the arm was created after that sync already ran) is
+ * still found, not just fills that are brand-new this run. See
+ * `lib/ingestion/arm-matching.ts`'s own header for the pure decision
+ * logic and its judgment calls #1-#5.
+ *
  * ## Explicitly deferred (per this slice's own dispatch, not silently
  * dropped)
  *
- * - **Step 8, arm-event matching (§4.5).** No call to any matching logic
- *   exists here — see the inline comment at the hook point below.
  * - **Step 10, emitting events to Module 04/Module 07.** Neither module
  *   exists in this repo yet. Also worth noting: per §4.6, the REAL
  *   evaluation-freeze event fires at CONFIRM time, not sync time — the
@@ -216,6 +240,15 @@ export interface RunSyncResult {
    *  deliberately NOT acted on — see header judgment call #4. Empty array
    *  means none detected, never a sign that detection didn't run. */
   anomalies: string[];
+  /** §4.5 arm-event matching outcome counts for this sync run — see the
+   *  "Step 8" header section above. Zero across the board when the
+   *  account has no `pending` `arm_events` rows at all (not yet built:
+   *  the "arm a setup" UI, Module 03/08 territory — this repo has no way
+   *  to create one today, so these are 0 in every real sync until that
+   *  ships). */
+  armEventsMatched: number;
+  armEventsAmbiguous: number;
+  armEventsNeverFilled: number;
 }
 
 export type RunSyncOutcome = RunSyncResult | RunSyncSkippedResult;
@@ -569,10 +602,10 @@ async function writeSyncOutcome(
       anomalies.push(...result.anomalies);
     }
 
-    // Step 8 (§4.5 arm-event matching) -- EXPLICITLY DEFERRED to a later
-    // slice. Named hook, intentionally a no-op: a future slice adds
-    // something like `await matchArmEvents(client, account, newEntryFillIds)`
-    // here. New entry fills simply have no `arm_events` row matched today.
+    // Step 8 (§4.5 arm-event matching) -- see this file's header section
+    // "Step 8, arm-event matching (§4.5) -- implemented this slice" for
+    // why this call also subsumes the never_filled sweep.
+    const armEventCounts = await matchPendingArmEvents(client, account, windowTo);
 
     // Step 10 (emit events -> Module 04/Module 07) -- EXPLICITLY DEFERRED,
     // documented no-op: neither module exists in this repo yet. Per §4.6
@@ -614,8 +647,117 @@ async function writeSyncOutcome(
       tradesCreated,
       tradesUpdated: 0,
       anomalies,
+      armEventsMatched: armEventCounts.matched,
+      armEventsAmbiguous: armEventCounts.ambiguous,
+      armEventsNeverFilled: armEventCounts.neverFilled,
     };
   });
+}
+
+interface ArmEventMatchCounts {
+  matched: number;
+  ambiguous: number;
+  neverFilled: number;
+}
+
+interface PendingArmEventRow {
+  id: string;
+  instrument: string;
+  direction: string;
+  armed_at: string;
+  captures: Record<string, unknown> | null;
+}
+
+interface CandidateEntryFillRow {
+  fill_id: string;
+  trade_id: string;
+  side: 'buy' | 'sell';
+  filled_at: string;
+}
+
+/**
+ * §4.5's Step 8 -- see this file's header. Re-evaluates every `pending`
+ * `arm_events` row for this account against its own instrument's current
+ * entry-fill history and writes the resolved `match_state` (`matched` /
+ * `ambiguous` / `never_filled`), or leaves it untouched if still
+ * genuinely `pending`. On a match, also performs §4.5's pre-entry lock
+ * (`lockPreEntryCaptures`). `now` is the caller's own sync-time reference
+ * (`windowTo`), never `new Date()` called here directly -- same
+ * testability posture as the rest of this file.
+ */
+async function matchPendingArmEvents(client: PoolClient, account: AccountRow, now: Date): Promise<ArmEventMatchCounts> {
+  const counts: ArmEventMatchCounts = { matched: 0, ambiguous: 0, neverFilled: 0 };
+
+  const pendingRes = await client.query<PendingArmEventRow>(
+    `select id, instrument, direction, armed_at, captures
+       from retrospeq.arm_events
+      where account_id = $1 and match_state = 'pending'`,
+    [account.id],
+  );
+
+  for (const armRow of pendingRes.rows) {
+    // Candidate ENTRY fills for this arm's own instrument -- both physical
+    // `trade_fills.role = 'entry'` members and ADR-0001 synthetic
+    // `trade_events.kind = 'entry'` members (a flip-opened trade's entry
+    // is never a `trade_fills` row -- see `grouping.ts`'s `assignRoles`),
+    // scoped to this account. Mutually exclusive per member, so no UNION
+    // dedup concern.
+    const candidatesRes = await client.query<CandidateEntryFillRow>(
+      `select f.id as fill_id, t.id as trade_id, f.side, f.filled_at
+         from retrospeq.trade_fills tf
+         join retrospeq.trades t on t.id = tf.trade_id
+         join retrospeq.fills f on f.id = tf.fill_id
+        where tf.role = 'entry' and t.account_id = $1 and t.instrument = $2
+
+        union all
+
+       select f.id as fill_id, t.id as trade_id, f.side, f.filled_at
+         from retrospeq.trade_events te
+         join retrospeq.trades t on t.id = te.trade_id
+         join retrospeq.fills f on f.id = te.fill_id
+        where te.kind = 'entry' and te.fill_id is not null and t.account_id = $1 and t.instrument = $2`,
+      [account.id, armRow.instrument],
+    );
+
+    const candidates: CandidateEntryFill[] = candidatesRes.rows.map((r) => ({
+      fillId: r.fill_id,
+      tradeId: r.trade_id,
+      instrument: armRow.instrument,
+      side: r.side,
+      filledAt: r.filled_at,
+    }));
+
+    const result = matchArmEvent(
+      { instrument: armRow.instrument, direction: armRow.direction as ArmDirection, armedAt: armRow.armed_at },
+      candidates,
+      now,
+    );
+
+    if (result.state === 'matched') {
+      await client.query(`update retrospeq.arm_events set match_state = 'matched', matched_trade_id = $2 where id = $1`, [
+        armRow.id,
+        result.tradeId,
+      ]);
+      await lockPreEntryCaptures(client, {
+        tradeId: result.tradeId,
+        userId: account.user_id,
+        captures: armRow.captures ?? {},
+      });
+      counts.matched += 1;
+    } else if (result.state === 'ambiguous') {
+      await client.query(`update retrospeq.arm_events set match_state = 'ambiguous', match_candidates = $2 where id = $1`, [
+        armRow.id,
+        JSON.stringify({ tradeIds: result.candidateTradeIds, fillIds: result.candidateFillIds }),
+      ]);
+      counts.ambiguous += 1;
+    } else if (result.state === 'never_filled') {
+      await client.query(`update retrospeq.arm_events set match_state = 'never_filled' where id = $1`, [armRow.id]);
+      counts.neverFilled += 1;
+    }
+    // 'pending' -- no write, judgment call #2 in arm-matching.ts's header.
+  }
+
+  return counts;
 }
 
 interface RecomputeInstrumentResult {
@@ -903,6 +1045,9 @@ export async function runSync(
       tradesCreated: 0,
       tradesUpdated: 0,
       anomalies: [],
+      armEventsMatched: 0,
+      armEventsAmbiguous: 0,
+      armEventsNeverFilled: 0,
     };
   }
 
