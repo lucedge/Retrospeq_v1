@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1 (schema + block derivation, §4.2) and 2 (grouping engine §4.3 + derived trade facts §4.4) are both done — coded, tested, QA-reviewed (security review deferred/not-warranted for Slice 2's pure-function scope, see decision log). Slices 3-7 (sync pipeline, trade events/arm-matching, confirm/freeze transaction, corrections + manual entry, UI) remain — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1 (schema + block derivation, §4.2), 2 (grouping engine §4.3 + derived trade facts §4.4), and 3 (sync pipeline §4.1 DB-writing orchestration) are all done — coded, tested, security-reviewed (mandatory pass, PASS), QA-reviewed. A concrete follow-up requirement for Slice 4/6 is tracked: a trade that closes across a resync boundary currently sits `status: 'open'` indefinitely (`BLOCK_EXTENSION_DEFERRED`) until confirm/freeze or block-extension logic addresses it — see "Current task". Slices 4-7 (trade events/arm-matching §4.5, confirm/freeze transaction §4.6, corrections + manual entry §4.7/§4.8, UI) remain |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -1182,13 +1182,312 @@ resting-baseline excursion does.
   pure grouping/facts math today would mean reviewing arithmetic, not
   security surface.
 
-**Next slice:** the Module 02 sync pipeline (§4.1) against
-`BrokerAdapter`/`fixture-adapter.ts`, trade-event/arm-matching (§4.5),
-and the confirm/freeze transaction (§4.6) — this is where `trades`/
-`trade_fills`/`trade_events` rows actually get written for the first
-time, which is also where the standing infra-gap note above (erasure
-flow not yet setting the `retrospeq.erasure_in_progress` escape hatch)
-needs to be fixed, per that note's own instruction.
+**Module 02 Slice 3 (sync pipeline §4.1 DB-writing orchestration) —
+genuinely done: coded, tested, security-reviewed (PASS, mandatory per
+this slice's own dispatch since it decrypts credentials and writes real
+financial data via service-role), QA-reviewed (PASS). See the full
+review writeup further below.** This is the first slice
+in Module 02 where `trades`/`trade_fills`/`trade_events`/`blocks`/`fills`/
+`sync_runs`/`coverage_gaps` rows actually get written for real, gluing
+Slices 1-2's pure functions (`blocks.ts`/`grouping.ts`/`trade-facts.ts`)
+into one DB-writing pipeline.
+
+- `lib/ingestion/sync.ts` — `runSync(accountId, adapter, options)`. Total
+  for every `trading_accounts.platform` (never throws for a manual
+  account — returns `{ skipped: true, reason: 'manual_account' }`, since
+  §4.8 manual entry has no credential and doesn't sync through this path
+  at all). Runs entirely under `withServiceRoleConnection` (this is a
+  trusted backend process, not a client request, per the dispatch), every
+  query explicitly scoped to the one `accountId`/`userId` in play. Writes
+  a real `sync_runs` row (`ok | partial | failed`, `fills_seen`,
+  `fills_new`, `window_from/to`, `tier`, `trigger`, `error_code`) on every
+  call, including failures (credential/adapter/KMS errors all map to a
+  named `SyncErrorCode` rather than throwing past the caller).
+- **Judgment calls made reconciling §4.1's prose into code (all
+  documented in `sync.ts`'s own header comment, per this slice's
+  dispatch instruction — flagged here for visibility, not repeated in
+  full):**
+  1. Overlap window default: 6 hours (`DEFAULT_OVERLAP_MS`), inside the
+     dispatch's own suggested 1-24h range, overridable.
+  2. `since` on an account's first-ever sync (no prior `sync_runs` row):
+     `trading_accounts.connected_at` (falling back to `created_at`), no
+     overlap subtraction (nothing to overlap against yet).
+  3. Coverage-gap detection (step 5): any positive gap between
+     `window_from` and the earliest returned fill is recorded — EXCEPT on
+     an account's first-ever sync, which is deliberately EXEMPT. This
+     exemption is a real correctness fix found while testing, not just a
+     judgment call: without it, `window_from = connected_at` (routinely
+     well before a brand-new account's first real trade) would make
+     EVERY first sync of EVERY account falsely report a coverage gap the
+     moment it found its first fill — a false positive on the common
+     case, not the rare one.
+  4. **Block/trade recompute scope (steps 6-9) — the single biggest scope
+     decision in this slice.** An (account, instrument) span that already
+     has ANY matching `blocks` row (matched by exact `opened_at` instant)
+     is left COMPLETELY UNTOUCHED on resync — no write of any kind,
+     confirmed or not. Only genuinely brand-new blocks (no existing row
+     at all) are derived, grouped, and written. This trivially and
+     unambiguously satisfies "never touch a confirmed trade" (nothing
+     pre-existing is ever touched, full stop), at the real, deliberate
+     cost of NOT implementing "append new fills to an already-open
+     unconfirmed block across a resync boundary" in this slice — a
+     genuine, known limitation, not silently dropped. Building that
+     safely turned out to be a much larger feature than it first looked:
+     `trades`' own delete trigger (ADR 0011) makes ANY trade backed by a
+     real (non-`manual:`) fill permanently non-deletable regardless of
+     `confirmed_at`, so "recompute" can never mean "delete and re-derive
+     from scratch" for a real account the way the pure
+     `groupBlock`/`deriveBlocks` functions do in isolation — a real,
+     in-place, matching/updating regrouping algorithm is separate,
+     larger future work. When a matched existing block's freshly
+     recomputed fill membership includes fills not yet reflected in its
+     stored trade(s), that's detected and surfaced in the result's
+     `anomalies` array (+ `console.warn`) as `FILL_LATE_ARRIVAL`
+     (confirmed block — §9's own named error code) or
+     `BLOCK_EXTENSION_DEFERRED` (unconfirmed, just out of scope) — never
+     a silent rewrite either way.
+- **A real, load-bearing schema gap found and fixed, not invented:**
+  `trading_accounts` had no equity/balance column at all, and
+  `BrokerAdapter` has no method that returns one — but §4.4's
+  `risk_pct`/`initial_risk_pct`/`r_multiple` formulas all divide by
+  account equity. `supabase/migrations/20260822020000_trading_accounts_starting_equity.sql`
+  adds `starting_equity numeric(20,8)`, nullable, no default (applied to
+  and verified against the live project). `trade-facts.ts`'s
+  `TradeFactsAccountContext.startingEquity` widened from `string` to
+  `string | null` — when null (every real synced account today, since
+  nothing populates it yet), `computeTradeFacts` treats it exactly like
+  the existing "stop unknown" case: risk/R fields all `null`, "not
+  applicable," never a fabricated value. Full reasoning, alternatives
+  considered, and consequences in
+  `docs/adr/0013-trading-accounts-starting-equity-nullable.md`.
+- **The tracked infra-gap fix, done as instructed:**
+  `lib/broker/accounts-repository.ts`'s `deleteAllTradingAccountsForUser`
+  now calls `select set_config('retrospeq.erasure_in_progress', 'true', true)`
+  as the first statement inside its `withServiceRoleConnection` callback,
+  before the `delete from trading_accounts` — same transaction, so
+  `forbid_broker_confirmed_trade_delete` (ADR 0011) stands down for this
+  one erasure-execution transaction only. **Proven two ways, not just
+  claimed:** (1) a new live-DB test in `lib/privacy/__tests__/erasure.live.test.ts`
+  seeds a real broker-confirmed trade (block + non-manual fill + trade
+  with `confirmed_at` set) and asserts `executeErasure` genuinely
+  succeeds and removes it; (2) the fix was TEMPORARILY reverted in a
+  scratch check (never committed) and the same test was confirmed to
+  fail with exactly the predicted error (`"trades: cannot delete trade
+  ... after freeze"`) before being restored — the "would have failed
+  before" claim is verified, not assumed.
+- **Golden-fixture parity proof (00-foundation §9.3's mandatory fixture
+  replay, applied to the DB-writing orchestration specifically), against
+  the live DB:** `lib/ingestion/__tests__/sync.live.test.ts` drives
+  `runSync` end-to-end through a `createFixtureBrokerAdapter`-wrapped
+  fixture (`simple_daytrades`, `scaled_in_out`, `flip_no_flat` — 3 of the
+  mandatory 2-3, including the ADR-0001 flip/`trade_events` case) and
+  asserts the REAL Postgres `trades` rows it produces match each
+  fixture's `expected.json` exactly (matched by fill-membership
+  signature, same convention `golden-fixtures.test.ts` already
+  established), including risk/R fields (fixtures always supply a real
+  `starting_equity`, so this also proves ADR 0013's non-null path). Also
+  proves re-running the identical sync is a true no-op (dedup,
+  00-foundation §6.4).
+- **The "never touch a confirmed trade" invariant — proven live, not
+  just unit-tested:** seeds a real confirmed block/trade/fill pair
+  directly, then syncs a genuinely late-arriving fill landing inside that
+  confirmed span. Proves the fill IS captured in `fills` (append-only,
+  unconditional) but the block/trade rows are byte-for-byte unchanged, no
+  new `trade_fills`/`trade_events` row references the late fill, and the
+  anomaly is surfaced (`FILL_LATE_ARRIVAL`) rather than silently dropped.
+- Also live-tested: coverage-gap detection on a genuine steady-state
+  (non-first) sync writes a real `coverage_gaps` row and `status =
+  'partial'`; cross-account isolation during a two-account, two-user sync
+  scenario (no fill/trade ever crosses accounts).
+- Tests: 26 unit tests (`lib/ingestion/__tests__/sync.test.ts` — pure
+  helpers: window/gap/scrub/error-classification/tier-normalization logic,
+  plus mocked-DB control-flow tests for the manual short-circuit,
+  account-not-found, no-credential, and adapter-error-mapping paths — a
+  deliberate scoping decision, documented in that file's own header, NOT
+  to hand-roll an in-memory Postgres stand-in for the write phase, since
+  that risks diverging from real Postgres exactly where correctness
+  matters most; the write phase is proven live instead), 7 live-DB tests
+  in `sync.live.test.ts` (6 passing + 1 inert skip-guard, env present),
+  plus 2 new unit tests in `trade-facts.test.ts` for the null-equity
+  branch ADR 0013 added. `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+  allowlist updated for the one new `withServiceRoleConnection(` call
+  site. Full repo suite: **715 passing**, 11 skip-guard fallbacks (env
+  present, nothing actually skipped). Coverage: `sync.ts` 100% line /
+  92.1% branch (comfortably above the 90%-line engine bar); repo-wide
+  99.19% lines / 94.4% branch. `npm run build`, `npx tsc --noEmit`, and
+  `npm run lint` all clean (lint: 0 errors, the same 17 pre-existing
+  `_prefixed`-unused-param warnings already noted elsewhere, none new).
+
+**retrospeq-tester independent pass, 2026-08-22 — Slice 3 (`sync.ts`
+§4.1). Re-ran everything from scratch, did not trust the coder's
+reported numbers.** Confirmed the coder's own report exactly: 715
+passing / 11 skip-guard fallbacks / 0 failed before I touched anything,
+`sync.ts` 100% line / 92.1% branch, `npm run build` / `npm run lint` /
+`npx tsc --noEmit` all clean. Then found and closed a real coverage gap,
+and formed an independent judgment on judgment call #4:
+
+- **The one meaningfully untested branch, found by reading the
+  uncovered-branch HTML report, not just the percentage:** of `sync.ts`'s
+  six uncovered branches at 92.1%, five were genuinely defensive
+  (invariant-violation throws that should never fire, a `?? {}` fallback
+  on a field the `Fill` type never actually omits, an unreachable ternary
+  arm in a single-element reduce). The sixth was **not** defensive: `code
+  = isConfirmed ? 'FILL_LATE_ARRIVAL' : 'BLOCK_EXTENSION_DEFERRED'`'s
+  false branch — i.e. the entire `BLOCK_EXTENSION_DEFERRED` code path,
+  judgment call #4's own centerpiece — had **zero test coverage**. The
+  existing live-DB test proved the CONFIRMED case (`FILL_LATE_ARRIVAL`)
+  byte-for-byte; nothing proved the unconfirmed case actually detects and
+  reports correctly rather than, say, silently returning without
+  populating `anomalies` at all. Added three new live-DB tests to
+  `sync.live.test.ts` closing this: (1) a still-open unconfirmed block
+  gains an "add" fill on a second sync — asserts `BLOCK_EXTENSION_DEFERRED`
+  fires, block/trade byte-for-byte unchanged, `status: 'partial'`; (2) the
+  **sharper** case — a position that genuinely FLATTENS via its exit fill
+  arriving on a later sync stays permanently `status: 'open'`,
+  `closed_at: null`, `exit_price_avg: null` in `trades`, because a matched
+  block is matched by `opened_at` alone, regardless of whether the new
+  fill would have closed it. This is the load-bearing practical
+  consequence of judgment call #4 and it was previously asserted only in
+  prose, never in a test. `sync.ts` branch coverage: **92.1% → 95.72%**
+  (100% line unchanged). Also added a live test for the
+  `connected_at`-null → `created_at`-fallback branch (judgment call #2's
+  own documented fallback, likewise previously untested) and a live test
+  for mixed-batch dedup (one already-known fill + one genuinely new fill
+  for a different instrument in the same sync call, plus a third identical
+  re-sync proving full no-op) — the existing dedup proof was only ever
+  "re-run the exact same fully-duplicate batch," never a batch mixing old
+  and new. **Full suite after additions: 719 passing, 11 skipped, 0
+  failed** (up from 715 — 4 new tests, all live-DB). `sync.ts` coverage:
+  100% line / 95.72% branch / 88.88% funcs (the two uncovered functions
+  are the never-exercised real-KMS `wrapDataKey`/`unwrapDataKey` lazy
+  wrappers — expected, matches the standing no-KMS infra gap, not a test
+  gap). Repo-wide: 99.19% lines / 94.91% branch.
+- **Independent judgment on judgment call #4 (asked to form my own, not
+  just accept the coder's framing): accept the SCOPE as written — deferring
+  the code that never touches an existing block is the right v0 call,
+  it never silently drops or corrupts data, and it's now actually tested,
+  not just documented — but do not accept the CONSEQUENCE as adequately
+  flagged.** The header comment frames this primarily around "gains new
+  fills... does NOT get its trade updated" — technically correct but
+  undersells the sharpest case: a trade that is really, actually closed
+  (flat) will sit as `status: 'open'` in the database **forever**, with no
+  mechanism in this repo today that will ever revisit it, because a
+  matched block is matched by `opened_at` alone and is never re-examined
+  once it exists — not on the next sync, not on the hundredth. This
+  matters concretely for Module 02 §4.6 (confirm/freeze, not yet built,
+  Slice 6): the auto-confirm-after-7-days rule only fires for trades with
+  `closed_at` set, so a trade stuck `open` this way will never
+  auto-confirm and will never appear correctly on a close-out screen
+  either — it's not merely "missing some stats," it's a trade that never
+  resolves through the normal lifecycle at all unless something new
+  (in-place block-extension, or an explicit manual split/join touching it)
+  is built before real users hit this. **Flagging as a concrete
+  requirement for whoever scopes Slice 4/6, not just a "known
+  limitation" to note in passing:** either (a) implement in-place block
+  extension before Slice 6 ships, or (b) have the confirm/freeze
+  transaction and the close-out UI explicitly detect and surface trades
+  with a live `BLOCK_EXTENSION_DEFERRED` anomaly (similar to how a
+  coverage gap already blocks close-out) rather than letting them sit
+  invisibly stuck. This is now a live-DB-tested, reproducible fact about
+  the current code (see the "sharpest practical edge" test above), not a
+  theoretical concern.
+- **Security-relevant scan (for the mandatory security-reviewer pass that
+  follows this one, not a substitute for it):** traced `credentialInput`/
+  `plaintext` through `buildCredentialInput` and `runSync`'s `try` block —
+  the decrypted secret is consumed exactly once by `adapter.connect()`
+  and never appears in a `console.*` call, a DB write, or the returned
+  `RunSyncResult`/`RunSyncSkippedResult` shape anywhere in this file.
+  `classifySyncError`'s `catch` block logs/persists only the mapped
+  `SyncErrorCode` enum, never the raw `err` (no vendor message ever
+  reaches `sync_runs.error_code` or a log line). `AccountHandle` (the
+  object that does cross the `adapter.connect()` boundary back into this
+  file) is typed with only `adapterId`/`providerAccountRef`/
+  `verifiedReadonly` — no credential-shaped field exists for a leak to
+  hide in. No new finding beyond what the coder's own header already
+  documents; this is a second, independent look at the same surface.
+- No RLS work needed from this pass — Slice 3 wrote to tables (`fills`,
+  `blocks`, `trades`, `trade_fills`, `trade_events`, `sync_runs`,
+  `coverage_gaps`) whose RLS was already established and verified in
+  Slices 1-2 (`lib/supabase/__tests__/ingestion-schema.rls.test.ts`,
+  already in the 74-file suite this pass re-ran); this slice added no new
+  table.
+- `docs/runbook.md`: updated the existing "Any credential decryption
+  failure" and "Every credentialed connect attempt fails because KMS
+  isn't configured" entries to reflect that the sync worker is now real
+  (both were written "ahead of the worker existing" and were stale the
+  moment this slice landed); added a new "Sync failure rate > 5% over 15
+  min" entry (00-foundation §7.3) documenting the real, reachable
+  `sync_runs.status = 'failed'`/`error_code` signal and today's expected
+  100%-KMS-gap baseline for credentialed accounts.
+- `docs/adr/0013-trading-accounts-starting-equity-nullable.md` — the one
+  new ADR this slice needed (a genuine missing-dependency gap between
+  Module 01's schema and Module 02's formulas, not a 00-foundation
+  convention deviation, but still "the decision most likely to be
+  revisited by someone who does not know why it was made," per Module 02
+  §14's own documentation posture).
+- **Explicitly deferred, per this slice's own dispatch, not silently
+  dropped:** step 8 arm-event matching (§4.5) — a named, commented hook
+  point exists in `sync.ts`, no matching logic implemented; step 10
+  emitting events to Module 04/Module 07 — neither module exists yet,
+  and per §4.6 the real evaluation-freeze event belongs to the
+  confirm/freeze transaction anyway, not sync time; the actual
+  cron/API-route/UI trigger surface that decides which `trigger` value to
+  pass and calls `runSync` — this slice only makes `runSync` correctly
+  accept and record whichever of `'scheduled' | 'on_demand' | 'connect'`
+  a caller passes.
+- **Not built in this slice, flagged as a genuine, known limitation (see
+  judgment call #4 above):** in-place recompute of an already-open,
+  unconfirmed block that gains new fills across a resync boundary (a
+  still-building scaled position, synced twice while still open) — a
+  candidate for a dedicated follow-up slice once needed, not a forgotten
+  requirement.
+- **retrospeq-security-reviewer: PASS, no findings, 2026-08-21.** All six
+  items from the dispatch verified directly against code, not trusted
+  from doc comments: (1) credential handling — `plaintext` never leaves
+  `buildCredentialInput`'s stack beyond `adapter.connect()`, no
+  console/log/error/`sync_runs.error_code` path ever carries it,
+  `scrubRawPayload` applied unconditionally on the one fills-insert path
+  with a substring-match fragment list that also catches compound keys
+  like `access_token`; (2) every service-role query in `sync.ts`
+  explicitly scopes to `account_id`/`user_id` — no unscoped query found;
+  (3) the erasure escape hatch's `set_config(..., true)` is genuinely
+  transaction-local (Postgres guarantee, reverts on commit or rollback,
+  cannot leak to a later operation on a reused pooled connection); (4)
+  every query is parameterized, no string-interpolated SQL from
+  fill-derived/adapter-influenced data anywhere; (5) decrypt/KMS failures
+  are caught before any table write, no partial-success `sync_runs` row
+  possible; (6) confirmed by repo-wide grep — nothing outside this
+  pipeline and its own tests reads `trades` today, so the
+  `BLOCK_EXTENSION_DEFERRED` stuck-open-trade gap (next paragraph) is a
+  real functional gap but not currently an exploitable or misleading one.
+- **retrospeq-qa: PASS, with one process fix applied.** Confirmed the
+  null-propagation composition between ADR 0012 (percentage-number
+  convention) and ADR 0013 (nullable `starting_equity`) is correct —
+  `trade-facts.ts` short-circuits to `null` risk fields before the ×100
+  step, never `NaN` or a fabricated zero. Confirmed "never touch a
+  confirmed trade" is genuinely enforced by construction (the skip in
+  `recomputeInstrument` is unconditional on any existing block match, not
+  conditioned on `confirmed_at`) and proven by a real, non-tautological
+  live-DB test. Confirmed no rate-limiting gap (no Server Action/API
+  route calls `runSync` yet in this slice — nothing to throttle). One
+  process fix: this PROGRESS.md section hadn't yet recorded the
+  security-reviewer PASS above at the time QA reviewed — now corrected.
+
+**Module 02 Slice 3 is now genuinely done** — coded, independently
+tested (tester found and closed a real coverage gap on the
+`BLOCK_EXTENSION_DEFERRED` path), security-reviewed (PASS), QA-reviewed
+(PASS). 719 tests passing, 11 skipped, 0 failed. `sync.ts` 100% line /
+95.72% branch. Clean build/lint/tsc.
+
+**Next slice:** Module 02 Slice 4 — trade-event/arm-matching (§4.5) and
+the confirm/freeze transaction (§4.6), the two pieces this slice
+explicitly left as named, commented hooks. **Now a firm requirement, not
+just a "revisit if it becomes a blocker"** (per the tester pass above):
+Slice 4/6 must either implement in-place block extension, or make the
+confirm/freeze transaction and close-out UI explicitly detect/block on a
+live `BLOCK_EXTENSION_DEFERRED` anomaly — otherwise a trade that
+genuinely closes across a resync boundary will sit `status: 'open'`
+forever with no path back into the normal lifecycle.
 
 ## Needs-your-input signal
 
@@ -1208,7 +1507,7 @@ the owner — never fake it, always flag it."
 - [ ] Broker integration vendor undecided (00-foundation §10). Build against `BrokerAdapter` only; do not let a vendor type leak past the adapter.
 - [ ] No transactional email provider configured (00-foundation §10's "Email provider" row — a separate dependency from Supabase Auth's own, already-broken mailer). `lib/privacy/email-provider.ts` (Module 01 stories 5.x, 2026-08-21) throws `EmailProviderNotConfiguredError` unconditionally rather than faking a send. Not currently blocking anything real: `lib/privacy/erasure.ts`'s confirmation email is best-effort and never gates the actual deletion, so this is a standing gap, not a stalled task — see that file's own doc comment. Needs an owner-created account with a real provider (Resend/SendGrid/Postmark/etc) plus its API key wired into env vars.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
-- [ ] **Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's ingestion schema: `lib/privacy/erasure.ts`'s `deleteAllTradingAccountsForUser` deletes `trading_accounts` directly, which now cascades into `retrospeq.trades` (via `ON DELETE CASCADE`) — Postgres fires row-level `BEFORE DELETE` triggers on cascade-originated deletes too, and `trades` now has `forbid_broker_confirmed_trade_delete` (docs/adr/0011). The trigger has an escape hatch (`set_config('retrospeq.erasure_in_progress', 'true', true)`, transaction-local) specifically for this, but `erasure.ts` does not set it — it was written before Module 02's tables existed. **Inert today** (no code path writes a real `trades` row yet — no sync pipeline, no grouping engine), so nothing is broken in practice right now. **Must be fixed as part of whichever slice adds the first real trade-write path** (the sync pipeline or the grouping-engine confirm transaction) — that slice needs to also extend `lib/privacy/erasure.ts` to set the escape hatch before deleting `trading_accounts`/`profiles`, mirroring `docs/adr/0010`'s existing "explicit delete order, not cascade reliance" posture. Tracked here so it surfaces in the build order rather than being rediscovered via a failing erasure test later.
+- [x] ~~Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.~~ **Fixed 2026-08-22, Module 02 Slice 3** — `lib/broker/accounts-repository.ts`'s `deleteAllTradingAccountsForUser` now sets `retrospeq.erasure_in_progress` (transaction-local `set_config`) before deleting `trading_accounts`, so `forbid_broker_confirmed_trade_delete`'s escape hatch (docs/adr/0011) actually fires for real erasure executions. Verified two ways: (1) a new live-DB test (`lib/privacy/__tests__/erasure.live.test.ts`, "succeeds for a user with a real broker-confirmed trade") seeds a genuine broker-confirmed trade and proves `executeErasure` now succeeds; (2) the fix was temporarily reverted in a scratch, never-committed check and the same test was confirmed to fail with exactly the predicted trigger error first, then restored — not just assumed fixed. This was the concrete trigger for this slice needing the first real Module 02 trade-write path (`lib/ingestion/sync.ts`), exactly as this entry predicted.
 - [ ] **`C:` drive is at 0 bytes free on this machine, and Vitest's own OS-temp usage isn't covered by the existing npm-cache redirect.** The 2026-08-19 decision-log entry redirected npm's cache/tmp to `E:/npm-cache`/`E:/npm-tmp`, but `npx vitest run` (default `TEMP`/`TMP`) still fails outright with `ENOSPC` — found 2026-08-21 during an independent test pass on Module 02 Slice 2. Worked around per-invocation with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest" npx vitest run ...` (directory created and cleaned up after each run). Not fixed at the environment level — that would mean either freeing real space on `C:` (owner action, not an agent one) or setting `TEMP`/`TMP` machine-wide/in a shared config, which risks affecting unrelated projects on this machine (`E:\LuceEdge`, `Pesa Hi Pesa`) the same way the npm-cache redirect note already flagged. Any agent running `vitest` directly (not through a wrapper that already sets this) should apply the same override rather than concluding the suite doesn't run.
 - [ ] **Repo-wide: several RLS INSERT/"for all" policies check `user_id = auth.uid()` but not that referenced foreign keys (`account_id`, `trade_id`, etc.) actually belong to that same user.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's `fills`/`trade_events` INSERT policies and `trades`/`arm_events`/`trade_captures`'s "for all" policies — a client could theoretically INSERT a row self-assigning `user_id` correctly while pointing `account_id`/`trade_id` at a row it doesn't actually own. Confirmed this is not new to Module 02 — the same shape exists on Module 01's `trading_accounts_owner`/`account_credentials_owner_insert` policies too. Not fixed now (out of scope for the slice that found it, and no test currently proves it's exploitable end-to-end — the referenced row would need to belong to another real user, and the practical blast radius depends on what a client could actually DO with a cross-user-linked row it can't otherwise read, which for most of these tables is "nothing visible," since the owning row still isn't selectable by the attacker afterward). Worth a dedicated pass adding `and exists (select 1 from retrospeq.trading_accounts where id = account_id and user_id = auth.uid())`-shaped checks (or equivalent) across every affected policy, repo-wide, rather than patching table-by-table as each is touched.
 
@@ -1216,6 +1515,57 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-22 — Module 02 Slice 3 (sync pipeline §4.1 DB-writing
+  orchestration, `lib/ingestion/sync.ts`). Four judgment calls reconciling
+  §4.1's prose into code, all documented in the file's own header comment
+  (full detail there, summarized in "Current task" above, not repeated a
+  third time here): (1) overlap window default 6h; (2) `since` on a
+  first-ever sync is `connected_at`, no overlap subtraction; (3)
+  coverage-gap detection is skipped entirely on an account's first-ever
+  sync — a real correctness fix (not just a judgment call) found while
+  testing: without this exemption, `window_from = connected_at` would
+  make EVERY first sync of EVERY account falsely report a gap the moment
+  it found its first real fill; (4) block/trade recompute (§4.1 steps
+  6-9) is scoped to ONLY brand-new blocks in this slice — any block that
+  already has an existing DB row (confirmed or not) is left completely
+  untouched on resync, deferring "append new fills to an already-open
+  unconfirmed block across a resync boundary" to a future slice. This
+  is the single biggest scope decision in the slice: it trivially and
+  unambiguously satisfies "never touch a confirmed trade" (the mandatory
+  invariant), at the cost of not handling the in-place-extension case yet
+  — building that safely turned out to require a real matching/updating
+  regrouping algorithm, not a simple recompute, because `trades`' own
+  delete trigger (ADR 0011) makes any broker-backed trade permanently
+  non-deletable regardless of `confirmed_at`, so "recompute" can never
+  mean delete-and-rederive for a real account the way the pure
+  `deriveBlocks`/`groupBlock` functions do in isolation.
+- 2026-08-22 — A real, load-bearing schema gap found while building the
+  above: `trading_accounts` has no equity/balance column, and
+  `BrokerAdapter` has no method returning one, but Module 02 §4.4's
+  `risk_pct`/`initial_risk_pct`/`r_multiple` formulas all divide by
+  account equity. Resolved by adding `trading_accounts.starting_equity`
+  (nullable, no default,
+  `supabase/migrations/20260822020000_trading_accounts_starting_equity.sql`)
+  and widening `trade-facts.ts`'s `TradeFactsAccountContext.startingEquity`
+  to `string | null` — null is treated exactly like the existing "stop
+  unknown" case (risk/R fields all null, never fabricated). Given its own
+  ADR (`docs/adr/0013-trading-accounts-starting-equity-nullable.md`) since
+  it's the kind of decision "most likely to be revisited by someone who
+  does not know why it was made," per Module 02 §14's own documentation
+  posture — not a 00-foundation convention deviation, a genuine
+  missing-dependency gap between two modules' specs.
+- 2026-08-22 — Fixed the standing tracked infra gap: `lib/privacy/erasure.ts`'s
+  `deleteAllTradingAccountsForUser` (in `lib/broker/accounts-repository.ts`)
+  now sets the `retrospeq.erasure_in_progress` escape hatch before
+  deleting `trading_accounts`, so ADR 0011's trigger stands down correctly
+  for real erasure executions — this was inert until this same slice
+  built the first real Module 02 trade-write path, exactly as the
+  original infra-gap note predicted. Proven live (a real broker-confirmed
+  trade seeded, erasure succeeds) and proven to have genuinely been
+  broken before the fix (temporarily reverted in a scratch,
+  never-committed check; the same test failed with exactly the predicted
+  trigger error; fix restored) — see "Current task" above for the
+  live-DB test details.
 - 2026-08-21 — Closing out the standing Module 04+08-reorder offer
   explicitly, so it's on record as considered-and-declined for this
   slice too, not silently missed. The owner's conditional authorization

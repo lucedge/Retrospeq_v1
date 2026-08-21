@@ -46,6 +46,20 @@
  *    special case for (b) — it falls out of treating `stopAtFill` at face
  *    value.
  *
+ * ## `startingEquity` may be `null` (added for the sync-pipeline slice,
+ * `docs/adr/0013-trading-accounts-starting-equity-nullable.md`)
+ *
+ * Every golden fixture supplies a real `starting_equity`, but a REAL
+ * synced account's `trading_accounts.starting_equity` column is nullable
+ * with no default (no `BrokerAdapter` method returns account equity yet —
+ * see the ADR). Treated exactly like the "stop unknown" case already
+ * documented below: when `account.startingEquity` is `null`,
+ * `initialRiskPct`/`riskPct`/`rMultiple` are all `null` — "not
+ * applicable," never a defaulted zero or a fabricated equity value. This
+ * is a widening of the type, not a behavior change for any existing
+ * caller (every golden fixture and every existing test always passes a
+ * real string).
+ *
  * ## A real, documented deviation from 00-foundation §2.3 (not a bug —
  * see `docs/adr/0012-risk-pct-stored-as-percentage-number.md`)
  *
@@ -95,8 +109,8 @@ export interface TradeFactsMember {
 }
 
 export interface TradeFactsAccountContext {
-  /** Fixed per account for this computation — not compounding trade-to-trade (`fixtures/README.md` §3's documented simplification). */
-  startingEquity: string;
+  /** Fixed per account for this computation — not compounding trade-to-trade (`fixtures/README.md` §3's documented simplification). `null` when the account has no known equity yet (real synced accounts today — see this file's header re: docs/adr/0013) — risk/R fields become null, not a computed-against-zero garbage value. */
+  startingEquity: string | null;
   currency: string;
   /** Default `'1'` — no lot/contract-size reference table exists yet (Module 02 §10's own open dependency). */
   contractValue?: string;
@@ -161,11 +175,15 @@ export function computeTradeFacts(members: TradeFactsMember[], account: TradeFac
   const firstEntryPrice = new Decimal(first.price);
   const firstEntryVolume = new Decimal(first.volume);
   const contractValue = new Decimal(account.contractValue ?? '1');
-  const equity = new Decimal(account.startingEquity);
+  // `null` -- no known account equity (real synced accounts today, see
+  // this file's header re: docs/adr/0013) -- treated the same as "stop
+  // unknown" below: risk/R fields become null, never computed against a
+  // fabricated equity value.
+  const equity = account.startingEquity !== null ? new Decimal(account.startingEquity) : null;
 
   let initialRiskFraction: Decimal | null = null;
   let riskFraction: Decimal | null = null;
-  if (initialStop !== null) {
+  if (initialStop !== null && equity !== null) {
     const stopDistance = firstEntryPrice.minus(initialStop).abs();
     initialRiskFraction = stopDistance.mul(firstEntryVolume).mul(contractValue).div(equity);
     riskFraction = stopDistance.mul(peakVolume).mul(contractValue).div(equity);
@@ -186,7 +204,9 @@ export function computeTradeFacts(members: TradeFactsMember[], account: TradeFac
 
   let rMultiple: Decimal | null = null;
   if (initialRiskFraction !== null && !initialRiskFraction.isZero()) {
-    rMultiple = realizedPnl.div(initialRiskFraction.mul(equity));
+    // `equity` is guaranteed non-null here: `initialRiskFraction` is only
+    // ever assigned inside the `equity !== null` branch above.
+    rMultiple = realizedPnl.div(initialRiskFraction.mul(equity as Decimal));
   }
 
   const scaleOutCount = members.filter((m) => m.role === 'trim' || m.role === 'exit').length;

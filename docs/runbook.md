@@ -80,21 +80,37 @@ credential the system can no longer decrypt is functionally identical
 to a broker connection that is silently dead, and the trader has no way
 to know sync has stopped without this being surfaced.
 
-**Where this fires today:** nowhere yet in a running system — this
-repo has no live sync worker (Module 02, not yet built) and no real
-external KMS (`createKmsMasterKeyProvider` in the same file
-unconditionally throws `KmsNotConfiguredError` until one exists — see
-PROGRESS.md "Infra gaps"). This entry documents the alerting condition
-ahead of that worker existing, per this module's own documentation
-requirement (Module 01 §14: "runbook entries for credential decryption
-failure").
+**Where this fires today (updated 2026-08-22, Module 02 Slice 3 —
+`lib/ingestion/sync.ts`):** the sync worker's write path now exists and
+genuinely calls `decryptCredential` for every non-manual account sync
+(`buildCredentialInput` in `sync.ts`) — this is no longer a
+forward-looking "ahead of the worker existing" note. In practice today
+every such call fails BEFORE reaching a real decrypt attempt, because
+`createKmsMasterKeyProvider()` still unconditionally throws
+`KmsNotConfiguredError` (no real external KMS exists yet — see this
+file's own "Every credentialed connect attempt fails because KMS isn't
+configured" entry below, which now also covers sync, not just connect).
+`runSync` maps this to `SYNC_KMS_NOT_CONFIGURED` (a `sync_runs` row with
+`status = 'failed'`), a DIFFERENT, more specific code than the generic
+`SYNC_CREDENTIAL_REJECTED` this entry is really about — a genuine
+post-KMS decrypt failure (tampered ciphertext, wrong `kms_key_id`, a
+revoked/unreachable real KMS key) is not yet reachable in this
+environment for the same reason a real credentialed connect isn't. This
+entry's alerting condition becomes LIVE the moment a real KMS exists —
+tracked here so it isn't missed at that point, not because it's firing
+today.
 
-**How to check, once the sync worker exists:** the worker's own
-sync-outcome log (00-foundation §7.1) should record a `decryptCredential`
-failure against the specific `account_id`; that account's
-`trading_accounts.status` should move to `attention` with
-`status_detail = 'CREDENTIAL_DECRYPT_FAILED'` (Module 01 §9) rather than
-failing silently or retrying indefinitely.
+**How to check, once a real KMS exists:** the worker's own
+sync-outcome log (00-foundation §7.1, `sync_runs.error_code`) will show
+`SYNC_KMS_NOT_CONFIGURED` disappear (once KMS is wired) and any genuine
+`decryptCredential` failure will surface instead — no dedicated
+`SyncErrorCode` currently distinguishes "decrypt failed after a real KMS
+call" from "KMS itself unreachable/rejected the unwrap," both fold into
+the mapping in `classifySyncError`; that account's `trading_accounts.status`
+should move to `attention` with a named reason (Module 01 §9) rather
+than failing silently or retrying indefinitely — this status transition
+is NOT yet built (a future slice's job, tracked separately, not invented
+here ahead of the account-status-update code existing).
 
 **Action:** page on-call immediately (per 00-foundation §7.3, no
 "investigate first" tier for this one). Do not attempt to re-derive or
@@ -134,6 +150,62 @@ represents a systemic vendor outage rather than isolated user-side
 issues — distinguish the two by checking whether failures cluster on
 one platform/vendor across many distinct users (systemic) versus
 scattered across unrelated causes (not systemic, no page needed).
+
+---
+
+## Sync failure rate > 5% over 15 min
+
+**Source:** 00-foundation §7.3 alerting table — `Sync failure rate > 5%
+over 15 min → Page`. Owning code: `lib/ingestion/sync.ts`'s `runSync`
+(Module 02 §4.1), which now genuinely exists as of Module 02 Slice 3
+(2026-08-22) — the first slice in this repo where a real `sync_runs` row
+gets written with `status = 'ok' | 'partial' | 'failed'` and a named
+`error_code` (`SyncErrorCode`: `SYNC_CREDENTIAL_REJECTED` |
+`SYNC_VENDOR_UNAVAILABLE` | `SYNC_KMS_NOT_CONFIGURED` |
+`SYNC_NO_CREDENTIAL` | `SYNC_INTERNAL`).
+
+**What this means operationally:** `status = 'failed'` means the sync
+attempt never got as far as fetching or writing any fill data at all
+(credential decrypt failed, the adapter rejected the connection, or an
+unrecognised internal error) — distinct from `status = 'partial'`, which
+means fills WERE written but something needs review (a coverage gap, or
+a detected-but-deferred block-recompute anomaly — see `sync.ts`'s own
+header comment on both). Only `'failed'` counts toward this specific
+alerting condition's literal wording ("failure rate"); a sustained rise
+in `'partial'` runs is a real signal too but belongs under this file's
+own future "coverage gap backlog" entry (Module 02 §14's own named
+runbook requirement — not yet written, since no code currently
+aggregates or surfaces a backlog view; tracked here as a known gap
+rather than invented ahead of that code existing) once one is built,
+not this one.
+
+**Where this fires today:** in practice, **100% of syncs for every
+credentialed (non-manual) platform** currently end in `status = 'failed'`,
+`error_code = 'SYNC_KMS_NOT_CONFIGURED'` — the same standing infra gap
+this file's "Every credentialed connect attempt fails because KMS isn't
+configured" entry already documents, extended to cover sync. This is the
+expected, 100%-of-attempts outcome until a real external KMS exists, not
+an anomaly to page on by itself — the SAME resolution/action as that
+entry applies here; do not treat this as a separate incident. `manual`
+accounts never reach this code path at all (`runSync` returns
+`{ skipped: true, reason: 'manual_account' }` before any credential or
+adapter interaction — see `sync.ts`'s own doc comment).
+
+**How to check, once a real KMS (and, eventually, a real broker vendor)
+exist:** query `sync_runs` grouped by `error_code` over a trailing 15-
+minute window; a `'failed'` rate exceeding 5% that is NOT
+`SYNC_KMS_NOT_CONFIGURED` (once that code stops being the universal,
+expected outcome) is the real, page-worthy signal this alerting
+condition is about. No scheduled query or dashboard exists yet to
+automate this check — same standing gap as this file's "Shadow analytic
+diverging from expectation" entry's own "what does not yet exist" note
+(no live Supabase project with a running scheduled job, no Vercel Cron —
+PROGRESS.md "Infra gaps").
+
+**Action:** page on-call once the check above can distinguish a genuine
+elevated failure rate from the expected KMS-gap baseline. Until then,
+`SYNC_KMS_NOT_CONFIGURED` dominating every credentialed account's sync
+history is expected, not investigate-worthy on its own.
 
 ---
 
@@ -183,6 +255,18 @@ resolved by an agent). Once a real KMS exists, this entire runbook entry
 becomes moot and should be removed rather than left stale (AGENTS.md
 `NEEDS_YOUR_INPUT.md` convention: "Don't let it accumulate stale
 resolved entries").
+
+**Extended 2026-08-22 (Module 02 Slice 3):** the identical wall now also
+blocks every credentialed account's SYNC, not just its initial connect —
+`lib/ingestion/sync.ts`'s `runSync` hits the same
+`createKmsMasterKeyProvider()` throw on every attempt (mapped to
+`SYNC_KMS_NOT_CONFIGURED`, a `sync_runs` row with `status = 'failed'`),
+for the same reason, via the same lazy-provider pattern
+(`lazyKmsMasterKeyProvider` in `sync.ts`, mirroring
+`app/(app)/accounts/actions.ts`'s own). Only `manual` accounts sync
+(trivially — they short-circuit before ever reaching credential
+decryption) until a real KMS exists. Same action, same "moot once a real
+KMS exists" resolution — not a separate blocker to track twice.
 
 ---
 

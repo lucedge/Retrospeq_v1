@@ -114,6 +114,36 @@ describe('computeTradeFacts — contractValue default', () => {
   });
 });
 
+describe('computeTradeFacts — null startingEquity (docs/adr/0013, added for the sync-pipeline slice)', () => {
+  it('startingEquity null -> initialRiskPct, riskPct and rMultiple are all null, even though a real stop exists', () => {
+    const members: TradeFactsMember[] = [
+      member({ fillId: 'entry', role: 'entry', side: 'buy', volume: '1', price: '100', filledAt: '2026-01-01T09:00:00Z', stopAtFill: '95' }),
+      member({ fillId: 'exit', role: 'exit', side: 'sell', volume: '1', price: '105', filledAt: '2026-01-01T09:10:00Z', realizedPnl: '5.00000000' }),
+    ];
+    const facts = computeTradeFacts(members, { startingEquity: null, currency: 'USD', contractValue: '1' });
+    expect(facts.initialStop).toBe('95.00000000'); // the stop itself is still known and reported
+    expect(facts.initialRiskPct).toBeNull();
+    expect(facts.riskPct).toBeNull();
+    expect(facts.rMultiple).toBeNull();
+    // Every equity-independent fact is unaffected -- "not applicable" is
+    // scoped to the risk/R-derived facts only, same as the null-stop case.
+    expect(facts.outcome).toBe('win');
+    expect(facts.realizedPnl).toBe('5.00000000');
+    expect(facts.entryPriceAvg).toBe('100.00000000');
+  });
+
+  it('a real stop AND a real equity together still produce non-null risk/R fields — proves the null-equity branch is additive, not a regression on the existing path', () => {
+    const members: TradeFactsMember[] = [
+      member({ fillId: 'entry', role: 'entry', side: 'buy', volume: '1', price: '100', filledAt: '2026-01-01T09:00:00Z', stopAtFill: '95' }),
+      member({ fillId: 'exit', role: 'exit', side: 'sell', volume: '1', price: '105', filledAt: '2026-01-01T09:10:00Z', realizedPnl: '5.00000000' }),
+    ];
+    const facts = computeTradeFacts(members, ACCOUNT);
+    expect(facts.initialRiskPct).not.toBeNull();
+    expect(facts.riskPct).not.toBeNull();
+    expect(facts.rMultiple).not.toBeNull();
+  });
+});
+
 describe('computeTradeFacts — null stop propagation (§4.4: "not applicable", never a defaulted zero)', () => {
   it('initialStop null -> initialRiskPct, riskPct and rMultiple are all null, never 0', () => {
     const members: TradeFactsMember[] = [

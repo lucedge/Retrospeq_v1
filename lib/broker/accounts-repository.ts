@@ -342,16 +342,41 @@ export async function deleteAllAccountCredentialsForUser(userId: string): Promis
   });
 }
 
-/** Erasure step 3b (part of the explicit FK-safe delete list, see
- *  docs/adr/0010-erasure-explicit-delete-order.md) — deletes every
- *  trading account this user owns. Must run AFTER
- *  `deleteAllAccountCredentialsForUser`, not rely on
- *  `account_credentials(account_id) references trading_accounts(id) on
- *  delete cascade` to do it implicitly — the ADR explains why the
- *  explicit order matters even though the cascade would eventually reach
- *  the same end state. */
+/**
+ * Erasure step 3b (part of the explicit FK-safe delete list, see
+ * docs/adr/0010-erasure-explicit-delete-order.md) — deletes every
+ * trading account this user owns. Must run AFTER
+ * `deleteAllAccountCredentialsForUser`, not rely on
+ * `account_credentials(account_id) references trading_accounts(id) on
+ * delete cascade` to do it implicitly — the ADR explains why the
+ * explicit order matters even though the cascade would eventually reach
+ * the same end state.
+ *
+ * **`retrospeq.erasure_in_progress` escape hatch (docs/adr/0011-ingestion-rls-shape.md,
+ * PROGRESS.md's own tracked infra gap, fixed here):** deleting
+ * `trading_accounts` cascades into `retrospeq.trades` (`on delete
+ * cascade`), and `trades` has a `BEFORE DELETE` trigger
+ * (`forbid_broker_confirmed_trade_delete`) that fires on
+ * cascade-originated deletes too, not just direct ones — Postgres does
+ * not distinguish the two for row-level triggers. Without this
+ * `set_config` call, first, in the SAME transaction as the delete below,
+ * erasure would be silently and incorrectly BLOCKED for any user with even
+ * one broker-confirmed trade (a real trade backed by a non-`manual:`
+ * fill can never be deleted by that trigger otherwise, regardless of
+ * `confirmed_at`) — directly contradicting 00-foundation §5.4's
+ * "immutability is a product invariant, not a legal one... the
+ * immutability guarantees apply to the trader's own editing surface, not
+ * to data-protection operations." `set_config`'s third argument (`true`)
+ * makes this transaction-local — it never lingers past this one
+ * `withServiceRoleConnection` call, so the trigger's protection is intact
+ * for every other write path. This was inert until Module 02's sync
+ * pipeline (`lib/ingestion/sync.ts`) became the first code path to write
+ * a real `trades` row — see that file's own tests for the live-DB proof
+ * this now actually works, not just compiles.
+ */
 export async function deleteAllTradingAccountsForUser(userId: string): Promise<void> {
   await withServiceRoleConnection(async (client) => {
+    await client.query("select set_config('retrospeq.erasure_in_progress', 'true', true)");
     await client.query('delete from retrospeq.trading_accounts where user_id = $1', [userId]);
   });
 }

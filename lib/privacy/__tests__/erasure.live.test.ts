@@ -289,6 +289,104 @@ describe.skipIf(!env)('lib/privacy/erasure.ts executeErasure (live DB)', () => {
     await deleteTestAuthUser(env, user.id).catch(() => {});
   }, 30_000);
 
+  it(
+    'succeeds for a user with a real broker-confirmed trade — regression test for the ' +
+      'retrospeq.erasure_in_progress escape-hatch fix (PROGRESS.md "Infra gaps", Module 02 Slice 3)',
+    async () => {
+      if (!env) return;
+      const { requestErasure, executeErasure } = await import('../erasure');
+
+      const user = await createTestAuthUser(env, 'erasure-live-confirmed-trade');
+
+      // Seed a REAL, broker-confirmed trade — a block, a non-manual fill,
+      // and a trade with `confirmed_at` set, exactly the shape
+      // `retrospeq.forbid_broker_confirmed_trade_delete` (docs/adr/0011)
+      // refuses to let ANY caller delete directly, via the same
+      // direct-SQL seeding pattern `lib/supabase/__tests__/ingestion-schema.rls.test.ts`
+      // already established. Before this test's own fix
+      // (`lib/broker/accounts-repository.ts`'s `deleteAllTradingAccountsForUser`
+      // now sets `retrospeq.erasure_in_progress` before deleting
+      // `trading_accounts`), this exact seed would make the
+      // `delete from trading_accounts` below fail when Postgres's
+      // cascade reaches this trade row, raising "cannot delete a
+      // broker-confirmed trade" — which would have surfaced as
+      // `executeErasure` throwing an unhandled database error instead of
+      // completing.
+      const accountRes = await db.query(
+        `insert into retrospeq.trading_accounts
+           (user_id, label, platform, base_currency, day_rollover)
+         values ($1, 'Erasure Confirmed-Trade Test Account', 'mt5', 'USD', '00:00:00 UTC')
+         returning id`,
+        [user.id],
+      );
+      const accountId = accountRes.rows[0].id;
+
+      const blockRes = await db.query(
+        `insert into retrospeq.blocks (user_id, account_id, instrument, opened_at, closed_at, server_day)
+         values ($1, $2, 'EURUSD', now() - interval '2 hours', now() - interval '1 hour', current_date)
+         returning id`,
+        [user.id, accountId],
+      );
+      const blockId = blockRes.rows[0].id;
+
+      const fillRes = await db.query(
+        `insert into retrospeq.fills
+           (user_id, account_id, provider_ref, instrument, side, volume, price, filled_at, server_day, currency)
+         values ($1, $2, 'erasure-confirmed-trade-fill-1', 'EURUSD', 'buy', 100000, 1.1, now() - interval '2 hours', current_date, 'USD')
+         returning id`,
+        [user.id, accountId],
+      );
+      const fillId = fillRes.rows[0].id;
+
+      const tradeRes = await db.query(
+        `insert into retrospeq.trades
+           (user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
+            currency, grouping_confidence, confirmed_at, confirmed_by)
+         values ($1, $2, $3, 'EURUSD', 'long', now() - interval '2 hours', now() - interval '1 hour',
+                 current_date, 'confirmed', 'USD', 'confident_single', now(), 'user')
+         returning id`,
+        [user.id, accountId, blockId],
+      );
+      const tradeId = tradeRes.rows[0].id;
+
+      await db.query(
+        `insert into retrospeq.trade_fills (trade_id, fill_id, user_id, role) values ($1, $2, $3, 'entry')`,
+        [tradeId, fillId, user.id],
+      );
+
+      // Sanity check on the seed itself: confirm the trigger really does
+      // block a direct delete attempt outside the erasure escape hatch,
+      // so this test is proving the fix against a genuinely reproducing
+      // hazard, not a scenario that was never actually blocked.
+      await expect(
+        db.query('delete from retrospeq.trades where id = $1', [tradeId]),
+      ).rejects.toThrow(/cannot delete a broker-confirmed trade/);
+
+      const request = await requestErasure(user.id);
+      await executeErasure(request.id, { bypassGracePeriod: true });
+
+      const tradesAfter = await db.query('select 1 from retrospeq.trades where id = $1', [tradeId]);
+      expect(tradesAfter.rows).toHaveLength(0);
+      const accountsAfter = await db.query(
+        'select 1 from retrospeq.trading_accounts where id = $1',
+        [accountId],
+      );
+      expect(accountsAfter.rows).toHaveLength(0);
+      const profileAfter = await db.query('select 1 from retrospeq.profiles where id = $1', [user.id]);
+      expect(profileAfter.rows).toHaveLength(0);
+
+      await db
+        .query(
+          "delete from retrospeq.audit_log where action = 'erasure_executed' and metadata->>'erasedUserId' = $1",
+          [user.id],
+        )
+        .catch(() => {});
+      await db.query('delete from retrospeq.erasure_tombstones where request_id = $1', [request.id]).catch(() => {});
+      await deleteTestAuthUser(env, user.id).catch(() => {});
+    },
+    30_000,
+  );
+
   it('cancelErasure prevents execution — a canceled request can never be executed', async () => {
     if (!env) return;
     const { requestErasure, cancelErasure, executeErasure, ErasureAlreadyProcessedError } =

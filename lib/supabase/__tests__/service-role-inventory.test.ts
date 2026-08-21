@@ -106,6 +106,15 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // at all (see the migration's own comment) — service role only, for
   // both the write here and (hypothetically) any future read.
   'lib/privacy/tombstone-repository.ts',
+  // Module 02 Slice 3 (§4.1 sync pipeline): runs as a trusted backend
+  // process, not a client request — every read/write against `fills` /
+  // `blocks` / `trades` / `trade_fills` / `trade_events` / `sync_runs` /
+  // `coverage_gaps` / `account_credentials` / `trading_accounts` goes
+  // through the service role, with every query explicitly scoped to the
+  // one `accountId`/`userId` the call is about (see that file's own
+  // header comment and ADR 0005's "every query inside `fn` MUST filter
+  // explicitly" caveat).
+  'lib/ingestion/sync.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
