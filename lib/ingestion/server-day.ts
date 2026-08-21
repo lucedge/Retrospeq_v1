@@ -165,6 +165,114 @@ function toDateString(utcMillis: number): string {
 }
 
 /**
+ * Adds (or subtracts) whole calendar days to a `{year, month, day}` triple,
+ * letting `Date.UTC`'s own overflow normalisation handle month/year
+ * rollovers (e.g. day 0 of a month correctly becomes the last day of the
+ * previous month) — no separate calendar-math library needed.
+ */
+function addCalendarDays(year: number, month: number, day: number, delta: number): { year: number; month: number; day: number } {
+  const dt = new Date(Date.UTC(year, month - 1, day + delta));
+  return { year: dt.getUTCFullYear(), month: dt.getUTCMonth() + 1, day: dt.getUTCDate() };
+}
+
+/**
+ * The inverse of `localParts` — given a wall-clock date/time as it would
+ * read on a clock in `zone`, returns the UTC instant that produces it.
+ * Standard two-pass fixed-point technique for IANA-zone conversion
+ * (`Intl.DateTimeFormat` only goes UTC→zone, never the other direction,
+ * so there is no single-step API for this in Node):
+ *
+ *   1. Guess the UTC instant is numerically equal to the wall-clock
+ *      components (i.e. treat the local time as if it were already UTC).
+ *   2. Format that guess back into `zone` and measure the difference
+ *      between the intended wall-clock time and what the guess actually
+ *      produces in `zone` — that difference is (approximately) the zone's
+ *      UTC offset at this instant.
+ *   3. Correct the guess by that difference. Repeat once more (the
+ *      correction from step 3 can itself shift which offset applies, e.g.
+ *      near a DST transition) — two iterations converges for every real
+ *      rollover time this repo's `day_rollover` values use (fixed
+ *      HH:MM/HH:MM:SS values, never literally the DST-transition instant
+ *      itself).
+ *
+ * **Known limitation, not fixed here:** a wall-clock time that falls
+ * exactly inside a DST "spring forward" gap (nonexistent local time) or
+ * "fall back" overlap (ambiguous local time, two valid UTC instants) is
+ * not specially handled — this returns *a* plausible UTC instant, not
+ * necessarily the canonically "correct" one for that rare edge, which
+ * matches every other timestamp-adjacent computation in this repo
+ * (`computeServerDay` itself has no DST-transition-day special case
+ * either). A rollover boundary landing exactly on a DST transition
+ * instant is a genuinely rare, low-stakes edge (worst case: a
+ * server_day boundary is off by up to an hour on the one or two days a
+ * year DST changes for that account's zone) — not addressed
+ * speculatively.
+ */
+function localWallClockToUtc(year: number, month: number, day: number, hour: number, minute: number, second: number, zone: string): Date {
+  const intendedAsUtcMillis = Date.UTC(year, month - 1, day, hour, minute, second);
+  let guessMillis = intendedAsUtcMillis;
+  for (let i = 0; i < 2; i++) {
+    const parts = localParts(new Date(guessMillis), zone);
+    const partsAsUtcMillis = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    const diff = intendedAsUtcMillis - partsAsUtcMillis;
+    if (diff === 0) break;
+    guessMillis += diff;
+  }
+  return new Date(guessMillis);
+}
+
+/**
+ * The inverse of `computeServerDay` — Module 02 §4.6's confirm/freeze
+ * transaction needs to go the other direction: given a `server_day` value
+ * already stored on a `trades`/`fills` row, what is the actual UTC instant
+ * range `[start, end)` that day covers, so a coverage gap (itself stored as
+ * a `[gap_from, gap_to)` timestamptz range, not a `server_day`) can be
+ * tested for overlap against it?
+ *
+ * Derived from `computeServerDay`'s own `>=`/`+1` rule (see this file's
+ * header): the window of instants that map to `server_day = D` is
+ * `[local(D-1, R), local(D, R))` for any rollover `R` other than exact
+ * local midnight — i.e. it starts at the PREVIOUS calendar day's rollover
+ * moment and ends at THIS calendar day's rollover moment. This is exactly
+ * `fixtures/README.md`'s own forex formula run in reverse
+ * (`server_day = date(filled_at - 22h) + 1 day` literally means
+ * `filled_at` in `[D-1 at 22:00 UTC, D at 22:00 UTC)` maps to `server_day
+ * = D`) — verified algebraically here, not just asserted; see this
+ * function's own unit tests for a fixture-derived round-trip proof
+ * (`computeServerDay(t) === D` for every `t` inside the returned range,
+ * and false for `t` just outside either edge).
+ *
+ * The local-midnight special case mirrors `computeServerDay`'s own: no
+ * shift, so the window is simply `[local(D, 00:00), local(D+1, 00:00))`.
+ */
+export function computeServerDayRange(serverDay: string, dayRollover: string): { start: Date; end: Date } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(serverDay);
+  if (!match) {
+    throw new Error(`server-day: invalid server_day "${serverDay}" — expected "YYYY-MM-DD".`);
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const { zone, hour, minute, second } = parseDayRollover(dayRollover);
+  const rolloverIsLocalMidnight = hour === 0 && minute === 0 && second === 0;
+
+  if (rolloverIsLocalMidnight) {
+    const next = addCalendarDays(year, month, day, 1);
+    return {
+      start: localWallClockToUtc(year, month, day, 0, 0, 0, zone),
+      end: localWallClockToUtc(next.year, next.month, next.day, 0, 0, 0, zone),
+    };
+  }
+
+  const prev = addCalendarDays(year, month, day, -1);
+  return {
+    start: localWallClockToUtc(prev.year, prev.month, prev.day, hour, minute, second, zone),
+    end: localWallClockToUtc(year, month, day, hour, minute, second, zone),
+  };
+}
+
+/**
  * Computes `server_day` for one fill timestamp against one account's
  * `day_rollover` configuration. Returns a `YYYY-MM-DD` string (Postgres
  * `date` text representation) — this is the exact string that gets

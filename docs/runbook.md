@@ -425,3 +425,72 @@ degradation, not routine noise — if `signOut()` itself is unreliable
 project-wide, every session-boundary guarantee in Module 01 (password
 reset's "all sessions invalidated," this story's revoke controls) is
 compromised simultaneously, which raises this above a single-feature bug.
+
+---
+
+## Trades stuck unable to confirm — coverage-gap / block-anomaly backlog
+
+**Source:** Module 02 §14's own named runbook requirement ("coverage gap
+backlog and late-fill anomaly"), forward-referenced but explicitly not
+yet written by this file's own "Sync failure rate > 5% over 15 min" entry
+above ("belongs under this file's own future 'coverage gap backlog' entry
+... not yet written, since no code currently aggregates or surfaces a
+backlog view"). Owning code: `lib/ingestion/confirm.ts`'s `confirmDay`
+(Module 02 §4.6 the confirm/freeze transaction, Slice 5, 2026-08-22) and
+`autoConfirmStaleTrades` — the first code in this repo where an unresolved
+`coverage_gaps` row or a detected block/fill-membership anomaly
+(`sync.ts`'s `BLOCK_EXTENSION_DEFERRED` / `FILL_LATE_ARRIVAL`, previously
+only a `console.warn` + an ignored `RunSyncResult.anomalies` entry, per
+Module 02 Slice 3) actually BLOCKS something a trader or the system needs
+to happen, not just a logged note.
+
+**What this means operationally:** three related but distinct signals,
+all surfaced by `confirm.ts`, none of them aggregated into a dashboard
+yet (no code queries across accounts/users for a backlog view — same
+standing "no scheduled job / no dashboard" gap as this file's other
+entries, PROGRESS.md "Infra gaps"):
+
+1. **`coverage_gaps` rows with `resolved_at is null`, accumulating over
+   time.** `confirmDay` refuses (`code: 'COVERAGE_GAP'`) any day
+   overlapping one, and nothing in this repo today ever sets
+   `resolved_at` (tracked explicitly as out of scope for Slice 5 — see
+   `confirm.ts`'s own header) — a gap is currently permanent once
+   recorded, which means a trader who hits one has no in-product path
+   to ever close out that day again until a future sync/review-flow
+   slice adds gap resolution.
+2. **`UNRESOLVED_BLOCK_ANOMALY` refusals** — `confirmDay` refuses a whole
+   day if any trade being confirmed shares a block with a fill not yet
+   reflected in its derived facts (the mechanism that closes the gap
+   Module 02 Slice 3/4's own PROGRESS.md entries flagged as "a firm
+   requirement" for this slice). A trade stuck this way stays
+   `status: 'closed'`, `confirmed_at: null` indefinitely — it also never
+   ages into auto-confirm eligibility being SAFE (see next point), so it
+   can sit unconfirmed forever with no path back into the normal
+   lifecycle short of a future in-place block-extension feature or a
+   manual split/join (§4.7, not yet built) touching it.
+3. **`autoConfirmStaleTrades`'s `tradesSkippedStaleBlock`** — the same
+   anomaly guard applied to the 7-day auto-confirm sweep (a per-trade
+   skip, not a whole-sweep refusal, by design — see `confirm.ts`'s own
+   header for why). A trade appearing here repeatedly, sweep after
+   sweep, means it is not just unconfirmed but genuinely stuck: past the
+   point auto-confirm should have swept it up, and still blocked.
+
+**How to check:** until a dashboard exists, query directly —
+`select count(*) from retrospeq.coverage_gaps where resolved_at is null`
+for signal 1; `sync_runs.status = 'partial'` combined with a
+`console.warn` grep for `BLOCK_EXTENSION_DEFERRED`/`FILL_LATE_ARRIVAL` in
+application logs for signals 2/3 (no separate persisted table for these
+anomalies exists yet — `sync.ts`'s own header explains why: they are
+detected fresh at read/confirm time from `fills`/`blocks`/`trades`, never
+written to a dedicated table).
+
+**Action:** a small, steady trickle of unresolved `coverage_gaps` rows or
+`UNRESOLVED_BLOCK_ANOMALY` refusals is expected in normal operation (a
+trader whose broker feed had a real gap, or a scaled position that
+genuinely closes across a resync boundary) — not page-worthy by itself.
+Investigate if either count grows unboundedly without traders ever being
+able to clear it (the honest current state: they cannot, since gap
+resolution and in-place block extension are both future work) — that is
+a real product gap this entry exists to make visible, not routine noise,
+and should inform whether in-place block extension or gap-resolution
+tooling gets prioritized before Module 02 is considered complete.

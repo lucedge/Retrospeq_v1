@@ -21,7 +21,7 @@ import {
   KmsNotConfiguredError,
   type MasterKeyProvider,
 } from '@/lib/broker/envelope-encryption';
-import { deriveBlocks, type BlockDerivationFill } from './blocks';
+import { deriveBlocks, type BlockDerivationFill, type DerivedBlock, type FillBlockAssignment } from './blocks';
 import { groupBlock, type GroupingInputFill } from './grouping';
 import { computeTradeFacts, type TradeFactsMember } from './trade-facts';
 import { computeServerDay } from './server-day';
@@ -371,7 +371,7 @@ interface CredentialRow {
   credential_kind: string;
 }
 
-interface FillDbRow {
+export interface FillDbRow {
   id: string;
   provider_ref: string;
   side: 'buy' | 'sell';
@@ -760,53 +760,70 @@ async function matchPendingArmEvents(client: PoolClient, account: AccountRow, no
   return counts;
 }
 
-interface RecomputeInstrumentResult {
-  blocksCreated: number;
-  tradesCreated: number;
-  anomalies: string[];
+// ---------------------------------------------------------------------
+// Shared block/fill-membership state -- factored out (2026-08-22, Module
+// 02 Slice 5) so `recomputeInstrument`'s own matched-block anomaly check
+// below and `lib/ingestion/confirm.ts`'s freeze-transaction guard (§4.6)
+// ask the exact same correctness question against the exact same data,
+// not two independently-written, potentially-diverging copies of it.
+// `confirm.ts` needs the answer for one specific already-known block (a
+// trade about to be confirmed), not the whole instrument's block set, so
+// this returns everything both callers need and lets each one decide what
+// to do with it (recompute-and-write vs refuse-and-report).
+// ---------------------------------------------------------------------
+
+export interface InstrumentBlockState {
+  fillRowById: Map<string, FillDbRow>;
+  freshBlocks: DerivedBlock[];
+  assignments: FillBlockAssignment[];
+  existingBlocks: { id: string; opened_at: string }[];
+  memberFillIdsByBlockId: Map<string, Set<string>>;
+  confirmedBlockIds: Set<string>;
 }
 
-/** §4.1 steps 6-9 for one (account, instrument) span -- see header
- *  judgment call #4 for the exact, deliberately narrow scope this
- *  implements. */
-async function recomputeInstrument(
+/** Fetches every fill for this (account, instrument), re-derives blocks
+ *  fresh over the FULL history, and cross-references against what's
+ *  currently recorded in `blocks`/`trades`/`trade_fills`/`trade_events` --
+ *  the same five queries `recomputeInstrument` always ran inline, now
+ *  reusable by any caller that needs to ask "does this block's true
+ *  current fill membership agree with what its trade(s) record." */
+export async function loadInstrumentBlockState(
   client: PoolClient,
-  account: AccountRow,
+  accountId: string,
   instrument: string,
-): Promise<RecomputeInstrumentResult> {
-  const anomalies: string[] = [];
-
+  dayRollover: string,
+): Promise<InstrumentBlockState> {
   const fillRowsRes = await client.query<FillDbRow>(
     `select id, provider_ref, side, volume, price, filled_at, stop_at_fill,
             provider_position_ref, provider_parent_ref, realized_pnl
        from retrospeq.fills
       where account_id = $1 and instrument = $2
       order by filled_at, id`,
-    [account.id, instrument],
+    [accountId, instrument],
   );
   const fillRows = fillRowsRes.rows;
   const fillRowById = new Map(fillRows.map((r) => [r.id, r]));
 
   const blockFills: BlockDerivationFill[] = fillRows.map((r) => ({
     id: r.id,
-    accountId: account.id,
+    accountId,
     instrument,
     side: r.side,
     volume: r.volume,
     filledAt: r.filled_at,
   }));
 
-  const { blocks: freshBlocks, assignments } = deriveBlocks(blockFills, () => account.day_rollover);
+  const { blocks: freshBlocks, assignments } = deriveBlocks(blockFills, () => dayRollover);
 
   const existingBlocksRes = await client.query<{ id: string; opened_at: string }>(
     `select id, opened_at from retrospeq.blocks where account_id = $1 and instrument = $2`,
-    [account.id, instrument],
+    [accountId, instrument],
   );
   const existingBlocks = existingBlocksRes.rows;
 
   const existingTradesRes = await client.query<{ id: string; block_id: string; confirmed_at: string | null }>(
     `select id, block_id, confirmed_at from retrospeq.trades where account_id = $1 and instrument = $2`,
-    [account.id, instrument],
+    [accountId, instrument],
   );
   const existingTrades = existingTradesRes.rows;
   const existingTradeIds = existingTrades.map((t) => t.id);
@@ -835,6 +852,55 @@ async function recomputeInstrument(
     }
   }
 
+  return { fillRowById, freshBlocks, assignments, existingBlocks, memberFillIdsByBlockId, confirmedBlockIds };
+}
+
+/** Pure: fill ids present in a block's freshly-derived membership but not
+ *  yet recorded against it in `trade_fills`/`trade_events`. Shared by
+ *  `recomputeInstrument`'s matched-block branch and `confirm.ts`'s guard. */
+export function findUnrecordedBlockFills(freshFillIds: readonly string[], recordedFillIds: ReadonlySet<string>): string[] {
+  return freshFillIds.filter((id) => !recordedFillIds.has(id));
+}
+
+/** Looks up one already-known block (e.g. a `trades.block_id` value)
+ *  inside an `InstrumentBlockState` and returns any fill ids its
+ *  freshly-derived membership includes that aren't yet recorded against
+ *  it. Returns `[]` (never throws) if the block isn't found in this state
+ *  at all -- should not happen for a `blockId` sourced from a real
+ *  `trades` row on this same (account, instrument), but a freeze-
+ *  transaction guard fails closed on "no anomaly detected," not open on a
+ *  thrown exception, for a condition that should be structurally
+ *  impossible rather than one the guard itself needs to defend against
+ *  loudly. */
+export function findUnrecordedFillsForBlock(state: InstrumentBlockState, blockId: string): string[] {
+  const matched = state.existingBlocks.find((b) => b.id === blockId);
+  if (!matched) return [];
+  const freshBlockIndex = state.freshBlocks.findIndex((fb) => sameInstant(fb.openedAt, matched.opened_at));
+  if (freshBlockIndex === -1) return [];
+  const freshFillIds = state.assignments.filter((a) => a.blockIndex === freshBlockIndex).map((a) => a.fillId);
+  const recorded = state.memberFillIdsByBlockId.get(blockId) ?? new Set<string>();
+  return findUnrecordedBlockFills(freshFillIds, recorded);
+}
+
+interface RecomputeInstrumentResult {
+  blocksCreated: number;
+  tradesCreated: number;
+  anomalies: string[];
+}
+
+/** §4.1 steps 6-9 for one (account, instrument) span -- see header
+ *  judgment call #4 for the exact, deliberately narrow scope this
+ *  implements. */
+async function recomputeInstrument(
+  client: PoolClient,
+  account: AccountRow,
+  instrument: string,
+): Promise<RecomputeInstrumentResult> {
+  const anomalies: string[] = [];
+
+  const state = await loadInstrumentBlockState(client, account.id, instrument, account.day_rollover);
+  const { fillRowById, freshBlocks, assignments, existingBlocks, memberFillIdsByBlockId, confirmedBlockIds } = state;
+
   let blocksCreated = 0;
   let tradesCreated = 0;
 
@@ -847,7 +913,7 @@ async function recomputeInstrument(
       // Header judgment call #4: an already-known block is ALWAYS left
       // untouched by this slice -- no write of any kind, confirmed or not.
       const recorded = memberFillIdsByBlockId.get(matched.id) ?? new Set<string>();
-      const unrecorded = freshFillIds.filter((id) => !recorded.has(id));
+      const unrecorded = findUnrecordedBlockFills(freshFillIds, recorded);
       if (unrecorded.length > 0) {
         const isConfirmed = confirmedBlockIds.has(matched.id);
         const code = isConfirmed ? 'FILL_LATE_ARRIVAL' : 'BLOCK_EXTENSION_DEFERRED';

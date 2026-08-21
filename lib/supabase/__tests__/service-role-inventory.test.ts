@@ -115,6 +115,19 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // header comment and ADR 0005's "every query inside `fn` MUST filter
   // explicitly" caveat).
   'lib/ingestion/sync.ts',
+  // Module 02 Slice 5 (§4.6 confirm/freeze transaction + the daily
+  // auto-confirm sweep): same trusted-backend-process posture as
+  // sync.ts above — `confirmDay` scopes every query explicitly to the
+  // one `accountId`/`account.user_id` resolved from the account row it
+  // loads first; `autoConfirmStaleTrades` is the one deliberate
+  // exception to "scope to a caller-supplied user_id" (00-foundation
+  // §3.2) in this file, by design — it is a global sweep across every
+  // account/user, but every UPDATE it issues is `where id = any($1::
+  // uuid[])` against ids that same query just selected under the
+  // service role in the SAME transaction, never against any
+  // caller-supplied id, so no request-scoped trust boundary is
+  // actually crossed.
+  'lib/ingestion/confirm.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

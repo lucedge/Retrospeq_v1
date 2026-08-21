@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-4 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock) are all done — coded, tested, security-reviewed (Slice 4 had one blocking FAIL on `trade_captures`' DB-level lock enforcement, fixed with a real trigger, re-reviewed PASS), QA-reviewed. A concrete follow-up requirement for Slice 5/6 is tracked: a trade that closes across a resync boundary currently sits `status: 'open'` indefinitely (`BLOCK_EXTENSION_DEFERRED`) until confirm/freeze or block-extension logic addresses it. Slices 5-7 (confirm/freeze transaction §4.6, corrections + manual entry §4.7/§4.8, UI) remain |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-5 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock, confirm/freeze transaction §4.6) are all done — coded, tested, security-reviewed, QA-reviewed. Slice 5 had one blocking security FAIL (a concurrency race in the confirm-transaction's trade-confirming UPDATE, same bug shape as an earlier `erasure.ts` FAIL) fixed with an atomic conditional UPDATE and re-reviewed PASS; it also closes the BLOCK_EXTENSION_DEFERRED follow-up tracked since Slice 3 — a stuck-open/stale-facts trade can no longer be silently confirmed by either `confirmDay` or the 7-day auto-confirm sweep. Slices 6-7 (corrections + manual entry §4.7/§4.8, UI) remain |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -1759,14 +1759,378 @@ the tester section below for the full FAIL→fix→PASS story.**
   passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
   `npm run lint` all clean.
 
-**Next slice:** Module 02 Slice 5/6 — the confirm/freeze transaction
-(§4.6), the other named hook Slice 3 left as a documented no-op. **Now a
-firm requirement, not just a "revisit if it becomes a blocker"** (per the
-Slice 3 tester pass): it must either implement in-place block extension,
-or make the confirm/freeze transaction and close-out UI explicitly
-detect/block on a live `BLOCK_EXTENSION_DEFERRED` anomaly — otherwise a
-trade that genuinely closes across a resync boundary will sit
-`status: 'open'` forever with no path back into the normal lifecycle.
+**Module 02 Slice 5 (confirm/freeze transaction §4.6) — coder pass
+complete, real functionality against the real live DB, not stubs.
+tester/security-reviewer/qa passes still needed before this slice (and
+Module 02 as a whole) can be marked done. Security review flagged as
+warranted below, not decided unilaterally.**
+
+- `lib/ingestion/confirm.ts` — `confirmDay(accountId, serverDay, options)`
+  (the user-initiated confirm/freeze transaction for ONE account/day) and
+  `autoConfirmStaleTrades(options)` (the daily 7-day sweep), both running
+  as a single `withServiceRoleConnection` transaction each, matching
+  `sync.ts`'s established pattern (every query explicitly scoped to the
+  account/user resolved from the loaded account row, per ADR 0005's
+  caveat). `confirmDay` implements §4.6's three assertions literally:
+  no unresolved `coverage_gaps` row overlapping the server_day, no
+  `grouping_confidence = 'ambiguous'` trade anywhere in the day, and — this
+  slice's own required extension, not literal spec text — no eligible
+  trade's backing block has a fill not yet reflected in its derived facts
+  (`sync.ts`'s own `BLOCK_EXTENSION_DEFERRED`/`FILL_LATE_ARRIVAL`
+  anomalies, previously only logged and ignored). Refusals are a
+  structured, typed, discriminated-union result
+  (`ConfirmDayResult`/`code`/per-code detail), never a thrown generic
+  string; a genuine caller bug (unknown `accountId`, zero trade rows with
+  no explicit `kind` override) throws a named error class instead, same
+  split `sync.ts` already established between "legitimate but blocked"
+  and "caller bug."
+- **This is the mechanism that closes the tracked BLOCK_EXTENSION_DEFERRED
+  gap Slice 3/4's tester pass flagged as "a firm requirement, not just a
+  'revisit if it becomes a blocker'":** rather than building in-place
+  block extension (still out of scope, a genuinely larger feature), a
+  stuck-open/stale-facts trade can now also never be silently CONFIRMED
+  with incomplete facts — both `confirmDay` and `autoConfirmStaleTrades`
+  refuse/skip it instead. `lib/ingestion/sync.ts` was refactored (no
+  behavior change, all 26 existing unit + 11 live tests still pass
+  unmodified) to factor the "does this block's fresh fill membership agree
+  with what's recorded" check out of `recomputeInstrument` into a shared,
+  exported `loadInstrumentBlockState`/`findUnrecordedBlockFills`/
+  `findUnrecordedFillsForBlock` — the literal same correctness question,
+  now asked once, not duplicated.
+- `lib/ingestion/server-day.ts` — new `computeServerDayRange(serverDay,
+  dayRollover)`, the documented inverse of `computeServerDay` (needed
+  because `coverage_gaps` stores UTC instant ranges but `trades.server_day`
+  is a plain date, and there's no column carrying the instant range a
+  server_day covers). Two-pass IANA-zone-aware wall-clock→UTC conversion
+  (`localWallClockToUtc`), verified algebraically against the fixture
+  README's own reverse formula, then confirmed by a full round-trip
+  property test (200 runs × 5 rollover shapes, `fast-check`) AND against
+  every real fill in all 8 golden fixtures.
+- **Judgment calls made reconciling §4.6's prose into code (full detail in
+  `confirm.ts`'s own header comment, summarized in the decision log
+  below):** (1) the coverage-gap overlap test's own derivation; (2) the
+  ambiguous-grouping assertion scans every trade in the day, not just the
+  confirmation-eligible subset — an ambiguous OPEN trade would otherwise
+  slip past on a technicality; (3) the stale-block guard's existence and
+  scope (this slice's own extension of §4.6, not literal text); (4)
+  `day_closeouts.kind` defaults to `'traded'` whenever the day has ANY
+  trade row (even if all already confirmed — a legitimate idempotent
+  re-confirm), and is a required, explicit caller error only when the day
+  has ZERO trade rows of any status and no override was supplied; (5) the
+  day_closeouts insert is `ON CONFLICT ... DO NOTHING`, genuinely
+  idempotent, documented why (a stray trade landing between a page reload
+  and a second click).
+- **`autoConfirmStaleTrades` — two judgment calls flagged explicitly for
+  the decision log, per the dispatch's own request:**
+  1. **Never inserts a `day_closeouts` row, full stop** — read literally
+     from §4.6's "gets a day_closeouts row only if the user closed it
+     out." `day_closeouts` rows are created EXCLUSIVELY by `confirmDay`
+     (the only INSERT statement into this table in the whole repo). An
+     alternative reading ("insert one anyway, just never counted toward
+     the streak") was considered and rejected — it would require either a
+     new column speculatively invented ahead of Module 07 existing to
+     define what it means, or overloading `confirmed_by = 'auto_7d'` on
+     `day_closeouts` itself, a decision better left to whichever slice
+     actually builds the streak.
+  2. **The stale/incomplete-block guard IS applied to auto-confirm too,**
+     reasoned through rather than skipped: a `status = 'closed'` trade
+     (the only kind ever eligible for auto-confirm) can still share its
+     block with an already-CONFIRMED sibling trade (§4.3: "a block is the
+     upper bound on a trade, not the answer" — one block can host
+     multiple trades), and a late fill on that shared block is exactly
+     `sync.ts`'s `FILL_LATE_ARRIVAL` case. Applied as a PER-TRADE skip
+     (`tradesSkippedStaleBlock`), not a whole-sweep refusal — this sweep
+     spans every account/user in one call, so failing the entire batch
+     over one trade's stale block would have a far wider blast radius than
+     `confirmDay`'s own per-day scope justifies. **A third guard, beyond
+     the literal dispatch, added and flagged here rather than silently
+     included:** `autoConfirmStaleTrades`'s eligibility query also
+     excludes `grouping_confidence = 'ambiguous'` trades — nothing in
+     §4.6's own sentence mentions this, but auto-confirming an ambiguous
+     trade would silently freeze rule evaluations (once Module 04 exists)
+     over facts the product hasn't decided are correct yet, the same
+     freeze-honesty failure mode the stale-block guard exists to prevent.
+- Tests: **live-DB integration tests are the primary bar for this slice**
+  per its own dispatch (a DB transaction, not a pure function) —
+  `lib/ingestion/__tests__/confirm.live.test.ts` (17 tests): normal
+  confirm + idempotent re-confirm, never-confirms-an-open-trade, refusal
+  on coverage gap (plus a same-day-boundary negative control proving the
+  overlap test is scoped, not "any gap on the account"), refusal on
+  ambiguous grouping, refusal on `UNRESOLVED_BLOCK_ANOMALY` built via the
+  REAL `sync.ts` two-sync `BLOCK_EXTENSION_DEFERRED` scenario (not
+  hand-simulated) with both `anomalyCode` branches exercised
+  (`BLOCK_EXTENSION_DEFERRED` and, via a confirmed-sibling-trade setup,
+  `FILL_LATE_ARRIVAL`), the two thrown-error caller-bug paths, the
+  `deliberate_no_trade` override, auto-confirm's 7-day threshold on both
+  sides, auto-confirm's stale-block skip (constructed the same
+  confirmed-sibling-block way), auto-confirm's ambiguous-exclusion, and a
+  true-no-op case. Plus `lib/ingestion/__tests__/confirm.test.ts` (1
+  mocked-DB unit test for `autoConfirmStaleTrades`'s `options.now` default
+  fallback — deliberately NOT live-tested, since driving that branch
+  against the real shared dev DB with an unbounded real "now" risks
+  touching genuine unrelated data in that shared project). Plus
+  `computeServerDayRange` unit + property tests in
+  `lib/ingestion/__tests__/server-day.test.ts` /
+  `server-day-range.property.test.ts` (24 + 10 tests). Full repo suite:
+  **792 passing**, 12 skip-guard fallbacks (env present, nothing actually
+  skipped). Coverage: `confirm.ts` **100% line / 100% branch / 100%
+  func**, `sync.ts` unchanged at 100% line / 93.43% branch after the
+  refactor (no regression). `npm run build`, `npx tsc --noEmit`, and
+  `npm run lint` all clean (lint: only the same 17 pre-existing
+  `_prefixed`-unused-param warnings, 0 errors).
+- `docs/runbook.md` — new "Trades stuck unable to confirm — coverage-gap /
+  block-anomaly backlog" entry, closing Module 02 §14's own named
+  requirement ("coverage gap backlog and late-fill anomaly") that the
+  "Sync failure rate" entry had explicitly forward-referenced as "not yet
+  written" — this is the first slice where these conditions actually block
+  something (a confirm refusal, an auto-confirm skip) rather than just
+  being logged.
+- No new ADR: every judgment call above is a prose-to-code translation of
+  genuinely ambiguous §4.6 wording (recorded in `confirm.ts`'s own header
+  + this decision log), not a deviation FROM a stated 00-foundation
+  convention — same "no dedicated ADR" precedent `grouping.ts`/
+  `arm-matching.ts` already established for this repo.
+- **Explicitly out of scope, not built** (per the dispatch): any UI/Server
+  Action/cron trigger surface for either function, Module 04/05/07's
+  actual event handlers (documented no-ops only, same posture as `sync.ts`
+  step 10), §4.7's corrections (manual split/join, `not_a_decision`
+  toggle) and §4.8's manual entry (Slice 6), and resolving/closing
+  existing `coverage_gaps` rows (`resolved_at` is only ever READ by this
+  slice, never written — a sync/review-flow concern).
+- **Recommendation on security review: yes, warranted.** This transaction
+  is the mechanism that makes AGENTS.md's "rule evaluations freeze at
+  close-out and are never recomputed retroactively" non-negotiable
+  actually enforceable (even though Module 04 doesn't exist yet to write a
+  frozen evaluation) and implements "regrouping is blocked" after
+  `confirmed_at` — the single most safety-critical function named
+  anywhere in Module 02's own spec text ("the critical transaction"). Not
+  decided unilaterally; flagged for the security-reviewer's own call, per
+  this repo's established practice.
+
+**retrospeq-tester: independent pass complete, 2026-08-22 (own thread,
+not a re-read of the coder's claims).** Read Module 02 §4.6 in full,
+`confirm.ts` in full including its header, `sync.ts`'s shared
+`loadInstrumentBlockState`/`findUnrecordedFillsForBlock` refactor, and
+`server-day.ts`'s `computeServerDayRange`. Ran the full suite myself
+independently (not trusting the orchestrator's own run).
+
+- **Judgment call #1 (the third, self-added `UNRESOLVED_BLOCK_ANOMALY`
+  assertion) — reasoning is sound, endorsed.** Refusing to confirm a
+  trade whose backing block has an unrecorded fill genuinely prevents an
+  irreversible harm (a frozen `rule_evaluation`/adherence fact that can
+  never be recomputed once Module 04 exists, per AGENTS.md's own
+  non-negotiable) in exchange for a recoverable one (a trade sitting
+  unconfirmed). That asymmetry — permanent corruption vs. temporary
+  inconvenience — is exactly what §9's "silence over wrongness" exists
+  to enforce, and this slice applies it correctly to a case §4.6's
+  literal text doesn't mention. **Confirmed the flagged consequence is
+  real and already honestly documented, not glossed over:** there is no
+  way in this repo today to distinguish "stale, more fills genuinely
+  still coming" from "stale forever, a data anomaly" — a trade can sit
+  `status: 'closed'`, `confirmed_at: null` indefinitely with no path
+  back into the lifecycle until Slice 6 (manual split/join) or a future
+  in-place block-extension feature exists. The coder already wrote this
+  up explicitly in both `confirm.ts`'s own header and a new
+  `docs/runbook.md` entry ("Trades stuck unable to confirm —
+  coverage-gap / block-anomaly backlog") that names the exact same risk
+  and recommends it inform Slice 6/in-place-extension prioritization —
+  this is the right way to leave an accepted gap, not a silent one.
+  `autoConfirmStaleTrades` applies the identical guard, confirmed live
+  (its own dedicated test skips a stale-block trade and reports it in
+  `tradesSkippedStaleBlock`, never silently auto-confirms it) — same
+  reasoning, same honest gap.
+- **Verified "never confirm an open trade."** The eligibility filter is
+  applied in application code after fetching all of the day's trades
+  (`status === 'closed' && confirmed_at === null`), not a raw SQL
+  `WHERE` clause — deliberate, since the ambiguous-grouping assertion
+  needs to scan every trade in the day regardless of status. Live test
+  ("never confirms an open trade") proves a `status='open'` trade
+  sharing the day with an eligible closed trade is left completely
+  untouched (`status`/`confirmed_at`/`confirmed_by` all unchanged).
+  Real, not just asserted.
+- **Verified `autoConfirmStaleTrades` never inserts a `day_closeouts`
+  row.** Re-derived from §4.6's own words ("gets a day_closeouts row
+  only if the user closed it out") — agree this is the more defensible
+  reading over inventing a new column speculatively, per the coder's own
+  reasoning. The live test proves the row's actual absence via a direct
+  `select from day_closeouts` (not just that the function returned
+  without erroring).
+- **Verified the coverage-gap overlap assertion, added two missing
+  boundary-case tests.** `computeServerDayRange` + a half-open-interval
+  `gap_from < dayEnd and gap_to > dayStart` test were already correct
+  and covered for "gap entirely inside the day" and "gap entirely
+  outside the day," but two cases the dispatch specifically named were
+  untested: a gap that **touches** the day boundary exactly
+  (`gap_to === dayStart` or `gap_from === dayEnd`) without truly
+  overlapping, and a genuinely-overlapping gap with `resolved_at` set.
+  **Added both** to `confirm.live.test.ts` — both pass, confirming the
+  half-open-interval semantics and the `resolved_at is null` filter are
+  correct at the boundary, not just in the middle.
+- **Verified the ambiguous-grouping assertion is real** — live test
+  proves refusal and reports the correct blocking trade id, constructed
+  via direct SQL insert of a `grouping_confidence = 'ambiguous'` row
+  rather than through `runSync` against a fixture. Checked: **no golden
+  fixture in this repo produces an ambiguous grouping by default**
+  (confirmed via `grep` across `fixtures/` and
+  `golden-fixtures.test.ts` — zero matches for "ambiguous"), so a direct
+  SQL seed is the only available option today, not a shortcut taken in
+  place of a real one. Acceptable, but worth noting for whoever owns the
+  fixture library: an `ambiguous`-producing fixture doesn't exist yet,
+  so this assertion has never been proven against the real grouping
+  engine's output, only against a hand-constructed row shaped like what
+  it would produce.
+- **Verified `server-day-range.property.test.ts` is real.** `fast-check`,
+  200 runs per property, across all 5 `day_rollover` shapes this repo
+  actually uses (both UTC-literal and IANA-zone formats, including one
+  local-midnight special case), generated instants spanning 2020-2030
+  (crosses real DST transitions for the IANA-zone cases, not
+  hand-picked). Two independent properties: `computeServerDayRange` is a
+  faithful round-trip inverse of `computeServerDay` at both edges of the
+  returned range, and every instant `computeServerDay` maps to `D` falls
+  inside `computeServerDayRange(D)`. Real, not decorative.
+- **Ran the full suite independently:** 792 passing, 12 skipped, 0
+  failed — matches the orchestrator's own run exactly, not just trusted.
+  `confirm.ts` **100% line/branch/function/statement**, `sync.ts`
+  unchanged at **100% line, 93.43% branch, 90.9% function** after the
+  refactor — verified via `--coverage`, not taken on the coder's word.
+  `npm run build`, `npx tsc --noEmit`, `npm run lint` all clean (17
+  pre-existing unused-var warnings elsewhere in the repo, none new, 0
+  errors).
+- **Added 3 tests of my own** (all passing) in
+  `lib/ingestion/__tests__/confirm.live.test.ts`: the two coverage-gap
+  boundary cases above, plus one genuine new finding —
+  **`confirmDay` has no atomic guard against concurrent double-processing
+  of the same (account, server_day).** Two `Promise.allSettled`
+  concurrent `confirmDay` calls for the same account/day BOTH fulfill
+  and BOTH report the same trade as confirmed — the `UPDATE
+  retrospeq.trades SET confirmed_at = ...` has no `WHERE confirmed_at IS
+  NULL` (or equivalent atomic transition) guarding it, unlike
+  `erasure.ts`'s `data_requests.status`-column atomic
+  pending→processing transition (itself a real fix for a
+  retrospeq-security-reviewer FAIL, 2026-08-21, from an almost identical
+  shape of race). `day_closeouts` IS protected (`ON CONFLICT DO
+  NOTHING`, verified only one row ever exists), but `trades.confirmed_at`
+  is not — it silently ends up as whichever of the two concurrent
+  transactions' UPDATE commits last, not deterministically the first
+  caller's. **Not a live corruption today** (step 10's `trade.confirmed`
+  emission to Module 04 is a documented no-op, so nothing double-fires
+  yet), but this is exactly the shape of bug that becomes a real
+  double-emit hazard (two frozen `rule_evaluations` for one trade) the
+  moment Module 04 exists to listen for that event, and it is currently
+  **undocumented** — neither `confirm.ts`'s own header nor PROGRESS.md's
+  decision log mentions it. Flagged as a concrete, test-proven finding
+  for the security reviewer, not a hypothesis. Test:
+  `confirm.live.test.ts` → "SECURITY FINDING (independent test pass,
+  2026-08-22): two genuinely concurrent confirmDay calls...".
+- **Independent judgment on security review: agree, yes, warranted —
+  and specifically endorse flagging `autoConfirmStaleTrades`'s
+  unscoped, cross-account/cross-user sweep as a genuinely new shape of
+  service-role usage in this repo.** Every other `withServiceRoleConnection`
+  caller in this codebase (per ADR 0005's own caveat) filters explicitly
+  on one caller-supplied `user_id`/`account_id`; `autoConfirmStaleTrades`
+  takes NO scoping parameter at all and legitimately touches every
+  account/user in one call — safe as currently written (the UPDATE only
+  ever targets ids its own prior SELECT produced under the service role,
+  never a caller-supplied id), but its own function signature offers
+  **zero built-in protection** if a future slice ever wires it to a
+  route reachable by anything other than a genuinely trusted cron/system
+  context — there is no parameter, no internal check, nothing to prevent
+  an accidentally-exposed endpoint from triggering a full cross-user
+  sweep. Recommend the security reviewer treat "verify the eventual
+  trigger surface (Slice 6/7+) enforces service/cron-only invocation,
+  never an end-user-reachable one" as a first-class, written-down
+  requirement now, before that surface is built, not discovered
+  after. Combined with the concurrent-double-processing finding above,
+  recommend the security review explicitly cover: (1) the
+  confirmed_at-is-null-less UPDATE race, (2) the cross-account sweep's
+  total lack of caller-identity restriction, and (3) the repo-wide
+  RLS-INSERT-foreign-key gap already tracked in "Infra gaps" below (not
+  new to this slice, but `trades`' "for all" policy is one of the
+  tables named there, and this slice's writes go through it via
+  `withServiceRoleConnection`, bypassing RLS entirely for both — worth
+  the reviewer double-checking this slice doesn't rely on that RLS gap
+  being closed for its own safety, since it doesn't: `confirm.ts` never
+  goes through `authenticated`-role RLS at all, only `service_role`,
+  so this is a defense-in-depth note, not a live gap for this slice
+  specifically).
+- **Not independently re-verified (infra-gated, same as every other live
+  test in this repo):** RLS cross-user isolation for the tables
+  `confirm.ts` touches (`trades`, `day_closeouts`, `coverage_gaps`) was
+  already asserted 100%-of-tables/automated against the real live dev
+  Postgres project in `lib/supabase/__tests__/ingestion-schema.rls.test.ts`
+  (ran and passed again in this same suite run) — this slice adds no new
+  tables, so no new RLS surface exists to test. Golden-fixture replay:
+  this slice does not touch the grouping engine itself, so §9.3's
+  fixture-replay requirement doesn't apply to `confirm.ts` directly;
+  `sync.ts`'s own golden-fixture-parity tests (unchanged this slice)
+  were re-run and still pass.
+
+Full suite after my additions: **795 passing** (792 + 3 new), 12
+skipped, 0 failed.
+
+- **retrospeq-security-reviewer: one blocking FAIL, fixed, re-reviewed
+  PASS, 2026-08-22.** Failed on exactly the concurrency race tester
+  found: `confirmDay`'s per-trade UPDATE had no atomic guard (`WHERE id
+  = $1 AND account_id = $2`, no `status = 'closed' AND confirmed_at IS
+  NULL`), so two genuinely concurrent calls could both "win," leaving
+  `confirmed_at`/`confirmed_by` as whichever transaction committed last
+  — the same bug shape as an earlier real FAIL in
+  `lib/privacy/erasure.ts` (`executeErasure`'s non-atomic
+  pending→processing transition). Provided the exact fix, mirroring
+  `markDataRequestProcessing`'s pattern. Fixed by the orchestrator in
+  both places: (1) `confirmDay`'s per-trade UPDATE, adding `and status =
+  'closed' and confirmed_at is null`, only pushing to `tradesConfirmed`
+  when `rowCount > 0`; (2) `autoConfirmStaleTrades`'s bulk UPDATE, which
+  turned out to have a second, distinct bug beyond the race — without
+  the same guard, a trade a concurrent `confirmDay` call had already
+  confirmed as `'user'` could get silently overwritten to `'auto_7d'`,
+  corrupting confirmation provenance, not just racing on who "wins."
+  Fixed with the same guard plus `returning id` so the function only
+  reports rows it actually touched. Updated the existing race regression
+  test to assert exactly one winner/one empty-list loser (was
+  previously proving the bug, now proves the fix), and added a new
+  regression test racing `confirmDay` against `autoConfirmStaleTrades`
+  directly for the provenance-corruption scenario specifically (the
+  re-review noted no dedicated test existed for it). Re-reviewed: PASS —
+  independently confirmed correct Postgres READ-COMMITTED semantics in
+  both locations, confirmed the additional provenance fix was correctly
+  reasoned (not invented busywork), confirmed both regression tests are
+  real and would fail against the pre-fix code. Every other area
+  (`UNRESOLVED_BLOCK_ANOMALY` guard safety, scoping/parameterization,
+  RLS/trigger interaction, the `autoConfirmStaleTrades` cross-account
+  sweep's necessity) passed on the first review.
+- **retrospeq-qa: PASS**, no blocking findings. Independently confirmed
+  (not trusting prior claims): no code path anywhere in the repo can
+  still mutate a confirmed trade's derived facts (`sync.ts`'s
+  `recomputeInstrument` leaves any matched existing block/trade
+  completely untouched, confirmed or not); the `UNRESOLVED_BLOCK_ANOMALY`
+  guard only ever refuses, never proceeds with stale facts, and is
+  scoped per trade/block/day, not a blanket account-wide refusal;
+  `autoConfirmStaleTrades` never inserts a `day_closeouts` row under any
+  circumstance (grepped — the only INSERT into that table anywhere in
+  the repo is in `confirmDay`); both concurrency regression tests are
+  real and would fail pre-fix; all three refusal types
+  (`COVERAGE_GAP`/`AMBIGUOUS_GROUPING`/`UNRESOLVED_BLOCK_ANOMALY`) report
+  specific, actionable blocking ids, not a generic refusal — what Slice
+  7's UI will need. One minor, already-honestly-logged (not blocking)
+  note: `day_closeouts.kind` isn't retroactively updated from
+  `deliberate_no_trade` to `traded` if a late trade appears after a
+  no-trade closeout — a known, narrow, accepted gap, not swept under the
+  rug.
+- **Module 02 Slice 5 is now genuinely done.** Full suite: **796
+  passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean.
+
+**Next slice:** Module 02 Slice 6/7 — §4.7 corrections (manual split/join,
+the `not_a_decision` toggle) and §4.8 manual entry, then the UI layer
+(close-out screen, open-position card, etc). The BLOCK_EXTENSION_DEFERRED
+tracked gap from Slice 3/4 is now closed at the confirm-transaction level
+(this slice) — a stuck-open/stale-facts trade can no longer be silently
+confirmed — but in-place block extension itself is still not built; a
+trade can still sit unconfirmed indefinitely until either that or a manual
+split/join (§4.7, next slice) resolves it. Also still open: resolving
+`coverage_gaps` rows (nothing sets `resolved_at` anywhere in this repo
+yet) — flagged in the new runbook entry, not silently dropped.
 
 ## Needs-your-input signal
 
@@ -1794,6 +2158,33 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-22 — Module 02 Slice 5 (confirm/freeze transaction §4.6,
+  `lib/ingestion/confirm.ts`). Full reasoning in that file's own header,
+  summarized in "Current task" above — flagging the two calls the
+  dispatch specifically asked to be logged: (1) `autoConfirmStaleTrades`
+  never inserts a `day_closeouts` row, ever, read literally from "gets a
+  day_closeouts row only if the user closed it out" — `day_closeouts`
+  rows exist exclusively via `confirmDay`'s own INSERT, the only one in
+  the repo; (2) the stale/incomplete-block guard (this slice's own
+  extension of §4.6, not literal spec text — the mechanism that closes
+  the BLOCK_EXTENSION_DEFERRED gap Slice 3/4's tester flagged as a firm
+  requirement) IS applied to `autoConfirmStaleTrades` too, as a per-trade
+  skip rather than a whole-sweep refusal, because a `status = 'closed'`
+  trade can still share its block with an already-confirmed sibling trade
+  (§4.3's "a block can host multiple trades") and hit the FILL_LATE_ARRIVAL
+  case. A third, unprompted addition also logged for visibility:
+  `autoConfirmStaleTrades` excludes `grouping_confidence = 'ambiguous'`
+  trades from its eligibility query — not named in §4.6's own sentence,
+  added because auto-confirming an ambiguous trade would silently freeze
+  facts the product hasn't decided are correct yet, the same freeze-
+  honesty concern the stale-block guard exists to address. `sync.ts` was
+  refactored (no behavioral change, full existing test suite unmodified
+  and still green) to share its block/fill-membership-state computation
+  with `confirm.ts` via new exported `loadInstrumentBlockState`/
+  `findUnrecordedBlockFills`/`findUnrecordedFillsForBlock` — one
+  correctness question, one implementation, per §14's own "internal note"
+  documentation posture applied here to a mechanism rather than a single
+  formula.
 - 2026-08-21 — Module 02 Slice 4 (arm-event matching §4.5,
   `lib/ingestion/arm-matching.ts`/`lib/ingestion/trade-captures.ts`/
   `lib/ingestion/sync.ts`). Five judgment calls reconciling §4.5's
