@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slice 1 (schema + block derivation, §4.2) is done — coded, tested, security-reviewed, QA-reviewed. Slices 2-7 (grouping engine, sync pipeline, trade events/arm-matching, confirm/freeze transaction, corrections + manual entry, UI) remain — see "Current task" |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1 (schema + block derivation, §4.2) and 2 (grouping engine §4.3 + derived trade facts §4.4) are both done — coded, tested, QA-reviewed (security review deferred/not-warranted for Slice 2's pure-function scope, see decision log). Slices 3-7 (sync pipeline, trade events/arm-matching, confirm/freeze transaction, corrections + manual entry, UI) remain — see "Current task" |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -1065,15 +1065,130 @@ PASS), QA-reviewed (PASS). Committed and pushed.**
   set correctly — exactly the kind of judgment call this repo's own
   security-review trigger list exists to catch a second pair of eyes on.
 
-**Next slice:** the Module 02 grouping engine (§4.3 — confidence scoring,
-the weighted signal table, the resting-baseline algorithm, ambiguous-band
-handling, split-propensity learning) plus the sync pipeline skeleton
-against `BrokerAdapter`/`fixture-adapter.ts`, building on this slice's
-`fills`/`blocks` schema and `lib/ingestion/blocks.ts`'s
-`FillBlockAssignment` output. The golden-fixture harness
-(`lib/ingestion/__tests__/golden-fixtures.test.ts`) already exists and
-should be extended to assert `expected.json`'s `trades[]` array once the
-engine exists, rather than rebuilding fixture-loading from scratch.
+**Module 02 Slice 2 (grouping engine §4.3 + derived trade facts §4.4) —
+genuinely done as of this session: coded by retrospeq-coder,
+independently test-verified by retrospeq-tester, QA-reviewed PASS
+(2026-08-21, no blockers). A dedicated security-reviewer pass was
+judged not warranted for this slice by both retrospeq-tester and
+retrospeq-qa independently (pure functions, zero DB/credential/RLS/
+rule-eval surface — grepped for `supabase`/`createClient`/SQL/
+`process.env`, zero matches) — deferred to the sync-pipeline/confirm-
+transaction slice where a real write path and RLS will actually exist
+to review. Committed and pushed.** `lib/ingestion/grouping.ts` (`groupBlock`, the weighted
+signal table, the resting-baseline algorithm, confidence bands,
+split-propensity score-application) and `lib/ingestion/trade-facts.ts`
+(`computeTradeFacts`, §4.4's derived-fact formulas, the peak-not-initial
+`risk_pct` convention). Pure functions, no DB access — same posture as
+`blocks.ts`. Scope boundaries the coder documented and this pass
+confirmed are genuine, deliberate, spec-consistent narrowings (not gaps):
+`split_propensity`'s learning/persistence loop, real arm-event matching
+(§4.5), and physical splitting on any non-baseline signal are all later
+slices — a non-baseline signal that scores confident-split strength is
+correctly surfaced as `ambiguous` (asks) rather than auto-applied,
+because none of them has a spec-defined local cut point the way the
+resting-baseline excursion does.
+
+- **Independent test pass, not a re-read.** Read Module 02 §4.3/§4.4 and
+  both source files in full against their own header doc comments (both
+  files record every judgment call made reconciling the spec's prose into
+  code — read before assuming anything is missing). Ran the existing
+  suite directly rather than trusting the coder/orchestrator's reported
+  numbers, and confirmed it was genuinely green: `lib/ingestion` — 8 test
+  files, 94 tests, 0 failed.
+- **One real infra issue hit and worked around, not silently ignored:**
+  the default `npx vitest run` fails outright with `ENOSPC` on this
+  machine — the `C:` drive is at 0 bytes free (matches the existing
+  2026-08-19 decision-log note about npm cache being redirected off `C:`,
+  but Vitest's own OS-temp usage wasn't covered by that redirect). Worked
+  around per-invocation with `TEMP`/`TMP`/`TMPDIR` pointed at `E:/tmp_vitest`
+  (cleaned up after). **Flagging this as a standing infra gap** (added
+  below) rather than a one-off — any agent running `npm test`/`vitest`
+  on this machine without the override risks a false "tests won't run"
+  read.
+- **Golden fixture replay verified to genuinely exercise `trades[]` for
+  all 8 fixtures**, not blocks/fills leftovers from Slice 1 — spot-checked
+  `flip_no_flat` (ADR 0001's flip case: `trade_short`'s `initial_stop`/
+  `initial_risk_pct`/`risk_pct`/`r_multiple` all correctly `null`, the
+  synthetic `trade_events` entry correctly asserted) and
+  `swing_with_intraday` (5 real trades asserted from 1 block/10 fills,
+  each intraday excursion's `grouping_confidence: confident_split` and
+  `grouping_signals: {resting_baseline_excursion: 0.75}` checked against
+  real computed values, not just array length).
+- **Property tests assessed as testing real invariants with adequately
+  varied generators**, not narrow/tautological: determinism (exact-repeat
+  and arrival-order-shuffle, 200 runs each), the price-proximity-never-
+  decides invariant (verified directly in `grouping.ts` — no scoring
+  function reads `.price`; `GROUPING_SIGNAL_WEIGHTS.price_proximity` is
+  hard-coded `0` and unreferenced by any scorer), and the resting-baseline
+  split on a generated swing-plus-1-4-excursions shape (asserts exact
+  trade count, fill-membership completeness, and per-excursion confidence/
+  signals). The orchestrator's own fix — rewriting a stale test that
+  wrongly asserted physical splitting on a non-baseline `confident_split`-
+  strength signal, plus a companion propensity-suppression test — was
+  reviewed here and confirmed correct against the documented scope
+  boundary, not just re-trusted.
+- **Found and fixed a real gap: `trade-facts.ts` had zero dedicated unit
+  or property tests before this pass** — `computeTradeFacts` was only
+  ever exercised indirectly through the 8 golden fixtures, every one of
+  which is a closed trade with a real stop. That left several genuinely
+  reachable branches of this exported pure function untested: the
+  still-open-trade path (no exit-side member yet — `exitPriceAvg`/
+  `holdSeconds`/`outcome` all `null` per §4.4), the `scratch` outcome
+  band, the `contractValue` default, and the function's own input-
+  contract guards (empty member list, first member not `role: 'entry'`,
+  the internal VWAP zero-total-volume guard). Added
+  `lib/ingestion/__tests__/trade-facts.test.ts` (8 unit tests covering
+  all of the above) and `lib/ingestion/__tests__/trade-facts.property.test.ts`
+  (4 property tests, 200 runs each, on the two Module 02 §7.2 invariants
+  named for this file specifically — "sum of fill P&L equals trade
+  `realized_pnl`" and "`risk_pct >= initial_risk_pct` always" — that were
+  previously only spot-checked against fixed fixture values, never
+  property-tested against generated input).
+- **Coverage, verified directly (not re-quoted):** `grouping.ts` 98.61%
+  line / 95.79% branch (unchanged by this pass — already clearing
+  00-foundation §9.1's 90%-line bar comfortably). `trade-facts.ts` went
+  from 91.76%/81.39% to **100%/100%** line/branch after the new tests.
+  `grouping.ts`'s two remaining uncovered spots (`sign()`'s zero-volume
+  throw; `assignRoles`'s empty-member-list throw) were read directly and
+  judged genuinely unreachable via the public `groupBlock` API — internal
+  invariant guards protecting conditions the block-derivation contract
+  already rules out (a block never touches zero mid-span; `groupBlock`
+  never calls `assignRoles` with an empty slice) — not worth chasing for
+  coverage's own sake, noted rather than silently left unexplained.
+- **Full repo suite after the new tests: 680 passing** (up from 668
+  before this pass), 10 skip-guard fallbacks (env present, nothing
+  actually skipped), 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean (lint: 0 errors, 17 pre-existing warnings
+  unrelated to this slice).
+- **Not run: RLS / integration / E2E for this slice** — correctly out of
+  scope, not a gap. Module 02 §7.2's other DB-level invariants
+  ("regrouping after `confirmed_at` is impossible at the DB level",
+  "every fill belongs to exactly one trade [unique index]") and all of
+  §7.3's integration cases and §7.4's E2E flow need the `trades`/
+  `trade_fills` write path and a rendered surface, neither of which
+  exists yet — both remain for the sync-pipeline/confirm-transaction/UI
+  slices. No screenshot self-check for the same reason (no UI surface in
+  this slice).
+- **Security-reviewer: not warranted for this slice specifically.** No
+  DB access, no credentials, no rule-evaluation boundary, no vendor type
+  — `grouping.ts`/`trade-facts.ts` are pure functions over already-
+  materialised data (their own header comments say so explicitly). The
+  one non-negotiable genuinely at stake here — price proximity banned
+  from grouping — is directly, repeatedly property-tested (see above),
+  not just asserted in a comment. Recommend the eventual security-reviewer
+  pass land once the sync pipeline/confirm-transaction slice adds the
+  real `trades`/`trade_fills` write path and RLS, matching how Slice 1's
+  security review only made sense once real tables existed — reviewing
+  pure grouping/facts math today would mean reviewing arithmetic, not
+  security surface.
+
+**Next slice:** the Module 02 sync pipeline (§4.1) against
+`BrokerAdapter`/`fixture-adapter.ts`, trade-event/arm-matching (§4.5),
+and the confirm/freeze transaction (§4.6) — this is where `trades`/
+`trade_fills`/`trade_events` rows actually get written for the first
+time, which is also where the standing infra-gap note above (erasure
+flow not yet setting the `retrospeq.erasure_in_progress` escape hatch)
+needs to be fixed, per that note's own instruction.
 
 ## Needs-your-input signal
 
@@ -1094,11 +1209,63 @@ the owner — never fake it, always flag it."
 - [ ] No transactional email provider configured (00-foundation §10's "Email provider" row — a separate dependency from Supabase Auth's own, already-broken mailer). `lib/privacy/email-provider.ts` (Module 01 stories 5.x, 2026-08-21) throws `EmailProviderNotConfiguredError` unconditionally rather than faking a send. Not currently blocking anything real: `lib/privacy/erasure.ts`'s confirmation email is best-effort and never gates the actual deletion, so this is a standing gap, not a stalled task — see that file's own doc comment. Needs an owner-created account with a real provider (Resend/SendGrid/Postmark/etc) plus its API key wired into env vars.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
 - [ ] **Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's ingestion schema: `lib/privacy/erasure.ts`'s `deleteAllTradingAccountsForUser` deletes `trading_accounts` directly, which now cascades into `retrospeq.trades` (via `ON DELETE CASCADE`) — Postgres fires row-level `BEFORE DELETE` triggers on cascade-originated deletes too, and `trades` now has `forbid_broker_confirmed_trade_delete` (docs/adr/0011). The trigger has an escape hatch (`set_config('retrospeq.erasure_in_progress', 'true', true)`, transaction-local) specifically for this, but `erasure.ts` does not set it — it was written before Module 02's tables existed. **Inert today** (no code path writes a real `trades` row yet — no sync pipeline, no grouping engine), so nothing is broken in practice right now. **Must be fixed as part of whichever slice adds the first real trade-write path** (the sync pipeline or the grouping-engine confirm transaction) — that slice needs to also extend `lib/privacy/erasure.ts` to set the escape hatch before deleting `trading_accounts`/`profiles`, mirroring `docs/adr/0010`'s existing "explicit delete order, not cascade reliance" posture. Tracked here so it surfaces in the build order rather than being rediscovered via a failing erasure test later.
+- [ ] **`C:` drive is at 0 bytes free on this machine, and Vitest's own OS-temp usage isn't covered by the existing npm-cache redirect.** The 2026-08-19 decision-log entry redirected npm's cache/tmp to `E:/npm-cache`/`E:/npm-tmp`, but `npx vitest run` (default `TEMP`/`TMP`) still fails outright with `ENOSPC` — found 2026-08-21 during an independent test pass on Module 02 Slice 2. Worked around per-invocation with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest" npx vitest run ...` (directory created and cleaned up after each run). Not fixed at the environment level — that would mean either freeing real space on `C:` (owner action, not an agent one) or setting `TEMP`/`TMP` machine-wide/in a shared config, which risks affecting unrelated projects on this machine (`E:\LuceEdge`, `Pesa Hi Pesa`) the same way the npm-cache redirect note already flagged. Any agent running `vitest` directly (not through a wrapper that already sets this) should apply the same override rather than concluding the suite doesn't run.
 - [ ] **Repo-wide: several RLS INSERT/"for all" policies check `user_id = auth.uid()` but not that referenced foreign keys (`account_id`, `trade_id`, etc.) actually belong to that same user.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's `fills`/`trade_events` INSERT policies and `trades`/`arm_events`/`trade_captures`'s "for all" policies — a client could theoretically INSERT a row self-assigning `user_id` correctly while pointing `account_id`/`trade_id` at a row it doesn't actually own. Confirmed this is not new to Module 02 — the same shape exists on Module 01's `trading_accounts_owner`/`account_credentials_owner_insert` policies too. Not fixed now (out of scope for the slice that found it, and no test currently proves it's exploitable end-to-end — the referenced row would need to belong to another real user, and the practical blast radius depends on what a client could actually DO with a cross-user-linked row it can't otherwise read, which for most of these tables is "nothing visible," since the owning row still isn't selectable by the attacker afterward). Worth a dedicated pass adding `and exists (select 1 from retrospeq.trading_accounts where id = account_id and user_id = auth.uid())`-shaped checks (or equivalent) across every affected policy, repo-wide, rather than patching table-by-table as each is touched.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-21 — Closing out the standing Module 04+08-reorder offer
+  explicitly, so it's on record as considered-and-declined for this
+  slice too, not silently missed. The owner's conditional authorization
+  to reorder ahead of Module 02 (logged 2026-08-22 below, in the earlier
+  entry — dates in this log are as agents dated them at the time, not
+  strictly monotonic across session-limit resets) was raised again
+  mid-Slice-2. Decision: **did not reorder — this was a deliberate
+  judgment call, not an oversight.** Reasoning: Slice 2 was already
+  substantially built (the interrupted coder pass had a working,
+  well-documented `grouping.ts`/`trade-facts.ts` with only one stale
+  test to fix) when the reminder arrived — switching modules mid-slice
+  to re-litigate a "is Module 02 too big" question that the previous
+  session's check had already answered "no, not stuck, just large"
+  would have wasted the interrupted work and re-incurred the same
+  spec-reading cost Module 04/08 would require, for no benefit. Slice 2
+  finished cleanly in this session (680 tests passing, QA PASS, no
+  blockers) — confirming the earlier assessment held. The standing
+  offer to reorder remains open for a future slice if one genuinely
+  stalls; it simply didn't apply here since nothing stalled.
+
+- 2026-08-22 — retrospeq-tester independent pass on Module 02 Slice 2
+  (grouping engine §4.3 + derived trade facts §4.4, coded by
+  retrospeq-coder). Not a re-read: re-derived the spec sections from
+  scratch, read both source files' own header doc comments in full, and
+  ran the suite directly rather than trusting reported numbers. Result:
+  the coder's implementation and the orchestrator's own mid-session fix
+  (a stale property test wrongly asserting physical splitting on a
+  non-baseline signal, rewritten to match the documented "ambiguous, not
+  auto-applied" scope boundary) both held up under independent scrutiny.
+  Found and closed one real gap: `trade-facts.ts` had no dedicated unit
+  or property tests at all before this pass — only indirect coverage via
+  8 always-closed golden fixtures — leaving the still-open-trade path,
+  the `scratch` outcome band, the `contractValue` default, and the
+  function's own input-contract guards untested. Added
+  `lib/ingestion/__tests__/trade-facts.test.ts` and
+  `trade-facts.property.test.ts` (the latter covering Module 02 §7.2's
+  "sum of fill P&L equals trade `realized_pnl`" and "`risk_pct >=
+  initial_risk_pct` always" invariants directly, not just via fixed
+  fixture values); `trade-facts.ts` line/branch coverage went from
+  91.76%/81.39% to 100%/100%. Also found and flagged (not fixed — an
+  environment issue, not a code one) that default `npx vitest run` fails
+  with `ENOSPC` on this machine because `C:` has 0 bytes free and the
+  existing npm-cache redirect doesn't cover Vitest's own OS-temp usage —
+  worked around per-invocation via `TEMP`/`TMP`/`TMPDIR`, logged as a new
+  Infra gaps entry. Full detail in "Current task" above, under "Module 02
+  Slice 2." Judged a dedicated security-reviewer pass not warranted for
+  this slice specifically (pure functions, no DB/credentials/rule-eval
+  boundary) — recommended it land with the sync-pipeline/confirm-
+  transaction slice instead, once a real write path and RLS exist to
+  review.
 
 - 2026-08-22 — Owner offered explicit authorization to reorder Module 04
   (Rulebook & Evaluation) + Module 08 (Onboarding) ahead of finishing

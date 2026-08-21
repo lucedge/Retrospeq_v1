@@ -73,12 +73,14 @@ harness's own scratch directory is fixed to `C:\Users\...\AppData\Local\
 Temp`, not something this repo's config controls.
 
 **What's stalled:** nothing yet, definitively — every failure so far
-(this one, and an earlier Playwright browser-install `ENOSPC` this same
-session, worked around by installing to `E:\playwright-browsers`
-instead) has had a workaround. Flagging now, before it does stall
-something, since "the temp filesystem is full" is exactly the kind of
-failure that looks like a code bug if it's hit mid-task without this
-context.
+(this one, an earlier Playwright browser-install `ENOSPC` this same
+session worked around by installing to `E:\playwright-browsers` instead,
+and — new as of 2026-08-21 — `npx vitest run` itself now fails outright
+with `ENOSPC` on its default `TEMP`/`TMP`, worked around per-invocation
+with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest"`)
+has had a workaround. Flagging now, before it does stall something,
+since "the temp filesystem is full" is exactly the kind of failure that
+looks like a code bug if it's hit mid-task without this context.
 
 ---
 
