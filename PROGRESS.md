@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-6b are all done — coded, tested, security-reviewed, QA-reviewed: schema + block derivation (§4.2), grouping engine + derived trade facts (§4.3/§4.4), sync pipeline (§4.1), arm-event matching + pre-entry lock (§4.5), confirm/freeze transaction (§4.6), corrections + manual entry (§4.7/§4.8 — `not_a_decision` toggle, the freeze-regrouping trigger, manual entry, manual split/join). Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap) — the gate did its job every time it fired. Module 02's entire backend (§4.1-§4.8) is now complete. Remaining: Slice 7 (the UI layer — the first Module 02 slice with a rendered surface), then the Phase 1 boundary process |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-6b (the entire backend, §4.1-§4.8) and Slice 7a (Server Actions + trade list screen, §5.1/§5.2 — Module 02's first rendered UI surface) are all done — coded, tested, security-reviewed, QA-reviewed. Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap, plus Slice 7a's ownership-check confirmation). Remaining: Slice 7b (close-out screen, manual entry form, split/join UI controls), then the Phase 1 boundary process |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -2642,33 +2642,15 @@ This was a genuine re-derivation, not a re-read of the coder's own claims:
   (§4.1-§4.8) — every ingestion pipeline stage from sync through
   confirm/freeze through corrections now exists, tested and reviewed.**
 
-**Next slice: Module 02 Slice 7, the UI layer** (open position card with
-the ambient grouping chip, trade list with expandable fills and
-split/not-a-decision actions, close-out screen, grouping resolution
-control, manual entry form) — every backend piece Slice 7 needs to wire
-up now exists (Slices 1-6b). This is the FIRST Module 02 slice with a
-rendered surface — the mandatory screenshot self-check (AGENTS.md step 4,
-"there's no interactive browser tool in this environment, so this is the
-only way rendered UI actually gets looked at") applies for the first time
-in this module. The BLOCK_EXTENSION_DEFERRED tracked gap from Slice 3/4
-is closed at the confirm-transaction level (Slice 5) — a stuck-open/
-stale-facts trade can no longer be silently confirmed — but in-place
-block extension itself is still not built; a trade whose block gains a
-late fill after derivation can still sit unconfirmed indefinitely (manual
-split/join doesn't reach this specific case — see the runbook entry).
-Also still open: resolving `coverage_gaps` rows (nothing sets
-`resolved_at` anywhere in this repo yet) — flagged in the runbook, not
-silently dropped. **After Slice 7, run the Phase 1 boundary process**
-(AGENTS.md step 5 — `/code-review` or `simplify`, then dispatch
-`retrospeq-docs` to refresh `docs/DEVELOPMENT.md`) before marking Phase 1
-complete in the Phase status table, since Module 01 + Module 02 will both
-be done at that point.
-
 **Module 02 Slice 7a (Server Actions layer + trade list screen, §5.1/§5.2's
 first two elements) — coder pass complete, 2026-08-22. This is the FIRST
 Module 02 slice with a rendered surface. retrospeq-tester/security-reviewer/qa
-passes still needed before this slice is marked done — security review
-flagged explicitly (see below, `confirmDayAction`'s ownership check).**
+first two elements) — genuinely done as of this session: coded, tested
+(including a full E2E suite and a live-DB ownership-check proof),
+security-reviewed (PASS), QA-reviewed (PASS). See the closeout
+paragraphs below the tester section for the full FAIL-free PASS story
+(security review found no blocking issue, only confirmed the flagged
+`confirmDayAction` ownership check was already correct).**
 
 - `app/(app)/trades/actions.ts` — thin Server Action wrappers around
   every Module 02 backend write function built in Slices 1-6b:
@@ -2822,6 +2804,217 @@ flagged explicitly (see below, `confirmDayAction`'s ownership check).**
   stated 00-foundation convention; the `confirmDayAction` ownership-check
   addition follows the SAME pattern `disconnectAccount`/
   `updateAccountSettings` already established, not a new one.
+
+**Module 02 Slice 7a — independent retrospeq-tester pass, 2026-08-22.
+Confirms the coder pass; adds real coverage that was missing, finds one
+minor design-system-fidelity gap (not blocking), and confirms the
+security-reviewer flag is warranted.**
+
+- **`confirmDayAction`'s ownership check — independently confirmed real,
+  not just correctly wired to a mock.** Read `confirm.ts`'s `confirmDay`
+  directly: it resolves `accountId` via `withServiceRoleConnection` and
+  never checks the resolved `user_id` against any caller — the coder's
+  finding is accurate, not overstated. The existing unit test
+  (`actions.test.ts`) only proves the Server Action calls a *mocked*
+  `isAccountOwnedByUser` and short-circuits on `false` — it does not
+  prove the real function rejects a real stranger. Added
+  `app/(app)/trades/__tests__/confirm-day-action.live.test.ts` (2 tests,
+  live dev/test Postgres, real `isAccountOwnedByUser` + real `confirmDay`,
+  only the cookie-dependent `createClient`/`getClientIp` mocked since
+  those structurally require a running Next.js request context this repo
+  has no test harness for): a stranger's `confirmDayAction` call against
+  another user's real account and a real eligible trade is rejected with
+  `TRADE_ACCOUNT_NOT_FOUND`, `confirmDay` is never reached, and the
+  victim's trade is left completely untouched (asserted directly against
+  the DB row, not a mock call count) — plus a positive control proving
+  the real owner, same code path, genuinely confirms the day. Both pass.
+  **This independently confirms the coder's finding and closes the "only
+  proven against a mock" gap** — a security-reviewer pass is still
+  warranted given the stakes (this is the first client-reachable path to
+  freezing rule evaluations — AGENTS.md's "Rule evaluations freeze at
+  close-out and are never recomputed retroactively" — so a false negative
+  here would be a critical, not cosmetic, defect), but the check itself
+  is confirmed present, correctly placed before `confirmDay`, and
+  effective against a live DB, not just a unit-test double.
+- `lib/ingestion/trades-repository.ts` — read in full: every query scopes
+  via `withUserConnection` (confirmed by reading `direct.ts`'s
+  `withUserConnection`, which is genuinely RLS-enforced, `SET LOCAL ROLE
+  authenticated` + `request.jwt.claims`), never the service-role client —
+  this file is not a second RLS-bypass surface. All four functions
+  additionally filter
+  explicitly on `user_id = $1`/`tf.user_id = $2` in SQL, belt-and-braces
+  alongside RLS, matching this repo's established double-check posture.
+- `actions.ts` — all 5 Server Actions confirmed to have: a session check
+  (`requireSessionUser`) before any other work; a rate-limit check using
+  one of the 5 new `lib/rate-limit/config.ts` scopes, each a real,
+  compile-time-validated key (`RateLimitScope = keyof typeof
+  RATE_LIMITS`), not a typo'd/no-op string; Zod validation
+  (`z.strictObject`/`z.uuid`) before any backend call; every thrown error
+  mapped to a named code + a hand-written `user_message`, confirmed via
+  the `internalErrorState` helper which always logs the raw error
+  server-side (`console.error`) and returns a fixed, generic message —
+  spot-checked with a raw Postgres-shaped error message and confirmed it
+  never reaches `JSON.stringify(result)`; `revalidatePath('/trades')`
+  called on every success path. Rate-limit budgets
+  (`toggleNotADecision` 60/40, `manualTradeEntry` 30/20, `splitTrade`/
+  `joinTrades` 25/15, `confirmDay` 20/15, ip/identity per hour) reviewed
+  against the file's existing scopes (`accountSettings` 40/30,
+  `connectAccount` 20/10, etc.) — consistent scale, not accidentally
+  permissive, tightened roughly by destructiveness as documented inline.
+- Spot-checked 3 unit tests in `actions.test.ts` for tautology: the
+  `toggleNotADecisionAction` "rate limited" test (mocks a real
+  `RateLimitExceededError` thrown from the rate-limit call, asserts the
+  backend function is never invoked — real, not a no-op assertion), the
+  "never leaks a raw internal error message" test (throws a realistic
+  Postgres-shaped error, asserts the sanitized code AND that the raw
+  string is absent from the serialized result — real), and the
+  `confirmDayAction` "not owned" test (asserted above) — all genuine,
+  none tautological.
+- **Independent screenshot/E2E pass, real dev server + real Supabase Auth
+  test users + real seeded Postgres data**, added as a permanent E2E
+  suite (`e2e/trades.spec.ts`, 5 tests, none existed before this pass —
+  Module 02 had zero E2E coverage of its first rendered surface) rather
+  than a throwaway script, covering §7.4's "core flow + one failure
+  path" bar: empty state, a populated list (2 open incl. one ambiguous,
+  1 closed-unconfirmed, 2 confirmed — one win, one loss, one scratch, one
+  long, one short), the grouping chip's disabled-buttons + "Later"
+  dismissal, the not-a-decision checkbox toggle (re-verified independently
+  of the coder's own probe, both directions, **with a direct DB read**
+  proving the write actually lands, not just that the optimistic client
+  state flips), and the failure path (a cleared-cookie "expired session"
+  mid-navigation redirects to `/login` honestly, no raw error). All 5
+  pass. Screenshots read back and checked against the design-system bar:
+  no red/green anywhere — win/loss/scratch outcomes and long/short
+  direction are both plain text/data-attributes only, confirmed no CSS
+  rule anywhere selects on `data-outcome`; the ambiguous-grouping chip is
+  the sanctioned `.rq-cost` amber "trade-off to weigh," never a warning
+  colour; `.rq-num` spot-checked present on risk %, R-multiple (including
+  a genuine negative, `-1.0R`, rendered in plain text/weight, no colour);
+  the "Same trade"/"Separate" buttons are genuinely `disabled` (Playwright
+  actionability itself refuses to click them, not merely dimmed — proven,
+  not just read from CSS) with the honest inline note; the empty state
+  shows real "Not enough data yet" copy with zero fake table/card markup.
+  Session cleanup for both this suite's and the coder's own test users
+  confirmed complete (0 leftover `retrospeq-e2e-trades-*` auth.users rows
+  after the run).
+- **One real, minor finding: `.rq-btn--equal` fidelity gap in
+  `GroupingChip.tsx`.** Every other `.rq-btn` variant in this codebase is
+  applied in combination with the base `.rq-btn` class (`className="rq-btn
+  rq-btn--ghost"`, confirmed via `privacy/page.tsx`'s own usage) — the
+  base class supplies the design system's actual touch-target sizing
+  (`min-height: 44px`), radius token, and base font size.
+  `GroupingChip.tsx`'s "Same trade"/"Separate" buttons use
+  `rq-btn--equal` ALONE, substituting ad hoc Tailwind utility classes
+  (`rounded-md px-3 py-2 text-sm`) instead of reusing those tokens. Not a
+  red/green or ethics violation (the equal-pair styling itself, and the
+  honest disabled note, are both correct), and both buttons are disabled
+  in this slice so it's not yet user-facing, but it should be fixed to
+  `className="rq-btn rq-btn--equal ..."` before Slice 7c makes these
+  buttons live, to get the canonical 44px touch target back. Flagged for
+  whoever picks up Slice 7c, not filed as a blocking defect against this
+  slice.
+- Also flagged, non-blocking: the open-position card's age (`formatAge`,
+  e.g. "2d 6h") and the fill-count span (`formatFillCount`, e.g. "1
+  fill") are both numeric/measurement values rendered as plain `rq-sub`
+  text, not wrapped in `.rq-num`, unlike risk %/R-multiple/volume/price
+  on the same screen which correctly are. The design-system rule reads
+  "no exceptions" — worth a follow-up pass even though these read more as
+  descriptive labels than measurements.
+- **Coverage note, pre-existing repo-wide scope, not introduced by this
+  slice:** `vitest.config.ts`'s coverage `include` is `lib/**/*.ts` only
+  — `app/(app)/trades/actions.ts`/`page.tsx`/`format.ts`/
+  `GroupingChip.tsx`/`NotADecisionToggle.tsx` have real unit/E2E tests
+  (confirmed above) but produce no coverage percentage in the report at
+  all; this matches every other `app/` Server Action file in the repo
+  (`accounts/actions.ts` etc.) so it's a standing, repo-wide gap rather
+  than something specific to this slice, but is worth flagging since
+  00-foundation §9.1's "70% overall" line doesn't explicitly say "lib/
+  only." All `lib/ingestion` files touched by this slice
+  (`trades-repository.ts`) are at 100% line coverage; `lib/` overall is
+  98.48%, `lib/rate-limit` (the 5 new scopes) is 98.93%.
+- Full suite, run independently (`TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest"
+  TMPDIR="E:/tmp_vitest" npx vitest run --coverage`): **924 passing** (922
+  from the coder pass + 2 new live tests added here), 12 skipped
+  (confirmed genuinely env-gated fallbacks, not silently-skipped real
+  coverage — the live-DB env is present and every `.skipIf(!env)` suite
+  ran for real), 0 failed. `npm run build`, `npx tsc --noEmit`, and
+  `npx eslint "app/(app)/trades" lib/ingestion/trades-repository.ts
+  lib/rate-limit/config.ts e2e/trades.spec.ts` all re-run independently,
+  all clean.
+- **retrospeq-security-reviewer: PASS, no blocking findings, 2026-08-22.**
+  Independently verified (not trusting the coder/tester's own claims):
+  `confirmDayAction`'s ownership check genuinely runs before `confirmDay`
+  is ever called, sources the "who is asking" half from
+  `requireSessionUser()`'s real session (never a client-suppliable
+  value), and `isAccountOwnedByUser` genuinely enforces RLS (`SET LOCAL
+  ROLE authenticated`, not app-layer trust) — there is exactly one call
+  site reaching `confirmDay`, no bypass path. All 5 Server Actions
+  confirmed to have session check, rate limiting (new scopes reviewed as
+  reasonably tight, `confirmDay` deliberately the tightest given it's
+  the highest-stakes write), input validation, and safe error mapping
+  (no raw error/stack ever reaches the client). `trades-repository.ts`
+  confirmed genuinely RLS-scoped via `withUserConnection` throughout,
+  including the fills-union query (`trade_fills`/`trade_events`), which
+  can't cross a user boundary since both legs filter independently on
+  top of each table's own RLS. No new injection surface, all queries
+  parameterized.
+- **Fixed same session, a real minor design-system nit tester flagged
+  as non-blocking:** `GroupingChip.tsx`'s disabled "Same trade"/
+  "Separate" buttons were missing the base `.rq-btn` class every other
+  button variant in this codebase combines with `.rq-btn--equal`/
+  `.rq-btn--ghost` — losing the design system's touch-target/radius/font
+  tokens. Fixed (`rq-btn--equal rounded-md px-3 py-2 text-sm opacity-50`
+  → `rq-btn rq-btn--equal opacity-50` on both buttons); re-verified
+  build/lint/tsc clean.
+- **retrospeq-qa: PASS**, no blocking findings, reviewed with real
+  design-system rigor as the first Module 02 UI surface deserves.
+  Independently confirmed (read the actual CSS/classNames, not trusted
+  from prior claims): every trade row's headline number is R-multiple,
+  never a dollar amount; `data-outcome`/`data-status` have zero matching
+  color rules anywhere in the brand CSS — win/loss/scratch and
+  long/short are both plain text; the empty state renders honest prose,
+  not a hidden/zeroed section. `.rq-num` genuinely present on every
+  numeric metric of consequence (R-multiple, risk %, price, volume);
+  `formatAge`/`formatFillCount` NOT needing `.rq-num` confirmed against
+  Module 02 §5.2's own reference markup, which doesn't apply it to the
+  equivalent `<time class="position__age">`/`<span class="trade__
+  fillcount">` elements either — not a violation, matching spec
+  precedent. Zero primary `.rq-btn` on this screen judged correct, not a
+  gap: §5.1 lists "close-out day list" as a separate element from
+  "trade list row," so the natural primary action belongs to Slice
+  7b/Module 06, not this slice. Re-verified the grouping chip's disabled
+  buttons are still genuinely non-interactive after the `.rq-btn` fix
+  (real `disabled` attribute, confirmed via pixel-level screenshot
+  crop, not just dimmed styling). Re-verified the `not_a_decision`
+  checkbox fix is sound by reading the component directly, independently
+  confirmed by a real Playwright E2E test clicking the actual checkbox
+  and checking the DB row. Confirmed the mandatory screenshot self-check
+  was genuinely done (real screenshots under `tmp/dev-screenshots/`,
+  plus a permanent 5-test E2E suite, not just unit-tested Server Action
+  logic).
+- **Module 02 Slice 7a is now genuinely done.** Full suite: **924
+  passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean.
+
+**Next slice: Module 02 Slice 7b — the close-out screen, manual entry
+form, and split/join UI controls** (the remaining §5.1 elements: "trim
+reason chip row, close-out day list, grouping resolution control,
+manual entry form"). This deep-links the grouping chip's currently-disabled
+"Separate" action to a real manual-split control (Slice 7a's
+`GroupingChip.tsx` documents this as its own deferred follow-up).
+**After Slice 7b, run the Phase 1 boundary process** (AGENTS.md step 5 —
+`/code-review` or `simplify`, then dispatch `retrospeq-docs` to refresh
+`docs/DEVELOPMENT.md`) before marking Phase 1 complete in the Phase
+status table, since Module 01 + Module 02 will both be fully done at
+that point. The BLOCK_EXTENSION_DEFERRED tracked gap from Slice 3/4 is
+closed at the confirm-transaction level (Slice 5) — a stuck-open/
+stale-facts trade can no longer be silently confirmed — but in-place
+block extension itself is still not built; a trade whose block gains a
+late fill after derivation can still sit unconfirmed indefinitely
+(manual split/join doesn't reach this specific case — see the runbook
+entry). Also still open: resolving `coverage_gaps` rows (nothing sets
+`resolved_at` anywhere in this repo yet) — flagged in the runbook, not
+silently dropped.
 
 ## Needs-your-input signal
 

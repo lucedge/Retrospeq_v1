@@ -51,7 +51,7 @@ export function GroupingChip({ instrument }: { instrument: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rq-btn--equal rounded-md px-3 py-2 text-sm opacity-50"
+          className="rq-btn rq-btn--equal opacity-50"
           disabled
           title="Not available yet — resolving this needs a chosen split point, coming in a later update."
         >
@@ -59,7 +59,7 @@ export function GroupingChip({ instrument }: { instrument: string }) {
         </button>
         <button
           type="button"
-          className="rq-btn--equal rounded-md px-3 py-2 text-sm opacity-50"
+          className="rq-btn rq-btn--equal opacity-50"
           disabled
           title="Not available yet — resolving this needs a chosen split point, coming in a later update."
         >
