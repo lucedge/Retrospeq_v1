@@ -208,6 +208,58 @@ export const RATE_LIMITS = {
     ip: { limit: 20, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 02 Slice 7a — `app/(app)/trades/actions.ts`'s
+   * `toggleNotADecisionAction`. Per §4.7, "plain toggle, no reason
+   * required," available before or after freeze, and a trader may
+   * reasonably flip it back and forth while deciding — the loosest
+   * budget in this file, matching `accountSettings`'s reasoning (not
+   * credential- or auth-shaped, not destructive, no vendor round trip).
+   */
+  toggleNotADecision: {
+    ip: { limit: 60, windowSeconds: 3600 },
+    email: { limit: 40, windowSeconds: 3600 },
+  },
+  /**
+   * `createManualTradeAction` — Module 02 §4.8. Writes real `fills`/
+   * `trades` rows (a genuine financial record, unlike a settings edit),
+   * but a `manual`-platform account's whole reason to exist is that a
+   * trader logs trades by hand, plausibly several in one sitting after
+   * a trading session — moderate, not tight.
+   */
+  manualTradeEntry: {
+    ip: { limit: 30, windowSeconds: 3600 },
+    email: { limit: 20, windowSeconds: 3600 },
+  },
+  /**
+   * `splitTradeAction`/`joinTradesAction` — Module 02 §4.7, "before
+   * freeze only." Restructures existing trade membership rather than
+   * creating new financial records, and both are pre-freeze-only by
+   * construction (so the worst case is a few wasted attempts against an
+   * already-confirmed trade, not runaway data creation) — moderate,
+   * slightly tighter than manual entry since these mutate rows a sync
+   * may also be touching concurrently.
+   */
+  splitTrade: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  joinTrades: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  /**
+   * `confirmDayAction` — Module 02 §4.6, "the critical transaction."
+   * Freezes rule evaluations permanently once it succeeds, so this is
+   * the highest-stakes write in this file, but a trader legitimately
+   * retries a refused confirm (coverage gap fixed, ambiguity resolved)
+   * a few times in normal use — moderate, matching `connectAccount`'s
+   * budget rather than a destructive-action one.
+   */
+  confirmDay: {
+    ip: { limit: 20, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

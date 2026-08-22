@@ -2664,6 +2664,165 @@ silently dropped. **After Slice 7, run the Phase 1 boundary process**
 complete in the Phase status table, since Module 01 + Module 02 will both
 be done at that point.
 
+**Module 02 Slice 7a (Server Actions layer + trade list screen, §5.1/§5.2's
+first two elements) — coder pass complete, 2026-08-22. This is the FIRST
+Module 02 slice with a rendered surface. retrospeq-tester/security-reviewer/qa
+passes still needed before this slice is marked done — security review
+flagged explicitly (see below, `confirmDayAction`'s ownership check).**
+
+- `app/(app)/trades/actions.ts` — thin Server Action wrappers around
+  every Module 02 backend write function built in Slices 1-6b:
+  `toggleNotADecisionAction`, `createManualTradeAction`, `splitTradeAction`,
+  `joinTradesAction`, `confirmDayAction`. Same shape as
+  `app/(app)/accounts/actions.ts`'s established pattern throughout:
+  session check → rate-limit check (5 new `lib/rate-limit/config.ts`
+  scopes — `toggleNotADecision`, `manualTradeEntry`, `splitTrade`,
+  `joinTrades`, `confirmDay`, tightness-by-destructiveness per this
+  slice's own dispatch) → Zod-parse the boundary input → call the
+  backend function → map every thrown error to a named, user-safe
+  message (never a raw error/stack) → `revalidatePath('/trades')`.
+- **A real, security-relevant finding, not invented for this slice:**
+  `lib/ingestion/confirm.ts`'s `confirmDay(accountId, serverDay, options)`
+  is — by its own header comment — a TRUSTED BACKEND-PROCESS transaction
+  (same posture as `sync.ts`): it resolves `accountId` to a row and an
+  owning `user_id` but never checks that `user_id` against a caller's own
+  session, because until this slice nothing ever called it from a
+  client-reachable boundary. `confirmDayAction` is the FIRST such
+  boundary, so it adds the ownership check itself
+  (`isAccountOwnedByUser`, the same function `disconnectAccount`/
+  `updateAccountSettings` already use for the identical reason) — without
+  it, any signed-in trader could pass an arbitrary `accountId` belonging
+  to a different user and confirm/freeze THEIR day. Explicitly flagged in
+  `actions.ts`'s own header for the security reviewer, not decided as a
+  closed question unilaterally. `splitTradeAction`/`joinTradesAction`
+  need no equivalent addition — `splitTrade`/`joinTrades` themselves
+  already enforce ownership internally (Slice 6b), and this action layer
+  passes only the caller's own `user.id`, never a client-submitted value,
+  to that check.
+- `lib/ingestion/trades-repository.ts` (new) — `listOpenTrades`,
+  `listClosedUnconfirmedTrades`, `listConfirmedTrades` (status-scoped,
+  `withUserConnection`, genuinely RLS-enforced, no new RLS surface —
+  reuses `trades_owner`'s existing "for all" policy from Slice 1), and
+  `listTradeMembers` (batched `trade_fills`/`fills` UNION
+  `trade_events`/`fills` query across many trade ids in one round trip,
+  extending the same union `split-join.ts`'s `loadTradeMemberRows`
+  already established rather than reimplementing it). `TRADE_COLUMNS`
+  exported from `lib/ingestion/corrections.ts` so this file's SELECT list
+  can never silently drift from `toggleNotADecision`'s own — one column
+  list, not two.
+- `app/(app)/trades/page.tsx` — the trade list screen: open positions
+  (`<article class="position">`-shaped card, adapted to this repo's real
+  `.rq-*` selectors, same adaptation `accounts/page.tsx`/
+  `AccountSettingsForm.tsx` already made from the spec's illustrative
+  classes), closed-unconfirmed and confirmed trades (`<article
+  class="trade">`-shaped row, native `<details>`/`<summary>` for the
+  expandable fills table — no client JS needed for that disclosure), and
+  the "not enough data yet" empty state for a zero-trade account
+  (AGENTS.md's own non-negotiable — a correct, intended state, not an
+  error).
+- **Conviction and `pos.live_r` deliberately omitted from the open
+  position card**, not shown as fake/blank values — this module has no
+  conviction-capture UI built yet (Module 03/08 territory) and
+  `pos.live_r` is a Module 05 analytic that doesn't exist yet. Rendering
+  either with a placeholder would be exactly the fabrication AGENTS.md
+  forbids.
+- **The ambiguous-grouping chip's honest-scoping decision** (Module 02
+  §4.3's ambient chip, "Same trade" / "Separate" / "Later"), documented
+  in `GroupingChip.tsx`'s own header: **"Later" is a genuine, real no-op**
+  (client-side dismiss for the session, no server call — exactly §4.3's
+  own words, "ignored, it batches into close-out," which is real
+  behaviour, not a stub). **"Same trade"/"Separate" are shown but
+  DISABLED**, with an honest inline note, rather than wired to a fake
+  action — neither has a real one-tap backend operation yet ("Same
+  trade" has no corresponding write at all; "Separate" would need a
+  specific `splitAtFillId` a single tap cannot supply, and Module 02
+  §4.7 is explicit that split/join always take an explicit fill id,
+  never inferred). Wiring either to `splitTradeAction`/`joinTradesAction`
+  today would mean guessing a boundary (a `§9` "silence over wrongness"
+  violation) or silently doing nothing while looking like it worked
+  (explicitly forbidden by this slice's own dispatch). Deferred to Slice
+  7c, which can deep-link "Separate" to a real manual-split control once
+  one exists.
+- **A "sync now" Server Action was deliberately NOT built**, per this
+  slice's own dispatch — no real `BrokerAdapter` exists yet (standing
+  infra gap, 00-foundation §10), and a client-triggered sync button today
+  would either fake success against the fixture adapter or surface a
+  permanently-broken button, neither honest. Deferred until a real vendor
+  adapter exists.
+- **A real bug found and fixed via the mandatory screenshot/interaction
+  self-check, not a code read:** the first version of `NotADecisionToggle.tsx`
+  wrapped a `<form action={formAction}>` from `useActionState` around a
+  controlled checkbox whose `checked` prop was derived from the action's
+  returned `state`, submitted via `formRef.current?.requestSubmit()` on
+  the checkbox's own `onChange`. A live-DB-backed Playwright probe
+  (`tmp/verify-toggle-persist.mjs`, not committed — throwaway per
+  convention) proved the underlying WRITE always succeeded (Postgres
+  `not_a_decision` updated correctly both directions), but the checkbox's
+  own visual state never updated IN PLACE after a real native click — it
+  silently stayed at its pre-click value even once the action had fully
+  resolved and the component's own computed `checked` variable had
+  genuinely flipped (confirmed via a temporary debug dump). It only ever
+  showed correctly after a full page reload (fresh mount). This is the
+  documented React gotcha where a checkbox's internal `_valueTracker`
+  desyncs once the DOM's `checked` property is toggled by a real user
+  click and then reset by React to a *different* value in the same tick
+  (exactly what happens while the action is pending) — later updates to
+  the same `checked` prop stop reliably reaching the DOM. **Fixed** by
+  rewriting the component around local `useState`/`useTransition`
+  (optimistic update set synchronously inside the same `onChange` the
+  native click fired, rolled back on a server error), calling the Server
+  Action directly as a plain async function rather than through a form —
+  the standard, reliable pattern for a controlled checkbox, verified
+  afterward to flip visually in under 50ms and to persist correctly
+  through a reload, both directions, via the same probe script.
+- Tests: 52 new unit tests (`app/(app)/trades/__tests__/actions.test.ts`
+  — 37 tests, happy path/validation/rate-limited/session-missing/
+  not-found-or-not-owned for all 5 actions, matching
+  `accounts/__tests__/actions.test.ts`'s established pattern;
+  `app/(app)/trades/__tests__/format.test.ts` — 15 tests for the pure
+  formatting helpers, including the "null never becomes a fake 0/0%"
+  cases) plus 5 new live-DB tests
+  (`lib/ingestion/__tests__/trades-repository.live.test.ts` — status
+  scoping, cross-user isolation, `listTradeMembers` batching and scoping,
+  per this slice's own dispatch: "don't re-prove RLS shape, just confirm
+  the repository reads correctly scope to user_id"). Full suite: **922
+  passing**, 12 skipped (env-gated skip-guard fallbacks, env present,
+  nothing actually skipped), 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean (lint: 0 errors, the same 17 pre-existing
+  warnings, none new).
+- Screenshot self-check (`tmp/screenshot-trades.mjs`, real dev server +
+  real Supabase Auth test users via the GoTrue admin API, REAL seeded
+  trade data via a direct-`pg` seed script covering every required
+  state: an open position with confident grouping, an open position
+  with ambiguous grouping — the chip renders — a closed-unconfirmed
+  4-fill trade, a closed-unconfirmed trade with ambiguous grouping and a
+  null `r_multiple`, a confirmed trade with `not_a_decision` pre-checked,
+  and a second zero-trade account for the empty state): all reviewed —
+  no red/green anywhere (the grouping chip uses `.rq-cost`, amber, the
+  design system's own "trade-off to weigh" treatment, not a warning
+  colour), zero `.rq-btn` primary elements on this read-focused list view
+  (acceptable — the rule this repo has followed elsewhere is "never two,"
+  not "always exactly one"; a natural primary action doesn't exist here
+  without inventing scope, since manual entry's form is Slice 7b), `.rq-num`
+  on every price/volume/R-multiple/risk-percent value, the grouping chip
+  only appears on the two genuinely `ambiguous` trades, the null-`r_multiple`
+  trade renders an honest dash never a fake 0, and the empty state renders
+  correctly ("Not enough data yet..."). The checkbox toggle fix above was
+  also independently verified end-to-end in this same pass (instant
+  optimistic flip, correct DB persistence, correct reload-survival).
+- **Explicitly out of scope for this slice, per its own dispatch:** the
+  close-out screen, the manual-entry form UI, split/join UI controls
+  beyond the grouping chip's own honest-scoping decision, trim-reason
+  chips — all Slice 7b/7c.
+- No new runbook entry — this slice introduces no new alerting condition
+  of its own (every error code surfaced maps onto Module 02 §9's already-
+  documented taxonomy; `docs/runbook.md`'s existing "Trades stuck unable
+  to confirm" entry already covers `confirmDay`'s refusal codes and was
+  last updated for Slice 6b). No new ADR — nothing here deviates from a
+  stated 00-foundation convention; the `confirmDayAction` ownership-check
+  addition follows the SAME pattern `disconnectAccount`/
+  `updateAccountSettings` already established, not a new one.
+
 ## Needs-your-input signal
 
 See `NEEDS_YOUR_INPUT.md` at the repo root — that file, not this
@@ -2690,6 +2849,21 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-22 — Module 02 Slice 7a (Server Actions + trade list screen,
+  §5.1/§5.2). Full reasoning inline in `app/(app)/trades/actions.ts`'s and
+  `app/(app)/trades/GroupingChip.tsx`'s own headers, summarized in
+  "Current task" above. Three judgment calls worth restating here: (1)
+  `confirmDayAction` adds an ownership check `confirmDay` itself doesn't
+  perform (that function is a trusted-backend-process transaction, same
+  posture as `sync.ts` — this Server Action is the first client-reachable
+  boundary in front of it), flagged explicitly for security review, not
+  decided as closed; (2) the grouping chip's "Same trade"/"Separate"
+  buttons are shown but disabled with an honest note rather than wired to
+  a guessed or silently-no-op action, since neither has a real one-tap
+  backend operation yet; (3) no "sync now" action was built — no real
+  `BrokerAdapter` exists (standing infra gap), so a sync trigger would
+  have to fake success. None of these deviate from a stated
+  00-foundation convention, so no new ADR.
 - 2026-08-22 — Module 02 Slice 6b (manual split/join §4.7,
   `lib/ingestion/split-join.ts`). Full reasoning in that file's own header,
   summarized in "Current task" above — the six judgment calls flagged

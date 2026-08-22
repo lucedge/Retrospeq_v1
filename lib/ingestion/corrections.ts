@@ -86,7 +86,13 @@ export interface TradeRow {
   created_at: string;
 }
 
-const TRADE_COLUMNS = `
+/**
+ * Exported (2026-08-22, Module 02 Slice 7a) so
+ * `lib/ingestion/trades-repository.ts`'s read-only trade-list queries
+ * reuse the exact same column list rather than maintaining a second,
+ * driftable copy — one `trades` SELECT shape, not two.
+ */
+export const TRADE_COLUMNS = `
   id, user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
   entry_price_avg, exit_price_avg, peak_volume, initial_stop, risk_pct, initial_risk_pct, r_multiple,
   realized_pnl, currency, hold_seconds, outcome, strategy_id, strategy_version,
