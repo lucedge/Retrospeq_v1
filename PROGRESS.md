@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-5 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock, confirm/freeze transaction §4.6) are all done — coded, tested, security-reviewed, QA-reviewed. Slice 5 had one blocking security FAIL (a concurrency race in the confirm-transaction's trade-confirming UPDATE, same bug shape as an earlier `erasure.ts` FAIL) fixed with an atomic conditional UPDATE and re-reviewed PASS; it also closes the BLOCK_EXTENSION_DEFERRED follow-up tracked since Slice 3 — a stuck-open/stale-facts trade can no longer be silently confirmed by either `confirmDay` or the 7-day auto-confirm sweep. Slices 6-7 (corrections + manual entry §4.7/§4.8, UI) remain |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-5 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock, confirm/freeze transaction §4.6) and Slice 6 part 1 (§4.7 `not_a_decision` toggle + the freeze-regrouping trigger, §4.8 manual entry backend) are all done — coded, tested, security-reviewed, QA-reviewed. Slice 6 part 1's security review found and closed two non-blocking follow-ups same session (a freeze-trigger transition-window gap, a missing RLS negative-case test). Remaining: Slice 6b (manual split/join, §4.7) and Slice 7 (the UI layer) |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -2121,16 +2121,212 @@ skipped, 0 failed.
   passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
   `npm run lint` all clean.
 
-**Next slice:** Module 02 Slice 6/7 — §4.7 corrections (manual split/join,
-the `not_a_decision` toggle) and §4.8 manual entry, then the UI layer
-(close-out screen, open-position card, etc). The BLOCK_EXTENSION_DEFERRED
-tracked gap from Slice 3/4 is now closed at the confirm-transaction level
-(this slice) — a stuck-open/stale-facts trade can no longer be silently
-confirmed — but in-place block extension itself is still not built; a
-trade can still sit unconfirmed indefinitely until either that or a manual
-split/join (§4.7, next slice) resolves it. Also still open: resolving
-`coverage_gaps` rows (nothing sets `resolved_at` anywhere in this repo
-yet) — flagged in the new runbook entry, not silently dropped.
+**Module 02 Slice 6, part 1 (§4.7 `not_a_decision` toggle + §4.8 manual
+entry) — independent tester QA pass, 2026-08-22.** Coded by
+retrospeq-coder, interrupted mid-session by a usage-limit reset, resumed
+and bug-fixed by the orchestrator, then independently re-tested (not a
+re-read of prior claims) per this task's own dispatch. Scope: manual
+split/join, the correction-flow UI, and Slice 7's UI wiring are all still
+NOT built — this covers only `lib/ingestion/corrections.ts`
+(`toggleNotADecision`), `supabase/migrations/20260822040000_trades_freeze_
+regrouping_trigger.sql` (`retrospeq.forbid_frozen_trade_regrouping`), and
+`lib/ingestion/manual-entry.ts` (`createManualTrade`).
+
+- **Freeze trigger, verified independently, not trusted from the
+  migration's own comment:** read the SQL directly. The allowlist
+  (`to_jsonb(NEW) - 'not_a_decision' IS DISTINCT FROM to_jsonb(OLD) -
+  'not_a_decision'`) genuinely excuses only that one column — confirmed
+  via `trades-freeze-trigger.live.test.ts`'s "(b) not_a_decision paired
+  with another column change in the SAME statement is still rejected"
+  case, which already existed and passes: a same-statement change to
+  `not_a_decision` AND `entry_price_avg` together is still rejected
+  whole. The `WHEN (OLD.confirmed_at is not null)` clause genuinely
+  exempts `confirmDay`/`autoConfirmStaleTrades`'s own NULL->value
+  transition (WHEN evaluates against the row's OLD state before the
+  trigger body ever runs, so a still-unconfirmed row never enters the
+  function body at all) — confirmed by reading the SQL, not just the
+  comment, and both (c) live-DB cases (`confirmDay` and
+  `autoConfirmStaleTrades`'s own UPDATEs succeeding with the trigger
+  active) pass.
+- **Manual entry's "no parallel code path" claim, verified concretely:**
+  `manual-entry.ts` imports `recomputeInstrument` from `./sync.ts` — grepped
+  the repo, confirmed exactly one function definition of that name exists
+  (`sync.ts:930`), no shadow/duplicate implementation anywhere. The
+  `sync.ts` diff that exports it is minimal and honest: a new, narrower
+  `RecomputeInstrumentAccountContext` interface (5 fields
+  `recomputeInstrument` actually reads) plus `export`, no logic changes.
+  Live test confirms `grouping_confidence: 'confident_single'` and
+  `grouping_source: 'auto'` on the resulting trade — falls out naturally
+  from the real pipeline, not special-cased (there is no code anywhere in
+  `manual-entry.ts` that sets either field directly).
+- **Two-phase write's RLS boundary, verified live:** re-ran
+  `manual-entry.live.test.ts`'s "a second user cannot create a manual
+  trade against the first user's account" case against the real DB —
+  genuinely rejected at phase 1 (`ManualEntryAccountNotFoundError`, RLS's
+  own `trading_accounts_owner` policy scoping the SELECT to zero rows for
+  a non-owner), not an application-level check papering over an RLS gap;
+  confirmed zero fills/trades exist for the account afterward.
+  Non-manual-platform rejection (`ManualEntryNotManualPlatformError`) is
+  also loud (a named, thrown error) and verified live to leave zero
+  `manual:%` fills behind — matches this slice's own dispatch, "must fail
+  loudly, never silently create a fake manual fill on a real broker
+  account."
+- **Repo-wide sweep for the "$5 inconsistent types deduced" SQL bug
+  pattern** (the orchestrator's own fix, applied to two files while
+  resuming this interrupted slice): wrote a script scanning every
+  `.test.ts` file's SQL template literals for a parameter used both bare
+  and with an explicit cast in the same query. Found none beyond the two
+  already-fixed files — every other repeated-parameter case in this repo
+  (`arm-matching.live.test.ts`, `confirm.live.test.ts`, `sync.live.test.ts`,
+  etc.) uses two explicit, consistent casts (`$4::timestamptz, ...,
+  $4::date`), which Postgres accepts fine. No further instances existed.
+- **New, real gap found and flagged (not present in either file's own
+  header before this pass): the two-phase write's orphaned-fills window.**
+  `withUserConnection`/`withServiceRoleConnection` each commit their own,
+  independent transaction (`lib/supabase/direct.ts`'s `withRole`) — there
+  is no single transaction spanning phase 1 and phase 2. If phase 1 (the
+  two synthetic `fills` rows) commits and phase 2
+  (`recomputeInstrument`) then throws for any reason, those two fills are
+  left durably committed with no block/trade ever derived from them —
+  and because `sync.ts`'s `runSync` explicitly skips `platform = 'manual'`
+  accounts, nothing else in this repo will ever retry deriving a trade
+  from them. `createManualTrade` itself still fails loudly (the caller's
+  promise rejects) — this is not a silent failure at the call site, it is
+  the absence of any cleanup/retry/visibility for what phase 1 already
+  committed. Proved live, not asserted: added
+  `lib/ingestion/__tests__/manual-entry-phase2-failure.live.test.ts` (a
+  separate file, since it mocks `recomputeInstrument` to throw, which
+  would otherwise break every happy-path test in `manual-entry.live.test.ts`)
+  — confirms the two fills exist and are durable while zero blocks/trades
+  exist for the account afterward. Documented in `manual-entry.ts`'s own
+  header ("Known gap" section) with three honestly-scoped candidate fixes
+  (a reconciliation sweep akin to `autoConfirmStaleTrades`; a narrow,
+  reviewed INSERT policy letting phase 1+2 share one transaction; or
+  surfacing orphaned fills to the user as a visible "entry failed
+  partway, retry" state) — not fixed in this pass, since picking one is a
+  deliberate design decision, not a QA-pass fix. This is a real,
+  currently-live gap in this codebase, not a hypothetical — flagging here
+  rather than letting it sit undocumented.
+- **Judgment: security-reviewer pass IS warranted before this slice is
+  called fully done**, agreeing with the orchestrator's own lean — not
+  because anything found here failed, but because the surface touched is
+  exactly the kind this project's security bar treats as mandatory-review,
+  not optional: a new DB trigger altering write semantics on every
+  confirmed trade (`retrospeq.forbid_frozen_trade_regrouping`), a new
+  client-writable RLS INSERT path (`fills_owner_insert`'s `manual:%`
+  carve-out, the first genuinely novel untrusted-input boundary since
+  Slice 1's schema was reviewed), and a two-phase transaction split
+  crossing two different DB privilege levels. Everything checked out
+  correct in this pass, but "checked out correct under independent
+  testing" and "reviewed by retrospeq-security-reviewer" are not the same
+  gate, and this file's own header explicitly asks for the latter
+  ("Explicitly flagged for the security reviewer, not decided
+  unilaterally").
+- Added one new live test (`manual-entry-phase2-failure.live.test.ts`,
+  above). Full suite: **847 passing** (846 + 1 new), 12 skipped, 0
+  failed — all live-DB tests genuinely ran (Supabase env vars present in
+  `.env.local`, not mocked/skipped). Coverage: **99.2% lines / 95.02%
+  branches overall**; `lib/ingestion/corrections.ts` 100% lines,
+  `lib/ingestion/manual-entry.ts` 97.75% lines (the one uncovered branch
+  is a "structurally impossible" defensive throw, matching the file's own
+  documented reasoning for why it's not exercised) — both well above the
+  90%/70% bar. `npm run build`, `npx tsc --noEmit`, `npm run lint` all
+  clean (lint: 0 errors, 17 pre-existing warnings unrelated to this
+  slice). E2E/screenshot requirement not applicable yet — confirmed via
+  grep that no Server Action or UI wiring calls either function anywhere
+  under `app/` (both files' own headers already say this is deferred to
+  Slice 7); nothing to screenshot for a code path with no UI surface yet.
+  Golden-fixture replay not re-run as a dedicated step since neither
+  `corrections.ts` nor `manual-entry.ts` modifies `grouping.ts` itself
+  (manual-entry.ts calls the unchanged `recomputeInstrument`) — but
+  `sync.live.test.ts`'s existing golden-fixture-parity suite (3 fixtures)
+  ran as part of the full suite and still passes, which is the relevant
+  regression signal for "did this slice disturb the grouping engine."
+- **retrospeq-security-reviewer: PASS with two non-blocking follow-ups,
+  both applied and re-verified PASS same session, 2026-08-22.** No
+  blocking finding — everything the tester's pass already checked out
+  correct held up under review too. Two forward-looking items
+  recommended before Module 04/05/06 start touching `trades`, both
+  closed immediately rather than left tracked:
+  1. **The freeze trigger's transition-window exemption.** The original
+     `20260822040000` trigger's `WHEN (OLD.confirmed_at is not null)`
+     clause meant the trigger's function body never ran at all for the
+     specific UPDATE that sets `confirmed_at` for the first time — safe
+     TODAY only because `confirmDay`/`autoConfirmStaleTrades` are both
+     hardcoded, fixed-column UPDATEs with no client-controlled column
+     set, but a structural gap a future bug (Module 04/05/06) could
+     exploit to smuggle an unauthorized column change into that same
+     statement. Fixed with a follow-up migration,
+     `supabase/migrations/20260822050000_trades_freeze_trigger_close_transition_gap.sql`
+     — removes the `WHEN` clause, moves the branching inside the
+     function body (already-frozen: unchanged `not_a_decision`-only
+     allowlist; transitioning-into-confirmed: widens the allowlist to
+     also include `confirmed_at`/`confirmed_by`/`status` for that one
+     statement only; neither: unrestricted, matching pre-freeze
+     behavior). Applied live, verified via `pg_get_triggerdef` (no `WHEN`
+     clause remains), and proven with a new live test ("(d) closes the
+     transition-window gap") that a raw UPDATE smuggling
+     `entry_price_avg` into the same statement that sets `confirmed_at`
+     is now rejected and rolled back completely, while the legitimate
+     transition shape still succeeds unchanged. All 7 pre-existing cases
+     in that test file re-ran and still pass, confirming the fix altered
+     nothing previously tested.
+  2. **A missing negative-case RLS test for `fills_owner_insert`'s
+     `manual:%` check.** Only the success case (manual-prefixed insert)
+     and the cross-user rejection were previously tested — a same-user,
+     non-`manual:`-prefixed insert attempt (the exact case that prevents
+     colliding with a real broker deal id) had never actually been
+     proven to fail. Added to `lib/supabase/__tests__/ingestion-schema.rls.test.ts`,
+     verified live: rejected with a genuine RLS violation.
+  - Re-reviewed (focused pass): PASS, both fixes independently confirmed
+    correct against the live database, not just the file contents.
+- **retrospeq-qa: PASS**, no blocking findings. Independently re-derived
+  (not trusted from the security-reviewer's sign-off) that the freeze
+  trigger's three branches — already-frozen, transitioning-into-confirmed,
+  ordinary pre-freeze — are mutually exclusive and exhaustive over the
+  (OLD, NEW) `confirmed_at` state space, and specifically confirmed the
+  already-frozen branch also correctly rejects an attempted *un-freeze*
+  (`confirmed_at` going non-null → null), since that changes the compared
+  JSON too. Confirmed `toggleNotADecision` takes no reason parameter and
+  invents none. Confirmed "no parallel code path" directly (read the
+  import, grepped for a second `recomputeInstrument` definition — none
+  exists). Judged the shared-`now()` timestamp default for manual entry
+  as an honest "we don't know when" signal (`hold_seconds = 0`) rather
+  than a fabricated duration, consistent with the product's "was this a
+  good decision" honesty framing, not a violation of it.
+- **Module 02 Slice 6, part 1 is now genuinely done** — `not_a_decision`
+  toggle, the freeze-regrouping trigger (both migrations), and manual
+  entry's backend write path. Coded, independently tested, security-
+  reviewed (two follow-ups found and closed same session), QA-reviewed.
+  Full suite: **849 passing**, 12 skipped, 0 failed. `npm run build`,
+  `npx tsc --noEmit`, `npm run lint` all clean. **Manual split/join
+  (§4.7), the correction-flow UI, and manual-entry's actual UI form
+  remain — see "Next slice."**
+
+**Next slice: Module 02 Slice 6b — manual split (§4.7, "before freeze
+only, creates two trades from one, recomputes facts, sets
+`grouping_source = 'user_split'`") and manual join (§4.7, "before freeze
+only, same block, merges, recomputes").** Deliberately deferred out of
+Slice 6 part 1 — these are genuinely harder than the toggle/manual-entry
+already built: `join` in particular has to reconcile with
+`forbid_broker_confirmed_trade_delete`'s "a broker-originated trade is
+never deletable" rule (checked at delete-time against the row's CURRENT
+`trade_fills`/`trade_events` membership, not its history) — the intended
+resolution, not yet built, is to reassign the losing trade's membership
+rows onto the surviving trade FIRST, in the same transaction, so the
+delete trigger sees a membership-less row and correctly permits the
+delete; `split` avoids this entirely by only ever inserting a new trade
+row, never deleting the original. After Slice 6b: Slice 7, the UI layer
+(open position card, trade list with expandable fills, close-out screen,
+grouping resolution control, manual entry form) — every backend piece
+Slice 7 needs to wire up now exists. The BLOCK_EXTENSION_DEFERRED tracked
+gap from Slice 3/4 is closed at the confirm-transaction level (Slice 5) —
+a stuck-open/stale-facts trade can no longer be silently confirmed — but
+in-place block extension itself is still not built; a trade can still
+sit unconfirmed indefinitely until either that or manual split/join
+(Slice 6b) resolves it. Also still open: resolving `coverage_gaps` rows
+(nothing sets `resolved_at` anywhere in this repo yet) — flagged in the
+runbook, not silently dropped.
 
 ## Needs-your-input signal
 

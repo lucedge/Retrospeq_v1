@@ -299,6 +299,22 @@ describe.skipIf(!env)('retrospeq ingestion schema — cross-user isolation and t
       ).rejects.toThrow();
     });
 
+    it(
+      "user A cannot insert a fill with a non-manual provider_ref -- fills_owner_insert's WITH CHECK requires provider_ref like 'manual:%' " +
+        '(retrospeq-security-reviewer follow-up, 2026-08-22, Module 02 Slice 6: this negative case was previously unproven live, only the manual-prefixed success case and the cross-user rejection were)',
+      async () => {
+        await expect(
+          asRole(db, 'authenticated', userA.id, async (c) => {
+            await c.query(
+              `insert into retrospeq.fills (user_id, account_id, provider_ref, instrument, side, volume, price, filled_at, server_day, currency)
+               values ($1, $2, 'BROKER-DEAL-COLLISION', 'EURUSD', 'buy', 1, 1.1, now(), current_date, 'USD')`,
+              [userA.id, accountA],
+            );
+          }),
+        ).rejects.toThrow(/row-level security/i);
+      },
+    );
+
     it('user A cannot update their own fill row — no UPDATE policy exists at all (append-only, 00-foundation §2.4)', async () => {
       const rowCount = await asRole(db, 'authenticated', userA.id, async (c) => {
         const res = await c.query(`update retrospeq.fills set instrument = 'HIJACKED' where id = $1`, [

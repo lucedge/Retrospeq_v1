@@ -128,6 +128,18 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // caller-supplied id, so no request-scoped trust boundary is
   // actually crossed.
   'lib/ingestion/confirm.ts',
+  // Module 02 Slice 6 (§4.8 manual entry): phase 2 only, of a deliberate
+  // two-phase write. Phase 1 (the genuinely novel untrusted-input
+  // boundary — inserting the two synthetic `fills` rows) runs under
+  // `withUserConnection`, RLS-enforced via `fills_owner_insert`'s own
+  // `manual:%` check. Phase 2 calls the SAME `recomputeInstrument`
+  // `sync.ts` uses to derive blocks/grouping/facts from those fills —
+  // necessarily service-role because `blocks`/`trade_fills`/
+  // `trade_events` have no client-writable INSERT policy at all (same
+  // structural reason `sync.ts`/`confirm.ts` are service-role), not a
+  // shortcut invented for this slice. See that file's own header for the
+  // full reasoning, reviewed by retrospeq-security-reviewer.
+  'lib/ingestion/manual-entry.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

@@ -888,12 +888,48 @@ interface RecomputeInstrumentResult {
   anomalies: string[];
 }
 
-/** §4.1 steps 6-9 for one (account, instrument) span -- see header
- *  judgment call #4 for the exact, deliberately narrow scope this
- *  implements. */
-async function recomputeInstrument(
+/**
+ * The minimal account context `recomputeInstrument` actually reads
+ * (`id`/`user_id`/`day_rollover`/`starting_equity`/`base_currency`) --
+ * narrower than the full `AccountRow` this file's own DB-loading code
+ * produces, structurally compatible with it (every real `AccountRow`
+ * satisfies this interface), so `writeSyncOutcome`'s existing call below
+ * needs no change. Exists so a caller that has ONLY these five columns --
+ * `lib/ingestion/manual-entry.ts`'s §4.8 write path, which fetches them
+ * from a `withUserConnection` (RLS-scoped) SELECT rather than this file's
+ * own service-role `loadAccount` -- can call `recomputeInstrument`
+ * directly without constructing a fake full `AccountRow` (platform,
+ * provider_ref, server, sync_tier, connected_at, created_at -- none of
+ * which this function reads).
+ */
+export interface RecomputeInstrumentAccountContext {
+  id: string;
+  user_id: string;
+  day_rollover: string;
+  starting_equity: string | null;
+  base_currency: string;
+}
+
+/**
+ * §4.1 steps 6-9 for one (account, instrument) span -- see header
+ * judgment call #4 for the exact, deliberately narrow scope this
+ * implements.
+ *
+ * Exported (2026-08-22, Module 02 Slice 6) so `lib/ingestion/manual-entry.ts`
+ * §4.8 can call the EXACT same block-derivation/grouping/derived-facts
+ * write path real broker-synced fills use, rather than a parallel
+ * reimplementation -- this is the concrete, checkable meaning of §4.8's
+ * "no parallel code path": manual entry writes its own two synthetic
+ * `fills` rows (through its own genuinely RLS-enforced `withUserConnection`
+ * write, matching `fills_owner_insert`'s `manual:%` policy -- see that
+ * file's own header for why THIS function's write is necessarily
+ * service-role instead, matching `blocks`/`trade_fills`'s RLS shape), then
+ * calls this unchanged function to derive blocks/grouping/facts from them,
+ * identically to how a real sync would.
+ */
+export async function recomputeInstrument(
   client: PoolClient,
-  account: AccountRow,
+  account: RecomputeInstrumentAccountContext,
   instrument: string,
 ): Promise<RecomputeInstrumentResult> {
   const anomalies: string[] = [];
