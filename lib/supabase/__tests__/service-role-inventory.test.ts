@@ -140,6 +140,21 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // shortcut invented for this slice. See that file's own header for the
   // full reasoning, reviewed by retrospeq-security-reviewer.
   'lib/ingestion/manual-entry.ts',
+  // Module 02 Slice 6b (§4.7 manual split/join): phase 2 only, of the same
+  // two-phase pattern manual-entry.ts/confirm.ts already established.
+  // Phase 1 (withUserConnection, RLS-enforced) is pure validation for both
+  // splitTrade/joinTrades — no writes at all, unlike manual-entry.ts's own
+  // phase 1. Phase 2 does the actual restructuring, necessarily
+  // service-role because `trade_fills` has no update policy for any
+  // client role (SELECT-only) and `trade_events` has none either
+  // (SELECT+INSERT only) — reassigning trade_id/role/kind is structurally
+  // impossible under RLS regardless of ownership. `joinTrades`' own phase
+  // 2 also performs the DELETE of the absorbed trade row, after
+  // reassigning its membership away, in the SAME transaction — see that
+  // file's own header for the `forbid_broker_confirmed_trade_delete`
+  // interaction this relies on. Every query in both phase-2 bodies is
+  // explicitly scoped to already phase-1-validated trade/account ids.
+  'lib/ingestion/split-join.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

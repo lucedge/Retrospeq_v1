@@ -466,8 +466,18 @@ entries, PROGRESS.md "Infra gaps"):
    `status: 'closed'`, `confirmed_at: null` indefinitely — it also never
    ages into auto-confirm eligibility being SAFE (see next point), so it
    can sit unconfirmed forever with no path back into the normal
-   lifecycle short of a future in-place block-extension feature or a
-   manual split/join (§4.7, not yet built) touching it.
+   lifecycle short of a future in-place block-extension feature. **Updated
+   2026-08-22 (Module 02 Slice 6b):** manual split/join
+   (`lib/ingestion/split-join.ts`, §4.7) now exist as a genuine in-product
+   resolution path a trader can reach for an ambiguous OR stuck trade —
+   splitting/joining recomputes `grouping_confidence` to
+   `'confident_single'`, clearing the `'ambiguous'` state `confirmDay`'s
+   own assertion 2 refuses on. In-place block extension itself is still
+   not built, so a trade whose own block genuinely gained a late fill after
+   derivation (`BLOCK_EXTENSION_DEFERRED`/`FILL_LATE_ARRIVAL`) still has no
+   direct fix — split/join operate on a trade's EXISTING fill membership,
+   they don't pull in a fill the block-derivation pass hasn't yet assigned
+   to any trade at all.
 3. **`autoConfirmStaleTrades`'s `tradesSkippedStaleBlock`** — the same
    anomaly guard applied to the 7-day auto-confirm sweep (a per-trade
    skip, not a whole-sweep refusal, by design — see `confirm.ts`'s own

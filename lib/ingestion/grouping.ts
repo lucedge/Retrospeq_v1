@@ -470,8 +470,15 @@ function detectQualifyingExcursions(steps: FillStep[], baseline: Decimal): Excur
  * marks the group's own first member as a synthetic ADR-0001 entry
  * (caller must already know this only applies to whichever group contains
  * the block's very first fill).
+ *
+ * Exported (2026-08-22, Module 02 Slice 6b) so `lib/ingestion/split-join.ts`'s
+ * manual split/join can re-derive entry/add/trim/exit roles for a NEW
+ * (split) or MERGED (join) member subset using the exact same role-
+ * assignment logic real grouping uses — "recomputes facts" (§4.7) means
+ * literally this function, not a parallel reimplementation. No behavior
+ * change from the prior module-private version.
  */
-function assignRoles(members: GroupingInputFill[], firstIsFlipOpening: boolean): { members: TradeGroupMember[]; isClosed: boolean } {
+export function assignRoles(members: GroupingInputFill[], firstIsFlipOpening: boolean): { members: TradeGroupMember[]; isClosed: boolean } {
   if (members.length === 0) {
     throw new Error('grouping: assignRoles called with an empty member list.');
   }

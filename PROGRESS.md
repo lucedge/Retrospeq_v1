@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-5 (schema + block derivation §4.2, grouping engine §4.3 + derived trade facts §4.4, sync pipeline §4.1, arm-event matching §4.5 + pre-entry lock, confirm/freeze transaction §4.6) and Slice 6 part 1 (§4.7 `not_a_decision` toggle + the freeze-regrouping trigger, §4.8 manual entry backend) are all done — coded, tested, security-reviewed, QA-reviewed. Slice 6 part 1's security review found and closed two non-blocking follow-ups same session (a freeze-trigger transition-window gap, a missing RLS negative-case test). Remaining: Slice 6b (manual split/join, §4.7) and Slice 7 (the UI layer) |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-6b are all done — coded, tested, security-reviewed, QA-reviewed: schema + block derivation (§4.2), grouping engine + derived trade facts (§4.3/§4.4), sync pipeline (§4.1), arm-event matching + pre-entry lock (§4.5), confirm/freeze transaction (§4.6), corrections + manual entry (§4.7/§4.8 — `not_a_decision` toggle, the freeze-regrouping trigger, manual entry, manual split/join). Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap) — the gate did its job every time it fired. Module 02's entire backend (§4.1-§4.8) is now complete. Remaining: Slice 7 (the UI layer — the first Module 02 slice with a rendered surface), then the Phase 1 boundary process |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -2303,30 +2303,366 @@ regrouping_trigger.sql` (`retrospeq.forbid_frozen_trade_regrouping`), and
   (§4.7), the correction-flow UI, and manual-entry's actual UI form
   remain — see "Next slice."**
 
-**Next slice: Module 02 Slice 6b — manual split (§4.7, "before freeze
-only, creates two trades from one, recomputes facts, sets
-`grouping_source = 'user_split'`") and manual join (§4.7, "before freeze
-only, same block, merges, recomputes").** Deliberately deferred out of
-Slice 6 part 1 — these are genuinely harder than the toggle/manual-entry
-already built: `join` in particular has to reconcile with
-`forbid_broker_confirmed_trade_delete`'s "a broker-originated trade is
-never deletable" rule (checked at delete-time against the row's CURRENT
-`trade_fills`/`trade_events` membership, not its history) — the intended
-resolution, not yet built, is to reassign the losing trade's membership
-rows onto the surviving trade FIRST, in the same transaction, so the
-delete trigger sees a membership-less row and correctly permits the
-delete; `split` avoids this entirely by only ever inserting a new trade
-row, never deleting the original. After Slice 6b: Slice 7, the UI layer
-(open position card, trade list with expandable fills, close-out screen,
-grouping resolution control, manual entry form) — every backend piece
-Slice 7 needs to wire up now exists. The BLOCK_EXTENSION_DEFERRED tracked
-gap from Slice 3/4 is closed at the confirm-transaction level (Slice 5) —
-a stuck-open/stale-facts trade can no longer be silently confirmed — but
-in-place block extension itself is still not built; a trade can still
-sit unconfirmed indefinitely until either that or manual split/join
-(Slice 6b) resolves it. Also still open: resolving `coverage_gaps` rows
-(nothing sets `resolved_at` anywhere in this repo yet) — flagged in the
-runbook, not silently dropped.
+**Module 02 Slice 6b (§4.7 manual split + manual join) — coded and
+independently live-tested, 2026-08-22. Security-reviewer and QA passes
+still needed before this slice (and the rest of Module 02's backend) can
+be marked done.**
+
+- `lib/ingestion/split-join.ts` — `splitTrade(userId, tradeId,
+  splitAtFillId)` and `joinTrades(userId, tradeIdA, tradeIdB)`, both
+  reusing `grouping.ts`'s `assignRoles` (now exported, no behavior change)
+  and `trade-facts.ts`'s `computeTradeFacts` unchanged — "recomputes
+  facts" means literally calling the same functions the sync pipeline
+  calls, no parallel logic. `lib/ingestion/grouping.ts`'s `assignRoles`
+  export is the only change to a previously-reviewed file in this slice.
+- **Two-phase write, same `withUserConnection` → `withServiceRoleConnection`
+  pattern `manual-entry.ts`/`confirm.ts` already established** — but with
+  one deliberate improvement: phase 1 here is PURE VALIDATION (no writes at
+  all), so unlike `manual-entry.ts`'s own documented "orphaned-fills
+  window" gap, this slice has no analogous partial-write risk — every
+  mutation for both functions happens inside phase 2's own single
+  transaction, so a mid-operation failure rolls back everything phase 2
+  attempted, leaving the pre-operation state completely intact. Phase 2
+  re-validates ownership/freeze/boundary-membership from scratch (closes
+  the narrow race where a concurrent `confirmDay`/`autoConfirmStaleTrades`
+  freezes the trade between phase 1 committing and phase 2 starting).
+- **`joinTrades`' delete-trigger interaction — the one genuinely fragile
+  mechanism in this slice, exactly as dispatched:** the absorbed trade's
+  `trade_fills`/`trade_events` rows are reassigned onto the surviving trade
+  FIRST, then the absorbed trade row is deleted, in the SAME phase-2
+  transaction — so `forbid_broker_confirmed_trade_delete`'s exists-check
+  (evaluated against CURRENT membership, not history) finds nothing backing
+  the absorbed trade and permits the delete regardless of whether it was
+  originally broker-originated. Proven with a dedicated live test using
+  REAL (non-`manual:`) provider-ref fills, not reasoned about only — see
+  `__tests__/split-join.live.test.ts`'s join happy-path test, which
+  deliberately uses broker-shaped provider refs for exactly this reason,
+  plus a second dedicated test exercising the `trade_events` reassignment
+  branch specifically (a survivor carrying an ADR-0001 synthetic
+  flip-opening entry, built from the real `flip_no_flat` golden fixture via
+  `runSync`).
+- **Judgment calls made (logged here per 00-foundation §12, full reasoning
+  in `split-join.ts`'s own header — none deviate from a stated
+  00-foundation convention, so no new ADR was written; flagged for
+  security-reviewer/QA to confirm that judgment, not decided unilaterally
+  as final):**
+  1. Both resulting trades' `grouping_confidence` → `'confident_single'`,
+     `grouping_signals` cleared to `{}` — "a user-directed
+     split/join has no ambiguity left by definition" (this slice's own
+     dispatch, verbatim).
+  2. `grouping_source`: `'user_split'` for both trades a split produces
+     (§4.7's literal value); `'user_join'` for a join's survivor — both
+     verified against `trades_grouping_source_check`'s exact allowed list
+     before use.
+  3. `ambiguity_resolved_at` set to the operation's own timestamp on every
+     trade touched, regardless of prior confidence — read as "the last
+     time a human decided this trade's own boundary."
+  4. Split boundary validation exactly as dispatched: not a current member
+     → `SplitBoundaryNotMemberError`; the ADR-0001 synthetic flip-opening
+     entry → `SplitBoundaryIsSyntheticEntryError`; the chronologically-first
+     member (and not synthetic) → `SplitBoundaryIsFirstMemberError`. The
+     synthetic check is deliberately ordered BEFORE the first-member check
+     — a real synthetic entry is always a trade's own first member (proved
+     in the file's header), so checking index-zero first would make the
+     more specific, more informative error permanently unreachable.
+  5. Join's surviving trade: the chronologically-earlier one (`opened_at`),
+     tying on `id` for a fully deterministic choice — this slice's own
+     dispatch's suggested reading.
+  6. A known, accepted, explicitly-flagged (not silently swept)
+     limitation: the boundary-validation rules are implemented exactly as
+     dispatched, no more — a pathological user-chosen split boundary that
+     makes a subset cross net-flat more than once has no additional
+     restriction added beyond what was asked, since `assignRoles` itself
+     has no such invariant of its own to violate (it just produces
+     whatever facts fall out) and no data corruption results. Documented as
+     a product-design question for whoever builds Slice 7's UI, not
+     invented scope-creep here.
+- **Tests: `lib/ingestion/__tests__/split-join.live.test.ts`, 13 live-DB
+  tests** (env present, all genuinely ran, none skipped) — split's happy
+  path (member reassignment, recomputed facts, `grouping_source` on both),
+  split refusing a confirmed trade / an invalid boundary (both first-member
+  and synthetic-entry cases, the latter via a real `flip_no_flat`-derived
+  trade through `runSync`, not hand-simulated), split RLS cross-user
+  isolation; join's happy path (built with REAL, non-`manual:` provider
+  refs specifically to double as the delete-trigger proof), join refusing
+  different-block / already-confirmed / same-trade-twice / cross-user
+  attempts, join's synthetic-entry-survivor case (the `trade_events`
+  reassignment branch specifically); a full split-then-join round trip
+  proving facts match the original modulo `grouping_source`. Coverage on
+  `lib/ingestion/split-join.ts`: **92.2% lines, 81.52% branches, 100%
+  functions** — comfortably above the 90%/70% bar; the uncovered lines are
+  all "should be structurally impossible" defensive throws, same accepted
+  pattern `manual-entry.ts` already established (97.75% lines there, for
+  the identical reason).
+- `lib/supabase/__tests__/service-role-inventory.test.ts`'s allowlist
+  updated for the one new `withServiceRoleConnection(` call site
+  (`lib/ingestion/split-join.ts`'s phase 2, for both functions).
+  `docs/runbook.md`'s "Trades stuck unable to confirm" entry updated —
+  manual split/join is no longer "not yet built"; it is now a genuine
+  in-product path back into the normal lifecycle for an ambiguous or stuck
+  trade (though NOT for the `BLOCK_EXTENSION_DEFERRED`/`FILL_LATE_ARRIVAL`
+  case specifically, since split/join operate on a trade's existing
+  membership, not on a fill the block-derivation pass hasn't assigned to
+  any trade yet — that gap is unchanged, still needs in-place block
+  extension).
+- Full suite: **862 passing** (849 + 13 new), 12 skipped (env-gated
+  skip-guard fallbacks — env present, nothing actually skipped). `npm run
+  build`, `npx tsc --noEmit`, `npm run lint` all clean (lint: 0 errors, the
+  same 17 pre-existing-pattern warnings, none new).
+- **Explicitly NOT built in this slice, per its own dispatch:** any Server
+  Action or UI wiring for either operation (Slice 7's job, matching every
+  other backend-only slice's established boundary in this module).
+- **Security-review recommendation: YES, warranted, agreeing with this
+  slice's own dispatch.** The `joinTrades` reassign-then-delete interaction
+  with `forbid_broker_confirmed_trade_delete` is exactly the kind of
+  "clever mechanism that could have a subtle hole" this project's security
+  bar exists to catch a second pair of eyes on — the coder's own reasoning
+  and live test prove it works for the cases tested, but "checked out
+  correct under the author's own testing" and "reviewed by
+  retrospeq-security-reviewer" are not the same gate, per this repo's own
+  established precedent (Slice 6 part 1's freeze-trigger review, Slice 5's
+  confirm-transaction review). Not yet dispatched.
+
+**Module 02 Slice 6b — independent `retrospeq-tester` pass, 2026-08-22.**
+Read Module 02 §4.7 in full, `split-join.ts` in full including its header
+(all 6 judgment calls), and `__tests__/split-join.live.test.ts` in full.
+This was a genuine re-derivation, not a re-read of the coder's own claims:
+
+- **Delete-trigger workaround (the highest-priority item) — independently
+  verified safe, not just plausible.** Traced `joinTrades`' phase 2 body
+  line-by-line against `withServiceRoleConnection`'s implementation
+  (`lib/supabase/direct.ts`'s `withRole`): a single Postgres client, one
+  `BEGIN`...`COMMIT` per call, every `client.query(...)` call in the
+  reassignment `for` loop and the trailing `DELETE` is `await`ed in
+  sequence on that same client before the transaction commits — there is
+  no async-ordering gap, no missing `await`, no second connection that
+  could race it. Cross-checked `forbid_broker_confirmed_trade_delete`'s
+  actual SQL (`20260822010000_ingestion_schema.sql` lines 262-275): it is
+  a plain `exists(...)` against current `trade_fills`/`trade_events`
+  membership at delete-time, exactly as documented, with no history
+  tracking to defeat. The coder's own live test ("happy path + the
+  delete-trigger interaction") is a real adversarial proof, not a weaker
+  stand-in: both trades in that test are seeded with real, non-`manual:`
+  provider refs (`join-a-entry`/`join-a-exit`/`join-b-entry`/`join-b-exit`),
+  the ABSORBED trade (`tradeB`, the later one) is specifically the one
+  carrying broker-shaped refs, and the test asserts both that the absorbed
+  trade row is gone (`count = 0`) AND that its underlying `fills` rows
+  still exist untouched — i.e. it proves the trigger's actual protected
+  invariant ("no broker-originated financial fact is destroyed") holds,
+  not merely that the delete didn't throw. A second dedicated live test
+  proves the `trade_events` (not just `trade_fills`) reassignment branch
+  fires, via a real ADR-0001 synthetic flip-opening entry driven through
+  `runSync`. **Independent judgment: this mechanism is sound.** It relies
+  on a real, cited property of the trigger (current-membership-only
+  check) rather than a coincidence, the reassign-then-delete ordering is
+  transaction-atomic (a mid-loop failure rolls back everything, per
+  `withRole`'s catch/rollback), and the two live tests exercise exactly
+  the dangerous path (real broker-shaped refs, on the absorbed side)
+  rather than a weakened `manual:`-prefixed stand-in.
+- **Split boundary validation — independently exercised, one gap found
+  and closed.** All three named refusal cases (`SplitTradeAlreadyConfirmedError`,
+  `SplitBoundaryIsFirstMemberError`, `SplitBoundaryIsSyntheticEntryError`
+  via a real `flip_no_flat`-derived trade through `runSync`) are genuine
+  live-DB tests, not unit-level logic checks. Found one real gap per the
+  dispatch's own prompt ("what if `splitAtFillId` doesn't belong to the
+  trade at all"): the existing `SplitBoundaryNotMemberError` test only
+  used a syntactically-valid-but-nonexistent UUID, never a REAL fill id
+  that belongs to a different trade. Functionally this is the same code
+  path (`rows.findIndex` over the target trade's own member rows returns
+  -1 either way — confirmed by reading `loadAndValidateSplit`), so it was
+  not a correctness bug, but it was a materially weaker proof of the
+  adversarial case the dispatch specifically asked about. **Added**
+  `lib/ingestion/__tests__/split-join.live.test.ts`'s new test "refuses a
+  fill id that is REAL but belongs to a different trade entirely" — seeds
+  two independent real trades for the same user, attempts to split trade A
+  at a real, currently-backing fill id that belongs to trade B, asserts
+  `SplitBoundaryNotMemberError` and that neither trade's `trade_fills` rows
+  changed (`count = 4` across both, unchanged). Passes.
+- **Role re-derivation correctness — hand-verified arithmetically, both
+  operations, matches golden-fixture-review rigor.** Split happy path (4
+  fills: buy 50000@1.10000, buy 50000@1.09900, sell 50000@1.10500,
+  sell 50000@1.10800; split at the trim): hand-computed
+  `entry_price_avg` for subset 1 = VWAP(1.10000×50000, 1.09900×50000)/100000
+  = 1.09950000, matches the test's asserted value; subset 2's re-derived
+  `entry_price_avg` = VWAP(1.10500×50000, 1.10800×50000)/100000 =
+  1.10650000, matches; `peak_volume` 100000 on both, `realized_pnl`
+  650.00000000 (250+400, broker P&L stays attached to its own fill),
+  matches. Join happy path (two independently-closed round-trip trades
+  merged): traced `assignRoles`' actual role output for the 4-member
+  merged sequence — because trade A was already closed before trade B
+  opened, `assignRoles`' running-total walk produces roles
+  `[entry, exit, add, exit]` (a genuine instance of the "pathological
+  sequence" the file's own header flags as a known, accepted, non-corrupting
+  limitation for the SPLIT case — here it occurs naturally on JOIN's own
+  happy path, not just as a hypothetical). Verified `computeTradeFacts`
+  handles this correctly regardless: it classifies members by
+  `role === 'entry' || 'add'` vs `'trim' || 'exit'` via `.filter()`, not by
+  sequence position, so `entryPriceAvg` = VWAP(2000, 2020) = 2010,
+  `exitPriceAvg` = VWAP(2010, 2030) = 2020, `realizedPnl` = 10+10 = 20,
+  `peakVolume` = 1 (running total never exceeds 1 in magnitude) — all
+  match the test's asserted values exactly, and the arithmetic is
+  independently correct, not merely "some value got written." This is a
+  reassuring finding in its own right: the filter-based (not
+  sequence-based) design in `computeTradeFacts` is robust to exactly the
+  kind of odd role ordering a join of two already-closed trades produces.
+- **Round-trip test — confirmed it proves something real.** Read
+  `split-join.ts`'s own `recomputeGroup`/`assignRoles` logic against the
+  round-trip test's assertions: split then re-join of the same two halves
+  converges every recomputed fact column (`direction`, `status`,
+  `entry_price_avg`, `exit_price_avg`, `peak_volume`, `initial_stop`,
+  `risk_pct`, `initial_risk_pct`, `r_multiple`, `realized_pnl`, `outcome`,
+  `hold_seconds`) back to the pre-split values, with only `grouping_source`
+  differing (`'user_join'`, as expected) — a real "both operations ran
+  AND produced arithmetically-consistent output" proof, not just "neither
+  threw."
+- **RLS cross-user isolation — genuine, both operations.** Both RLS tests
+  use `withUserConnection`'s real `authenticated` role + `auth.uid()`
+  resolution (not an app-layer ownership `if`), attempt the operation as a
+  second, unrelated real auth user, assert the named not-found error, and
+  assert zero rows changed afterward. Confirmed by reading
+  `loadAndValidateSplit`/`loadAndValidateJoin`'s phase-1 call: it runs
+  inside `withUserConnection(userId, ...)`, so a cross-user attempt is
+  rejected by Postgres RLS itself (the `WHERE user_id = $2` scoping plus
+  the underlying RLS policy both apply), not by an application-level
+  ownership check that could be bypassed by calling the DB layer directly.
+- **Edge cases from the dispatch — all checked, all sound.**
+  `tradeIdA === tradeIdB` is rejected by a cheap synchronous equality
+  check (`JoinTradeSameTradeError`) before any DB round-trip, tested live.
+  A trade with the minimum 2 members: the round-trip test's own split
+  (2-member trade, boundary at the only valid non-first index) is exactly
+  this case and it succeeds, producing two genuinely non-empty 1-member
+  groups — confirmed `assignRoles` can't produce an empty group here
+  because the only valid split point on a 2-member trade is index 1,
+  which by construction leaves exactly 1 member in each subset. A 1-member
+  (never-closed single-fill) trade can never be successfully split at all
+  — its only member is always index 0, always rejected by
+  `SplitBoundaryIsFirstMemberError` — not explicitly tested as its own
+  case but logically forced by the existing boundary checks, confirmed by
+  reading the validation order.
+- **Coverage independently re-measured after the added test:**
+  `split-join.ts` **92.2% lines / 81.52% branches / 100% functions**
+  (unchanged by the new test, since it exercises an already-covered code
+  path with a stronger adversarial fixture rather than a new branch) —
+  matches the coder's own reported numbers. Remaining uncovered lines
+  (779-782, 789-792) are the same "should be structurally impossible"
+  defensive throws already accepted for `manual-entry.ts`'s identical
+  pattern — read both, agree they're not reachable without a schema-level
+  data-corruption bug.
+- **Golden fixtures:** the fixture library exists (`fixtures/golden/`,
+  built in Phase 0) and this slice correctly replays through it —
+  `flip_no_flat`'s real `input.json` is driven through the actual
+  `runSync` pipeline (not hand-simulated) for both the synthetic-entry
+  split-refusal test and the synthetic-entry join-survivor test. No gap
+  here.
+- **Property-based tests:** no NEW property-based test file exists for
+  `split-join.ts` itself. Judged acceptable, not a gap to flag as missing:
+  this slice adds no new grouping/rule logic of its own — it exclusively
+  reuses `grouping.ts`'s `assignRoles` and `trade-facts.ts`'s
+  `computeTradeFacts` unchanged, and both of those already have their own
+  property-based suites (`grouping.property.test.ts`,
+  `trade-facts.property.test.ts`) covering the 00-foundation §9.2
+  invariants (every fill in exactly one trade, sum of fill P&L = trade
+  P&L, deterministic grouping, no currency mixing) at the primitive level
+  those functions operate at. This slice's own live-DB tests additionally
+  prove the invariants hold end-to-end through actual DB writes (member
+  reassignment row counts, the round-trip convergence test).
+- Full suite re-run independently: **863 passing** (862 + 1 new),
+  12 skipped (env-gated fallbacks, env present, nothing actually
+  skipped), 0 failed. One transient failure seen on an initial full-suite
+  run (`manual-entry.live.test.ts`, unrelated to this slice) reproduced as
+  a pass both in isolation and on a clean full-suite re-run — judged a
+  flake from parallel live-DB test files contending on `lib/supabase/
+  direct.ts`'s capped connection pool (`max: 3`), not a real regression;
+  flagged here rather than silently dismissed. `npm run build`, `npx tsc
+  --noEmit`, `npm run lint` all re-run and clean (lint: 0 errors, the same
+  17 pre-existing warnings, none new).
+- **Independent agreement: yes, a `retrospeq-security-reviewer` pass is
+  still warranted before this slice is marked done**, for the same reason
+  the coder flagged it — the delete-trigger workaround checked out clean
+  under this independent adversarial pass, but a second, security-focused
+  read (specifically: are there OTHER ways to reach `joinTrades`' delete
+  with a still-backed absorbed trade — e.g. a future caller passing
+  already-stale `survivor`/`absorbed` data, or a concurrent second
+  `joinTrades` call racing the same trade pair) is the kind of check this
+  project's own established precedent (Slice 5's confirm-transaction
+  review, Slice 6 part 1's freeze-trigger review) treats as a distinct
+  gate from tester verification, not a substitute for it.
+- **retrospeq-security-reviewer: one blocking FAIL, fixed, re-reviewed
+  PASS, 2026-08-22.** The join/delete legitimacy question itself
+  (reassign-then-delete vs. a disguised gaming vector) was independently
+  re-derived and judged genuinely legitimate: §4.7's "never delete" rule
+  exists to stop a trader hiding a decision from analysis, and the
+  trigger's own comment frames it that way — join does the opposite,
+  recomputing facts over the FULL merged member set so nothing is hidden
+  or lost, and the join is bounded to "same block only" so it can't merge
+  two genuinely unrelated decisions. The one real, blocking finding: both
+  functions' trade-updating UPDATE (inside phase 2) had no atomic guard
+  against a concurrent `confirmDay`/`autoConfirmStaleTrades` call
+  freezing the trade in the gap between phase 2's own entry
+  re-validation SELECT and its later UPDATE — the identical bug class
+  already found and fixed in `confirm.ts` earlier this session, left
+  unapplied here. Fixed by the orchestrator: `and confirmed_at is null`
+  added to both UPDATE WHERE clauses (`splitTrade`'s original-trade
+  update, `joinTrades`' survivor update), throwing
+  `SplitTradeAlreadyConfirmedError`/`JoinTradeAlreadyConfirmedError` on a
+  lost race, positioned before ANY side-effecting work in either function
+  (the new-trade insert for split; member reassignment and the
+  absorbed-trade delete for join) — a lost race means nothing else in
+  that phase-2 call ever runs. Two new deterministic live tests added
+  (not `Promise.allSettled` timing luck): a second raw `pg.Client` opens
+  an uncommitted confirm-shaped UPDATE on the trade and holds it open,
+  forcing the real `splitTrade`/`joinTrades` call to genuinely block on
+  the same Postgres row lock — deterministic every run, not dependent on
+  JS scheduling. Re-reviewed: PASS — the security-reviewer independently
+  judged this technique sounder than the `Promise.allSettled` approach
+  used elsewhere, confirmed it exercises the exact fixed code path (not
+  an unrelated one), and confirmed the guard placement leaves no
+  half-applied write possible in either function (verified against
+  `withServiceRoleConnection`'s own `begin`/`commit`/`rollback` wrapping).
+- **retrospeq-qa: PASS**, no blocking findings, reviewed with real
+  scrutiny given this is the highest-blast-radius mechanism in the
+  module. Independently re-derived (not accepted from the security
+  reviewer's own conclusion) that every fact from an absorbed trade
+  survives a join fully intact and auditable: `computeTradeFacts` sums
+  `realized_pnl` additively across the full merged member set (verified
+  arithmetically against a real test case, `10 + 10 = 20.00000000`), and
+  every `trade_fills`/`trade_events` row is reassigned (not deleted) to
+  point at the surviving trade before the absorbed row itself is removed
+  — the underlying `fills` rows (the actual broker facts) are never
+  touched at all. Confirmed the "same block only" join constraint is
+  genuinely enforced (not just documented) via a real test. Confirmed
+  the simple "already confirmed at call time" case is independently
+  caught by phase 1's own check (not solely by the new race guard, which
+  exists only for the race-specific window). Confirmed the concurrency
+  guard clauses are correctly the first side-effecting statement in each
+  function's phase 2, read directly rather than trusted.
+- **Module 02 Slice 6b is now genuinely done.** Full suite: **865
+  passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
+  `npm run lint` all clean. **This completes Module 02's entire backend
+  (§4.1-§4.8) — every ingestion pipeline stage from sync through
+  confirm/freeze through corrections now exists, tested and reviewed.**
+
+**Next slice: Module 02 Slice 7, the UI layer** (open position card with
+the ambient grouping chip, trade list with expandable fills and
+split/not-a-decision actions, close-out screen, grouping resolution
+control, manual entry form) — every backend piece Slice 7 needs to wire
+up now exists (Slices 1-6b). This is the FIRST Module 02 slice with a
+rendered surface — the mandatory screenshot self-check (AGENTS.md step 4,
+"there's no interactive browser tool in this environment, so this is the
+only way rendered UI actually gets looked at") applies for the first time
+in this module. The BLOCK_EXTENSION_DEFERRED tracked gap from Slice 3/4
+is closed at the confirm-transaction level (Slice 5) — a stuck-open/
+stale-facts trade can no longer be silently confirmed — but in-place
+block extension itself is still not built; a trade whose block gains a
+late fill after derivation can still sit unconfirmed indefinitely (manual
+split/join doesn't reach this specific case — see the runbook entry).
+Also still open: resolving `coverage_gaps` rows (nothing sets
+`resolved_at` anywhere in this repo yet) — flagged in the runbook, not
+silently dropped. **After Slice 7, run the Phase 1 boundary process**
+(AGENTS.md step 5 — `/code-review` or `simplify`, then dispatch
+`retrospeq-docs` to refresh `docs/DEVELOPMENT.md`) before marking Phase 1
+complete in the Phase status table, since Module 01 + Module 02 will both
+be done at that point.
 
 ## Needs-your-input signal
 
@@ -2354,6 +2690,23 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-22 — Module 02 Slice 6b (manual split/join §4.7,
+  `lib/ingestion/split-join.ts`). Full reasoning in that file's own header,
+  summarized in "Current task" above — the six judgment calls flagged
+  there: `grouping_confidence`/`grouping_source`/`ambiguity_resolved_at`
+  values for both operations' resulting trades; split's boundary-validation
+  error ordering (synthetic-entry check before first-member check, so the
+  more specific error is reachable at all, given a real synthetic entry is
+  always a trade's own first member); join's surviving-trade choice
+  (chronologically-earlier `opened_at`, tying on `id`); and an explicitly
+  accepted, not silently swept, limitation (a pathological user-chosen
+  split boundary can produce a subset that crosses net-flat more than
+  once — no additional restriction added beyond what the dispatch
+  specified, since `assignRoles` has no such invariant of its own and no
+  data corruption results). None of the six deviate from a stated
+  00-foundation convention, so no new ADR was written for this slice —
+  flagged for security-reviewer/QA to confirm that call, not decided as
+  final unilaterally.
 - 2026-08-22 — Module 02 Slice 5 (confirm/freeze transaction §4.6,
   `lib/ingestion/confirm.ts`). Full reasoning in that file's own header,
   summarized in "Current task" above — flagging the two calls the
