@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { enforceRateLimit } from '@/lib/rate-limit/limiter';
 import { getClientIp } from '@/lib/rate-limit/http';
 import { RateLimitExceededError } from '@/lib/rate-limit/errors';
+import type { RateLimitScope } from '@/lib/rate-limit/config';
 import { toggleNotADecision, type TradeRow } from '@/lib/ingestion/corrections';
 import {
   createManualTrade,
@@ -174,6 +175,29 @@ function rateLimitedState(): ActionErrorState {
   };
 }
 
+/**
+ * `requireSessionUser()` + the rate-limit check, collapsed into one call —
+ * every action below opened with an identical 8-line copy of this exact
+ * sequence (simplify pass, 2026-08-23, pure extraction, no behavior
+ * change: same session lookup, same `RateLimitExceededError` catch, same
+ * `rateLimitedState()`/re-throw). Each call site still owns its own
+ * Zod-parse/backend-call/error-mapping, which genuinely differs action to
+ * action — only the boilerplate common to all of them moved here.
+ */
+async function requireSessionAndRateLimit(scope: RateLimitScope): Promise<{ id: string } | ActionErrorState> {
+  const user = await requireSessionUser();
+  if (isErrorState(user)) return user;
+
+  try {
+    await enforceRateLimit(scope, await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) return rateLimitedState();
+    throw err;
+  }
+
+  return user;
+}
+
 function internalErrorState(scope: string, err: unknown): ActionErrorState {
   console.error(`[trades/actions:${scope}] unexpected error:`, err);
   return {
@@ -206,15 +230,8 @@ export async function toggleNotADecisionAction(
   _prevState: ToggleNotADecisionState | undefined,
   formData: FormData,
 ): Promise<ToggleNotADecisionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('toggleNotADecision');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('toggleNotADecision', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const parsedTradeId = uuidSchema.safeParse(tradeId);
   const parsedValue = toggleValueSchema.safeParse({ value: formData.get('value') });
@@ -258,15 +275,8 @@ export async function createManualTradeAction(
   _prevState: ManualEntryActionState | undefined,
   formData: FormData,
 ): Promise<ManualEntryActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('manualTradeEntry');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('manualTradeEntry', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const accountIdParsed = uuidSchema.safeParse(formData.get('accountId'));
   if (!accountIdParsed.success) {
@@ -341,15 +351,8 @@ export async function splitTradeAction(
   _prevState: SplitTradeActionState | undefined,
   formData: FormData,
 ): Promise<SplitTradeActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('splitTrade');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('splitTrade', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const parsed = splitTradeInputSchema.safeParse({
     tradeId: formData.get('tradeId'),
@@ -415,15 +418,8 @@ export async function joinTradesAction(
   _prevState: JoinTradesActionState | undefined,
   formData: FormData,
 ): Promise<JoinTradesActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('joinTrades');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('joinTrades', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const parsed = joinTradesInputSchema.safeParse({
     tradeIdA: formData.get('tradeIdA'),
@@ -491,15 +487,8 @@ export async function resolveAmbiguousGroupingAction(
   _prevState: ResolveAmbiguousGroupingActionState | undefined,
   _formData: FormData,
 ): Promise<ResolveAmbiguousGroupingActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('resolveAmbiguousGrouping');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('resolveAmbiguousGrouping', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const parsed = resolveAmbiguousGroupingInputSchema.safeParse({ tradeId });
   if (!parsed.success) {
@@ -571,15 +560,8 @@ export async function confirmDayAction(
   _prevState: ConfirmDayActionState | undefined,
   formData: FormData,
 ): Promise<ConfirmDayActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('confirmDay');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('confirmDay', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const kindRaw = formData.get('kind');
   const parsed = confirmDayInputSchema.safeParse({
@@ -665,15 +647,8 @@ export async function writeTradeCaptureAction(
   _prevState: WriteTradeCaptureActionState | undefined,
   formData: FormData,
 ): Promise<WriteTradeCaptureActionState> {
-  const user = await requireSessionUser();
+  const user = await requireSessionAndRateLimit('writeTradeCapture');
   if (isErrorState(user)) return user;
-
-  try {
-    await enforceRateLimit('writeTradeCapture', await getClientIp(), user.id);
-  } catch (err) {
-    if (err instanceof RateLimitExceededError) return rateLimitedState();
-    throw err;
-  }
 
   const parsedTradeId = uuidSchema.safeParse(tradeId);
   const parsedValue = trimReasonValueSchema.safeParse(formData.get('reason'));

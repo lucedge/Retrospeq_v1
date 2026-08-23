@@ -539,6 +539,7 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
       toConfirm.push(trade.id);
     }
 
+    let confirmedIds = toConfirm;
     if (toConfirm.length > 0) {
       // Same atomic guard as confirmDay's per-trade UPDATE above, applied
       // here for the same reason plus one this bulk path adds of its own:
@@ -557,13 +558,11 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
         [toConfirm, now.toISOString()],
       );
       const actuallyConfirmed = new Set(bulkRes.rows.map((r) => r.id));
-      for (let i = toConfirm.length - 1; i >= 0; i--) {
-        if (!actuallyConfirmed.has(toConfirm[i])) toConfirm.splice(i, 1);
-      }
+      confirmedIds = toConfirm.filter((id) => actuallyConfirmed.has(id));
     }
 
     // No day_closeouts row, ever -- see header's own dedicated paragraph.
 
-    return { tradesConfirmed: toConfirm, tradesSkippedStaleBlock: skipped };
+    return { tradesConfirmed: confirmedIds, tradesSkippedStaleBlock: skipped };
   });
 }

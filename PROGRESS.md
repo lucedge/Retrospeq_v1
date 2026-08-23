@@ -3486,6 +3486,62 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-23 — Phase 1 boundary process, step 1: `simplify` pass over
+  Module 02's production code (`lib/ingestion/*.ts` +
+  `app/(app)/trades/**`, ~7,770 lines across 26 files, diffed against
+  `803336b` — the commit right before Module 02 started), per AGENTS.md
+  step 5's explicit allowance for "`simplify` on the specific files just
+  written, for a lighter pass" given the phase's total size. Ran the
+  skill's own 4-parallel-agent protocol (reuse / simplification /
+  efficiency / altitude). Most of the code held up well for a 9-slice,
+  multi-pass build — reviewers specifically called out `TRADE_COLUMNS`,
+  `recomputeInstrument`, `assignRoles`, and `TRIM_REASON_FIELD_ID` as
+  genuinely-reused shared helpers, not duplicated, and confirmed the
+  `sync.ts`/`confirm.ts` block-anomaly-guard interface is a clean
+  cross-file boundary, not a bandaid.
+  - **Applied** (pure, behavior-preserving extractions, re-tested after
+    each): (1) `app/(app)/trades/actions.ts`'s 7 Server Actions each
+    open with an identical 8-line session-check + rate-limit-check
+    block — collapsed into one `requireSessionAndRateLimit(scope)`
+    helper; (2) `lib/ingestion/confirm.ts`'s `autoConfirmStaleTrades`
+    filtered its confirmed-id list via a reverse-iteration `splice`
+    loop mutating a `const` array in place — replaced with a plain
+    `.filter()` into a new `confirmedIds` binding, same result, no
+    mutation.
+  - **Deliberately skipped, per the skill's own "skip if it would
+    change intended behavior... note the skip rather than arguing with
+    it" instruction** — all genuinely real findings, but judged higher
+    risk than value for a lighter pass over code that was security-
+    reviewed multiple times today specifically for concurrency
+    correctness: the `scopeToUserId ? ... : ...`/guarded-UPDATE-
+    rowCount-check patterns repeated 3x within `split-join.ts` (touches
+    the exact guard logic re-verified by security review hours ago —
+    consolidating it correctly would need the same live-DB
+    re-verification, out of scope here); `sync.ts`'s per-fill/per-member
+    INSERT loops and `confirm.ts`'s per-trade UPDATE in `confirmDay`
+    batching into bulk statements (genuine efficiency wins, but change
+    the `RETURNING`/row-tracking semantics of already-hardened write
+    paths); `JoinControl.tsx`/`SplitControl.tsx` UI-component
+    consolidation and `ManualEntryForm.tsx`'s 4 near-identical field
+    blocks (already screenshot-verified, would need re-verification);
+    `issuesToFieldErrors()`'s duplication with `app/(app)/accounts/
+    actions.ts` (would touch a Module 01 file outside this diff's
+    scope); the `trading_accounts`-by-id query duplicated across
+    `sync.ts`/`split-join.ts`/`manual-entry.ts` (each has a genuinely
+    different, already-documented column subset); `blocks.ts`'s
+    duplicated `DerivedBlock` object-literal construction (touches
+    `deriveBlocks`, the single highest-blast-radius function in the
+    module if a transcription error slipped in); `arm-matching.ts`'s
+    exported-but-uncalled `isArmEventExpired` (its own test file
+    references it; removing an exported, tested function isn't a
+    behavior-preserving change without also touching that test).
+    Several of these are worth a dedicated future pass with real
+    re-testing budget, not a phase-boundary cleanup — noted here so
+    they aren't rediscovered as "nobody looked at this."
+  - Re-ran the full suite after each applied fix: 951 passing, 12
+    skipped, 0 failed throughout. `npm run build`, `npx tsc --noEmit`,
+    `npm run lint` all clean.
+
 - 2026-08-23 — Module 02 Slice 7b design-ethics fix: added a third,
   distinct `grouping_source` value, `'user_confirmed_single'` (migration
   `20260823010000_trades_grouping_source_confirmed_single.sql`), backing a
