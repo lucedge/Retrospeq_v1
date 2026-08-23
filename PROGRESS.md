@@ -21,13 +21,38 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **Module 01 and Module 02 are both fully done.** Module 02 Slices 1-6b (backend, §4.1-§4.8), 7a (Server Actions + trade list), and 7b (close-out screen, manual entry form, split/join UI controls, plus a design-ethics fix building a third real corrections operation, `resolveAmbiguousGroupingAsSingle`) are all coded, tested, security-reviewed, QA-reviewed. Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap) — the gate did its job every time. Remaining before Phase 1 is marked complete in this table: the Phase 1 boundary process (AGENTS.md step 5 — `/code-review`/`simplify`, then `retrospeq-docs`) |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
+
+**→ Phase 1 (Module 01 + Module 02) is COMPLETE as of 2026-08-23. Phase 2
+(Module 04: Rulebook & Evaluation, + Module 08 onboarding) has NOT started
+yet — that is the next work.** Read `retrospeq-design-system/modules/
+04-rulebook-and-evaluation.md` and `08-onboarding-and-home.md` in full,
+plus `00-foundation.md`, before starting. Module 04 depends directly on
+Module 02's `trades`/`trade_facts`/`trade.confirmed` (now real — the
+2026-08-22 decision-log entry that deferred reordering to Phase 2 is now
+moot, Module 02 is done, build Module 04 against the real schema, not a
+stub). Module 08's onboarding flow composes Modules 01+02, which now
+both exist for real. Break Module 04 into slices the same way Module 02
+was (field registry/expression-catalogue schema first, then the
+evaluation engine itself — remember the non-negotiable "no compound
+rules, no AND/OR, ever, in the model/API/UI" and "rule expression engine:
+`{operand_id, op, value}` only, never compiled to SQL, never eval'd" —
+these are the two things most likely to get silently violated if built
+carelessly). The rest of this "Current task" section below is the full
+historical build log for Phase 0/Phase 1 — read it for context on
+established patterns (direct-pg access, the RLS shapes, the two-phase
+withUserConnection/withServiceRoleConnection write pattern, the atomic
+concurrency-guard pattern needed on any mutable status/timestamp column)
+but the ACTIONABLE next step is Phase 2, not anything below this
+paragraph.
+
+---
 
 **Phase 0 — complete.** 8/8 golden fixtures (`fixtures/golden/`); shadow
 harness infrastructure (`lib/analytics/shadow-harness/`, `shadow_runs`
