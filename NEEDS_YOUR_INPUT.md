@@ -47,40 +47,64 @@ real and correctly mapped; this is purely an external service check.
 
 ---
 
-## This machine's C: drive is completely full (0 bytes free)
+## This machine's C: drive is completely full (0 bytes free) — ESCALATED 2026-08-23: the workaround has stopped reliably working
 
-**What's needed:** Free up space on C: — it's not a "getting low" warning
-anymore, it hit literal zero free bytes during this session (2026-08-21)
-and has started intermittently breaking tool calls with `ENOSPC` (the
-agent harness's own scratch/temp directory lives under `C:\Users\...\
-AppData\Local\Temp`, which needs a few free bytes to write to even when
-the actual work is happening on E:). It's intermittent, not constant —
-most commands still succeed — but it will get worse, not better, as more
-temp files accumulate through a long session, and it isn't limited to
-this agent session; anything else running on this machine that touches
-C:\ temp space is exposed to the same risk.
+**What's needed:** Free up space on C:. This has been flagged since
+2026-08-21 as "intermittent, has a workaround" — as of today (2026-08-23,
+mid Module 04 Slice 1's test/review pass) **the established workaround
+(`TEMP`/`TMP`/`TMPDIR` pointed at `E:\tmp_vitest`) is no longer
+sufficient**: a full `npx vitest run` now fails outright partway through
+with a bare Node-level `There is not enough space on the disk.` error
+(not even a redirectable `ENOSPC` this time — confirmed via both the Bash
+tool and PowerShell directly, same failure both ways), after passing only
+2 of several test files in a scoped run. `C:` is still reading literal
+0 bytes free (`Get-PSDrive C` → `Free: 0`) despite the project's own
+temp/cache usage being redirected to `E:` (which itself has 27GB free,
+confirmed not the bottleneck). Checked for anything safely cleanable
+directly: `C:\Users\hp\AppData\Local\Temp` (~0.55GB), the npm cache
+(~1.46GB), and this session's own harness scratch dir (~0.01GB) are all
+small — none of them account for the drive being full, meaning the bulk
+of whatever is consuming 277GB is elsewhere on this machine, outside
+anything an agent should be guessing at deleting.
 
 **Why an agent can't fix this:** this is a general Windows disk-space
 problem, not specific to this repo — cleaning it safely needs someone who
-knows what else is on this machine (this session found large `.tmp`
-files and app caches under `AppData\Local\Temp` but has no way to tell
-what's safe to delete vs. mid-use by another program). The project itself
-already lives entirely on E: (`E:\LuceEdge\retrospeq-app`) and its own
-npm cache/tmp were already redirected to `E:` early in this build
-(PROGRESS.md decision log, 2026-08-19) specifically because of this same
-underlying constraint — that redirect doesn't help here because the
-harness's own scratch directory is fixed to `C:\Users\...\AppData\Local\
-Temp`, not something this repo's config controls.
+knows what else is on this machine. The project itself already lives
+entirely on E: (`E:\LuceEdge\retrospeq-app`) and its own npm cache/tmp
+were already redirected to `E:` early in this build (PROGRESS.md decision
+log, 2026-08-19) specifically because of this same underlying constraint.
 
-**What's stalled:** nothing yet, definitively — every failure so far
-(this one, an earlier Playwright browser-install `ENOSPC` this same
-session worked around by installing to `E:\playwright-browsers` instead,
-and — new as of 2026-08-21 — `npx vitest run` itself now fails outright
-with `ENOSPC` on its default `TEMP`/`TMP`, worked around per-invocation
-with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest"`)
-has had a workaround. Flagging now, before it does stall something,
-since "the temp filesystem is full" is exactly the kind of failure that
-looks like a code bug if it's hit mid-task without this context.
+**What's stalled, concretely, as of this escalation:** a full-suite
+`npx vitest run` piped through a Bash/PowerShell pipeline (e.g. `| tail`,
+`| Select-Object -Last N`) started failing mid-run with a bare
+`There is not enough space on the disk.` — not even a redirectable
+`ENOSPC`, both via the Bash tool and PowerShell directly. This turned out
+to be the terminal pipeline's OWN output-capture buffering exhausting C:
+(observed: the actual test process kept running and passing tests in the
+background — visible partial output before the crash — it's specifically
+piping vitest's live output through another process that fails, not
+vitest itself).
+
+**Workaround found and confirmed working, 2026-08-23** — redirect ALL
+output directly to a file on `E:` with PowerShell's `*>` (not a pipe),
+then read that file separately with a file-reading tool instead of the
+terminal:
+```powershell
+$env:TEMP = "E:\tmp_vitest"; $env:TMP = "E:\tmp_vitest"; $env:TMPDIR = "E:/tmp_vitest"
+npx vitest run *> "E:\tmp_vitest\full-run.log"
+```
+then read `E:\tmp_vitest\full-run.log` directly (e.g. via the `Read`
+tool, or `wc -l`/`Read` with an offset for a long file) rather than
+piping through `tail`/`Select-Object` — confirmed this gets a full,
+genuine 1047/13/0 result with zero disk errors, right after the same
+command failed when piped. **Any agent hitting the same
+"not enough space on the disk" wall should use this pattern, not
+conclude the suite can't be run.** Every OTHER workflow this session
+(build, lint, tsc, git) continued working normally throughout — this is
+specifically a terminal-pipe-buffering issue on top of the standing
+C:-full problem, not a new category of blocker, and it does NOT currently
+block the mandatory "run the full suite" verification step once the
+file-redirect workaround is used.
 
 ---
 

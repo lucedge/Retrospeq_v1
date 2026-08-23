@@ -22,16 +22,323 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Full repo suite 1047 passed / 13 skipped / 0 failed. Slice 1 committed and pushed. Slices 2-6 (authoring pipeline, preview engine, freeze-wiring, severity lifecycle, UI) not started. See "Current task" below. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Phase 1 (Module 01 + Module 02) is COMPLETE as of 2026-08-23. Phase 2
-(Module 04: Rulebook & Evaluation, + Module 08 onboarding) has NOT started
-yet — that is the next work.** Read `retrospeq-design-system/modules/
+**→ Module 04 (Rulebook & Evaluation) Slice 1 — schema + operand
+catalogue + pure evaluator — DONE (coded, tested, security-reviewed
+PASS, QA-reviewed PASS, committed 2026-08-23).** Slice 2 (the authoring
+pipeline — rule CRUD, versioning, tighten-only/satisfiability
+validation, §5.1) is the next undone item in Module 04 — pick that up
+next. Full gate history for Slice 1 preserved below for context.
+
+**What was built:**
+
+- **Schema** (`supabase/migrations/20260823020000_rulebook_schema.sql` +
+  `20260823030000_rule_evaluations_immutability_trigger.sql`, both
+  applied to and verified against the live shared dev Supabase project
+  via `information_schema`/`pg_policies`/`information_schema.triggers`,
+  same method every prior migration in this repo uses): 6 tables --
+  `rules`, `rule_versions`, `rule_evaluations`, `rule_overrides`,
+  `adherence_weekly`, `operand_distributions`. `trigger_evaluations`
+  (Module 04 §3.1's own 7th/last table) is DELIBERATELY DEFERRED, not
+  built and not stubbed -- it references Module 03's `trigger_conditions`,
+  which doesn't exist anywhere in this repo, and there is nothing for a
+  stand-in table to meaningfully evaluate yet. Flagged in both the
+  migration's own header comment and here, per this repo's established
+  "flagged, not silently skipped" convention for forward dependencies.
+  RLS: 100% coverage, one policy shape reasoned per-table from its own
+  data semantics (not copy-pasted from ADR 0011's ingestion-table
+  conclusions, though the REASONING METHOD is the same) --
+  `rules`: owner "for all" (genuinely user-mutated: severity/state/
+  retired_at/promoted_at). `rule_versions`: owner SELECT+INSERT+UPDATE,
+  narrowed by a DB trigger (`rule_versions_forbid_mutation`) to permit
+  exactly one legitimate one-way mutation (`superseded_at`, null ->
+  timestamp, never back) and nothing else -- an allowlist trigger, same
+  technique as `trades_forbid_frozen_regrouping`. `rule_evaluations`:
+  owner SELECT only, NO client insert policy at all (Module 02 "owns the
+  freeze trigger" per §13, and `confirm.ts` already writes exclusively
+  via `withServiceRoleConnection`, verified by reading that file, not
+  assumed). `rule_overrides`: owner SELECT+INSERT, append-only (a live
+  user action, but never edited after the fact). `adherence_weekly` /
+  `operand_distributions`: owner SELECT only, materialised,
+  service-role-only writes.
+  **Judgment call, beyond the literal §3.1 DDL:** two DB triggers built
+  THIS slice, not deferred, even though nothing writes to
+  `rule_evaluations` yet -- `rule_evaluations_forbid_update` (rejects
+  ANY update, unconditionally -- the DDL's own "written once, never
+  updated" has zero documented exceptions, unlike `trades.not_a_decision`,
+  so there was no future-column-set ambiguity to wait on, unlike why
+  `trades_forbid_frozen_regrouping` WAS deferred in Module 02 Slice 1) and
+  `rule_evaluations_forbid_delete` / `rules_forbid_delete` (both reject
+  DELETE outside of account erasure, reusing the exact
+  `retrospeq.erasure_in_progress` escape-hatch mechanism
+  `forbid_broker_confirmed_trade_delete` already established -- `rules`
+  wasn't in the spec's own DDL comments as needing a delete-trigger, but
+  deleting a rule would cascade-delete its frozen `rule_evaluations`,
+  which is precisely the "gaming the trust-sensitive number" vector
+  Module 04 §1's own opening line names as the whole module's real risk;
+  reasoned as a defensible security-motivated extension, not literal
+  spec transcription -- flagged explicitly for security review, not
+  silently added).
+
+- **Operand catalogue** (`lib/rules/operand-catalogue.ts`, a typed `.ts`
+  const, not YAML -- format judgment call documented in the file's own
+  header). All 38 v1 (non-Firm) operands from §4.1's table present -- zero
+  invented, zero skipped, "coverage equals catalogue size" checked
+  directly by a test. Every entry carries a `computableToday: boolean` +
+  mandatory `factNote` documenting exactly what it maps to (or why it
+  doesn't yet) -- 8 operands are `computableToday: true` today (`risk_pct`
+  -> `trades.initial_risk_pct`, NOT `trades.risk_pct`/peak -- a real,
+  documented judgment call given ADR 0012's own named gotcha;
+  `hold_seconds`, `day_of_week`, `instrument`, `stop_set_at_entry`,
+  `held_past_stop`, `peak_risk_vs_planned`, `pre_entry_captured_before_fill`),
+  the other 30 need cross-trade day/week-state aggregation, a missing
+  module (Module 03's `trigger_conditions`, Module 06's weekly review), or
+  T1 `position_snapshots` data this repo doesn't have flowing yet -- none
+  of that aggregation was built or stubbed this slice, per the dispatch's
+  own instruction. A few fields (`order_type`'s `options`,
+  `entry_clock_time`'s `bounds`, `correlated_exposure`'s methodology,
+  `logged_within_minutes`'/`weekly_review_completed`'s exact attachment
+  point) are flagged with an explicit `todo` field rather than guessed,
+  where §4.1 gave no worked example and no defensible inference was
+  available.
+
+- **Evaluator** (`lib/rules/evaluate.ts`) -- §5.3's six-step pseudocode
+  implemented exactly (with one documented, outcome-preserving reordering:
+  step 5's op/type validation runs immediately after step 1's operand
+  resolution, before the tier/missing-value branches, because §8.3 treats
+  "unknown operand_id" and "malformed op for the type" as the same
+  loud-rejection class, distinct from a legitimate `not_applicable`).
+  Verified directly, not just asserted in a comment: no import of `pg` or
+  `lib/supabase/*` anywhere in the file (also asserted by a static test),
+  no `eval`/`Function`/`new Function`, no SQL string construction anywhere
+  -- a pure function over its two arguments. `decimal.js` for every
+  numeric/duration/rating comparison. `operand_id` validated via a
+  whitelist lookup (`getOperand`), unknown ids throw `RuleEvaluationError`
+  with code `UNKNOWN_OPERAND` -- never silently resolved to
+  `not_applicable` (that's reserved for a KNOWN operand's missing value or
+  tier gate, per §8.3's own distinction, spelled out in this file's own
+  header comment).
+
+- **Tests**, all passing against the live shared dev Supabase project
+  (86 new tests: 15 catalogue, 44 evaluator unit, 7 evaluator property +
+  4 static-security-property, 30 live-DB RLS/trigger; full repo suite:
+  1041 passed, 13 skipped [pre-existing skip-guards, unrelated to this
+  slice], 0 failed). Coverage on the two new files: `evaluate.ts`
+  98.7% lines / 98.63% branches, `operand-catalogue.ts` 100%/100% -- both
+  well above the 90%-on-engines bar. Every operator x operand-type pair
+  from §8.1 covered including boundary equality (`lte`/`gte` at the exact
+  threshold); `not_applicable` for both tier mismatch and missing operand
+  value; unknown `operand_id` and malformed op/value-shape all proven to
+  throw a specifically-typed, named error rather than silently degrading;
+  a 200-run fast-check property test proving `evaluate()` never throws
+  anything but a named `RuleEvaluationError` code and is fully
+  deterministic, plus a static grep-based check proving no SQL
+  string/`eval` exists anywhere in either new file's source text; 100% RLS
+  cross-user-isolation coverage on all 6 new tables plus live behavioural
+  proof of every trigger (including "even for the service role" and the
+  erasure-escape-hatch path), matching `ingestion-schema.rls.test.ts`'s
+  own precedent exactly.
+
+**Explicitly NOT built this slice** (per the dispatch's own scope
+boundary, matching Module 02 Slice 1/2's "schema + core engine before
+orchestration" precedent): the authoring pipeline (§5.1 -- template
+generation, tighten-only/satisfiability validation, rule CRUD Server
+Actions), the preview engine (§5.8), the freeze-wiring into Module 02's
+confirm transaction (§5.4/§7.1 -- nothing writes to `rule_evaluations`
+yet), adherence computation/materialisation (§5.6), the severity
+lifecycle (§5.7), overrides-writing (nothing calls `rule_overrides` yet
+outside tests), any UI, and the cross-trade fact-assembly queries for the
+30 `computableToday: false` operands. `docs/adr/` was NOT touched this
+slice -- §15's three named ADR-worthy decisions ("no compound rules,"
+"freeze at confirmation," "adherence excluded from gamification") are not
+actually being decided or tested by a schema-only slice; the judgment
+calls this slice DID make (RLS shape reasoning, the trigger_evaluations
+deferral, the risk_pct->initial_risk_pct mapping, the immutability
+triggers built now rather than deferred) are recorded in each file's own
+header comment plus this entry, per this repo's established convention.
+
+Files: `supabase/migrations/20260823020000_rulebook_schema.sql`,
+`supabase/migrations/20260823030000_rule_evaluations_immutability_trigger.sql`,
+`lib/rules/operand-catalogue.ts`, `lib/rules/evaluate.ts`,
+`lib/rules/__tests__/operand-catalogue.test.ts`,
+`lib/rules/__tests__/evaluate.test.ts`,
+`lib/rules/__tests__/evaluate.property.test.ts`,
+`lib/supabase/__tests__/rulebook-schema.rls.test.ts`. Build/lint/tsc all
+clean (`npm run build`, `npx eslint`, `npx tsc --noEmit`, all exit 0).
+
+**Next step for whoever picks this up:** Slice 1 is fully done (see
+security-reviewer and QA passes below) -- move to Slice 2, the authoring
+pipeline (§5.1: rule CRUD, versioning, tighten-only/satisfiability
+validation, template generation), per the build-order framing in
+AGENTS.md/brief-developer-and-design.md ("the guided three-rule front
+door... is also the entire free tier").
+
+**`retrospeq-tester` independent pass, 2026-08-23 (after the coder's own
+self-test above) -- PASS, with 2 gaps added/fixed this pass, 1 gap
+flagged unfixed (documentation, not code).** Read Module 04 §3.1/§4/§4.1/
+§5.3 in full plus both `lib/rules/evaluate.ts` and
+`lib/rules/operand-catalogue.ts` end to end, independent of the coder's
+own claims:
+
+- **"No compound rules" structurally verified, not just asserted**: read
+  `rule_versions`' DDL directly -- one `operand_id text`, one `op text`
+  (CHECK-constrained to the 9-value enum), one `value jsonb` column, full
+  stop, no array/nested-condition column anywhere. `RuleVersionInput` in
+  `evaluate.ts` mirrors this exactly (`operandId: string; op: RuleOperator;
+  value: unknown`) -- no array-of-conditions or boolean-tree shape
+  anywhere in the file. **Confirmed true.**
+- **"Never compiled to SQL, never eval'd" verified by grep, not by
+  re-reading the coder's own comment**: `eval\(|new Function|Function\(|pg\b|lib/supabase`
+  across all of `lib/rules/` returns zero real hits (only comments/test
+  assertions mention those strings). Also independently confirmed at the
+  DB layer: a hand-crafted `insert ... op = 'DROP TABLE'` against
+  `rule_versions` is rejected by `rule_versions_op_check` (tested live,
+  rolled back) -- defense in depth beyond the app-layer catalogue
+  whitelist. **Confirmed true.**
+- **§4.1 coverage hand-counted, not trusted to the file's own test**:
+  manually tallied §4.1's table (38 non-Firm operand ids across 8 groups)
+  against `OPERAND_CATALOGUE`'s actual entries -- exact match, 38/38, zero
+  invented. Then read `operand-catalogue.test.ts` itself and confirmed its
+  coverage test is genuinely two-directional (every spec id has an entry
+  AND no entry exists outside the spec list AND a hardcoded `toHaveLength(38)`)
+  -- not a partial check that would pass with entries silently missing.
+- **Throw-vs-`not_applicable` stress-tested**: confirmed via direct
+  unit + property tests that an unknown `operand_id` and a
+  structurally-invalid `op` for the operand's type always throw
+  `RuleEvaluationError` (codes `UNKNOWN_OPERAND` / `INVALID_OP_FOR_TYPE`),
+  and a tier-gated or missing-fact operand always resolves
+  `not_applicable`, never throws -- the two failure classes never cross.
+- **Live-DB trigger re-verification, independent of the coder's own test
+  file**: wrote and ran a standalone script (rolled back, nothing
+  persisted) directly exercising, against the real live Supabase project:
+  `rule_evaluations` UPDATE rejected; `rule_versions` body-field UPDATE
+  rejected; `superseded_at` null->timestamp permitted exactly once, a
+  second change rejected; `rule_evaluations`/`rules` DELETE rejected
+  outside erasure and permitted with `retrospeq.erasure_in_progress` set.
+  All 7 checks matched the existing test file's own claims exactly.
+- **Gaps found and fixed this pass** (both now closed, `lib/rules/`
+  coverage went from 98.7%/98.66%(branch) to **100%/100%/100%/100%**):
+  (1) `toDecimal()`'s "not finite" branch (Infinity/NaN, both numeric and
+  string forms, for both `observed` and `rule_version.value`) was
+  genuinely uncovered -- the property-test fuzz generates `NaN`/`Infinity`
+  doubles but rarely enough to hit it in 200 runs, and no unit test
+  targeted it directly; added 5 unit tests. (2) the op-fuzzing property
+  test only ever generated one of the 9 real `RuleOperator` enum values
+  (a valid op applied to the WRONG operand type), never a genuinely
+  arbitrary garbage string for `op` itself -- a real gap given `op` is
+  only TS-typed at the boundary, not narrowed at runtime, and a
+  hand-crafted API payload or buggy caller could hand evaluate() anything;
+  added 2 new property tests (`fuzzedOpRuleVersionArb`, 200 runs, plus a
+  targeted "known operand + garbage op always throws INVALID_OP_FOR_TYPE,
+  never UNKNOWN_OPERAND, never silent not_applicable" property test, 100
+  runs). Total: 67 tests in `lib/rules/` (up from 63), 1047 passed / 13
+  skipped / 0 failed repo-wide (up from 1041/13/0), full suite reverified
+  live against the shared dev Supabase project after the additions.
+  `npm run build`, `npx eslint`, `npx tsc --noEmit` all still exit clean.
+- **Gap flagged, NOT fixed this pass (documentation, not a test gap)**:
+  Module 04 §15 names three ADR-worthy decisions this module needs
+  ("no compound rules," "freeze at confirmation rather than broker
+  close," "adherence excluded from gamification") -- none of the three
+  exist yet in `docs/adr/`. The coder's own slice note argues a
+  schema-only slice doesn't yet "decide" freeze-at-confirmation or
+  adherence-exclusion (later slices build those), which is fair for
+  those two, but **"no compound rules" is a decision this slice's own
+  schema and evaluator fully embody right now** (the DDL shape and the
+  TS types ARE the decision) and per AGENTS.md §12 ("Documentation ...
+  written by retrospeq-coder as part of finishing a slice -- not a
+  separate pass, not optional") the ADR for it should exist alongside
+  this slice, not be deferred indefinitely. Flagging for whoever does the
+  QA pass rather than writing it myself (out of scope for a tester role).
+- **What I could NOT verify** (infra, not a code gap): none this pass --
+  a real, live Postgres connection (the shared dev Supabase project via
+  `SUPABASE_DB_URL` in `.env.local`) was available for every RLS/trigger
+  claim above; nothing here was checked only against a mock.
+
+**`docs/adr/0014-no-compound-rules.md` written 2026-08-23** (by the
+orchestrator, not a dispatched coder pass) to close the tester-flagged
+gap above -- documents the structural no-compound-rules guarantee, why
+it will otherwise be re-litigated (attribution, independent lifecycle
+management, injection/expression-engine risk surface), that `scope` (not
+compounding) is the spec's own resolution for "stricter in this
+situation," and explicitly declines to write the other two §15-named
+ADRs ("freeze at confirmation," "adherence excluded from gamification")
+since neither is concrete yet in a schema-only slice.
+
+**`retrospeq-security-reviewer` pass, 2026-08-23 -- PASS, no findings.**
+Independently re-ran the full `lib/rules` suite (67/67) and the live-DB
+RLS/trigger suite (29/29 + 1 skipped) rather than trusting the tester's
+numbers. Verified all 8 checklist items requested: (1) no compound
+rules structurally (schema, types, and evaluator control flow all
+independently re-read); (2) never compiled to SQL / never eval'd (grep
+for `eval(`/`new Function`/SQL-string patterns across `lib/rules/` --
+zero real hits; confirmed dynamic property access only ever uses the
+post-whitelist `operand.id`, never the raw `ruleVersion.operandId`);
+(3) operand_id whitelist enforced before any other processing; (4) RLS
+100% correct across all 6 tables, including confirming the
+`rule_versions` UPDATE policy genuinely can't be abused beyond
+`superseded_at` and that `rule_evaluations` has zero client-writable
+policy of any kind; (5) DB-level immutability triggers block all roles
+including service role, erasure escape hatch confirmed transaction-local
+and unreachable by any client role (traced every real
+`set_config('retrospeq.erasure_in_progress'...)` call site back to
+`erasure.ts`'s service-role-only `executeErasure()`, no exposed
+`SECURITY DEFINER` wrapper); (6) `rule_evaluations` freeze verified
+structurally airtight -- no update path exists at all, at either the RLS
+or trigger layer; (7) `rule_versions_op_check` CHECK constraint verified
+to reject any op outside the 9-value enum unconditionally, including for
+service-role writes; (8) general credential/injection scan -- no
+findings, correctly out of scope for a schema/pure-function slice with
+no UI or credential surface. Flagged (not a slice defect) that the
+machine's C:-drive-full condition will bite the next agent's default
+vitest temp dir on this box until disk space is freed or the
+`E:`-redirect workaround is used -- already tracked in
+`NEEDS_YOUR_INPUT.md`.
+
+**`retrospeq-qa` pass, 2026-08-23 -- PASS, no findings.** Checked all 7
+requested items from a product/spec-fidelity angle (distinct from the
+security reviewer's structural/injection angle): (1) no-compound-rules
+matches Module 04 §5.2's actual product intent, not just "no combinator
+column" -- confirmed via the per-rule attribution/independent-lifecycle/
+`scope`-not-compounding reasoning in ADR 0014; (2) `adherence_weekly`'s
+schema is a clean followed/total shape with nothing that reads as an
+XP/points field a later slice would be tempted to wire in -- confirmed
+clean, zero xp/points/gamif hits in `lib/rules/`; (3) freeze semantics
+match Module 04's own DDL comment ("written once, never updated") and
+§9's "0, ever, any occurrence is a critical incident" language, with no
+documented exception unlike `trades.not_a_decision` -- confirmed the
+implementation is unconditional, not just RLS-shaped like the
+`rule_versions` allowlist case; also credited the `rules_forbid_delete`/
+`rule_evaluations_forbid_delete` triggers as a defensible extension
+beyond literal DDL, correctly flagged as such rather than silently
+added, closing the "delete the rule to erase its evaluation history"
+gaming vector §1 names by name; (4) `{operand_id, op, value}`-only
+engine confirmed sanity-checked against spec fidelity; (5) ADR-0012
+percentage convention spot-checked directly (`risk_pct` bounds
+`{min: 0.1, max: 5.0}`, correctly percentage-numbers) and the
+`initial_risk_pct`-not-`risk_pct` pre-entry mapping confirmed correct
+and independently cross-referenced against Module 02's own trade-facts
+documentation; (6) all 38 v1 operands hand-counted against §4.1's
+per-group table, exact match, `trigger_evaluations` deferral correctly
+scoped with a real forward dependency, no other silent gaps; (7)
+ADR 0014 confirmed correctly scoped, neither over- nor under-reaching.
+Also checked documentation (00-foundation §12) and performance (§8.1)
+sub-bars: ADR present and accurate; no runbook entry needed yet since
+nothing writes to `rule_evaluations` in this slice (correct, not a
+gap -- flagged as the natural point to add one when the freeze-wiring
+slice lands); performance N/A by construction (pure in-memory function,
+no I/O). **Module 04 Slice 1 is DONE** -- all four mandatory gates
+(coder, tester, security-reviewer, qa) passed, nothing outstanding.
+
+---
+
+**Phase 1 (Module 01 + Module 02) is COMPLETE as of 2026-08-23.** Read
+`retrospeq-design-system/modules/
 04-rulebook-and-evaluation.md` and `08-onboarding-and-home.md` in full,
 plus `00-foundation.md`, before starting. Module 04 depends directly on
 Module 02's `trades`/`trade_facts`/`trade.confirmed` (now real — the
@@ -3510,6 +3817,60 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-23 — Module 04 Slice 1 (schema + operand catalogue +
+  evaluator) judgment calls, summarised here with full reasoning in each
+  file's own header (see "Current task" above for the full slice
+  report): (1) deferred `trigger_evaluations` entirely, flagged not
+  stubbed -- depends on Module 03's `trigger_conditions`, which doesn't
+  exist. (2) RLS shape reasoned per-table from data semantics, same
+  method as ADR 0011 not its literal conclusions: `rules` for-all,
+  `rule_versions` SELECT+INSERT+UPDATE narrowed by a
+  superseded-at-only allowlist trigger, `rule_evaluations` SELECT-only
+  (Module 02's confirm.ts already writes exclusively via
+  withServiceRoleConnection, verified by reading the file), `rule_overrides`
+  SELECT+INSERT append-only, `adherence_weekly`/`operand_distributions`
+  SELECT-only materialised. (3) Built the `rule_evaluations`
+  immutability trigger (reject all UPDATE; reject DELETE outside
+  erasure) THIS slice rather than deferring, unlike Module 02's
+  analogous regrouping trigger, because "written once, never updated"
+  has zero documented exceptions -- no future-column-set ambiguity to
+  wait on. Extended the same reasoning to add a `rules_forbid_delete`
+  trigger not literally named in the spec's own DDL comments, because
+  deleting a rule would cascade-delete its frozen evaluations -- the
+  exact gaming vector Module 04 §1's opening line names as the module's
+  central risk; flagged explicitly for security review as a
+  beyond-literal-spec addition. (4) `risk_pct` operand maps to
+  `trades.initial_risk_pct` (the pre-entry-decided value), NOT
+  `trades.risk_pct` (peak) -- cross-checked against ADR 0012's own
+  named gotcha for exactly this future reader. (5) Evaluator's step 5
+  (op/type validation) reordered before steps 2-4, an outcome-preserving
+  reordering per §8.3's own parallel treatment of "unknown operand_id"
+  and "malformed op" as the same loud-rejection class. 86 new tests, all
+  passing against the live DB; evaluate.ts 98.7% line coverage,
+  operand-catalogue.ts 100%; full repo suite 1041 passed/13
+  skipped/0 failed; build/lint/tsc clean. NOT security-reviewed or
+  QA-reviewed yet -- security review explicitly recommended as
+  mandatory given §5.3's own "security-critical" section header, not a
+  discretionary follow-up.
+- 2026-08-23 — `retrospeq-tester` independent verification pass on
+  Module 04 Slice 1 (same day as the coder's self-test above): confirmed
+  "no compound rules" and "never eval'd/compiled to SQL" both true by
+  direct inspection (DDL, TS types, grep, plus a live hand-crafted
+  `op = 'DROP TABLE'` insert rejected by `rule_versions_op_check`), and
+  hand-counted §4.1's 38-operand coverage independently rather than
+  trusting the file's own test. Found and closed two real coverage/fuzz
+  gaps in the property-test suite (the `toDecimal` "not finite" branch,
+  and op-fuzzing only ever exercising valid-but-wrong-type operators,
+  never genuinely arbitrary garbage op strings) -- `lib/rules/` line/
+  branch/function coverage now 100%/100%/100% (was 98.7%/98.66%/100%).
+  Independently re-exercised all 4 DB triggers live (rolled back, nothing
+  persisted), matching the existing RLS test file's own claims exactly.
+  Flagged, did not fix (out of tester scope): Module 04 §15's "no
+  compound rules" ADR does not exist yet in `docs/adr/`, and arguably
+  should -- this slice's own schema/types ARE that decision, not a later
+  slice's. Full repo suite: 1047 passed/13 skipped/0 failed;
+  build/lint/tsc clean.
 
 - 2026-08-23 — Phase 1 boundary process, step 1: `simplify` pass over
   Module 02's production code (`lib/ingestion/*.ts` +
