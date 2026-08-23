@@ -288,6 +288,34 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline —
+   * `app/(app)/rules/actions.ts`'s `createRule`. A real, financially/
+   * behaviourally significant write (a new `rules` + `rule_versions`
+   * row), but a trader plausibly authors several rules in one sitting
+   * (the guided three-rule front door, §5.10, plus ad-hoc strategy
+   * rules afterward) — matching `manualTradeEntry`'s "moderate, not
+   * tight" reasoning above rather than a destructive-action budget.
+   * Also the real backstop against a free-plan trader hammering this
+   * action to probe past the 3-rule entitlement cap.
+   */
+  createRule: {
+    ip: { limit: 30, windowSeconds: 3600 },
+    email: { limit: 20, windowSeconds: 3600 },
+  },
+  /**
+   * `editRule` — Module 04 §2.5, "changing a threshold." Structurally
+   * closer to `splitTrade`/`joinTrades` (restructures/versions an
+   * EXISTING record rather than creating a brand-new financial fact)
+   * than to `createRule` — same moderate budget as those two, not
+   * `accountSettings`'s looser one, since each edit permanently writes a
+   * new `rule_versions` row (§2.5: "Edit creates a new version") rather
+   * than mutating a label in place.
+   */
+  editRule: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

@@ -30,3 +30,30 @@ export function accountConnectLimitMessage(used: number, limit: number): string 
   const noun = limit === 1 ? 'account' : 'accounts';
   return `You're at ${used} of ${limit} ${noun}. Upgrade to connect more.`;
 }
+
+/**
+ * Module 04 §10's `ENTITLEMENT_LIMIT` copy, verbatim as the worked
+ * example: "You're at 3 of 3 rules. Your history suggests four more."
+ * §5.2's reference markup shows the identical line as an aside.
+ *
+ * Unlike `accountConnectLimitMessage` above, this module's own dispatch
+ * explicitly asks for the derived-recommendation clause where this
+ * file's own header comment said Module 04 would be "the right place to
+ * attempt the real derived-recommendation clause" once it existed —
+ * this IS that slice. The "four more" style number would need a real
+ * behavioural signal (how many additional rules this trader's own
+ * history suggests, per §5.8's preview/discovery engine) that this
+ * authoring-pipeline slice does not build (the preview engine is
+ * explicitly Slice 3, per this slice's own dispatch: "Do NOT build the
+ * preview engine in this slice"). Fabricating a plausible-sounding
+ * number here without a real derivation behind it would be exactly the
+ * kind of invented confidence 00-foundation's "never fake it" rules out
+ * — so this function, like `accountConnectLimitMessage`, ships the
+ * honest half of the pattern only (the specific fraction), leaving the
+ * "suggests N more" clause for whichever slice builds the real
+ * derivation (Slice 3's preview/discovery engine, or Module 06).
+ */
+export function ruleCreateLimitMessage(used: number, limit: number): string {
+  const noun = limit === 1 ? 'rule' : 'rules';
+  return `You're at ${used} of ${limit} ${noun}. Upgrade to write more.`;
+}

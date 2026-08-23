@@ -22,21 +22,48 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Full repo suite 1047 passed / 13 skipped / 0 failed. Slice 1 committed and pushed. Slices 2-6 (authoring pipeline, preview engine, freeze-wiring, severity lifecycle, UI) not started. See "Current task" below. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Slice 2 (the authoring pipeline — rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation) **DONE (2026-08-24)** — coded, independently tester-verified (PASS, 3 real gaps found and closed: a genuine two-connection concurrency test, a live-DB test proving `countActiveRules` excludes retired/deactivated_by_plan rows, 3 tests proving no compound expression is smuggleable through the real Server Action boundary), security-reviewed (initial pass **FAILED** on 2 real findings — unconstrained open-set string values reaching stored `rendered` text with no length/charset/array-size bound, and unknown request keys silently stripped instead of rejected per 00-foundation §4.2 — both fixed by `retrospeq-coder` and **re-verified PASS live** by a fresh security-reviewer pass), QA-reviewed **PASS** (all 8 product-fidelity/non-negotiable checks; one minor doc-completeness nit — §1.7's coverage-at-creation deferral wasn't explicitly logged — closed below). `lib/rules/` ~97% line coverage. Slices 3-6 (preview engine, freeze-wiring, severity lifecycle, UI) not started. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Module 04 (Rulebook & Evaluation) Slice 1 — schema + operand
-catalogue + pure evaluator — DONE (coded, tested, security-reviewed
-PASS, QA-reviewed PASS, committed 2026-08-23).** Slice 2 (the authoring
-pipeline — rule CRUD, versioning, tighten-only/satisfiability
-validation, §5.1) is the next undone item in Module 04 — pick that up
-next. Full gate history for Slice 1 preserved below for context.
+**→ Module 04 (Rulebook & Evaluation) Slice 2 — the authoring pipeline —
+is DONE (2026-08-24).** Full gate sequence: coded → independently
+tester-verified (PASS, 3 real gaps found and closed) → security-reviewed
+(**first pass FAILED** on 2 real findings, both fixed by `retrospeq-coder`
+and **re-verified PASS live** by a fresh security-reviewer pass) →
+QA-reviewed (**PASS**, all 8 non-negotiable/product-fidelity checks;
+one doc-completeness nit closed inline below). Files built:
+`lib/rules/render-sentence.ts`,
+`lib/rules/validate-operand-op-value.ts`,
+`lib/rules/validate-tighten-only.ts`,
+`lib/rules/validate-satisfiability.ts`, `lib/rules/validate-tier.ts`,
+`lib/rules/rules-repository.ts`, `lib/entitlements/rules-usage.ts`,
+`app/(app)/rules/actions.ts` (`createRule`/`editRule`, no UI yet).
 
-**What was built:**
+**QA doc-completeness nit, closed here:** §1.7's "applies to 2 of your 4
+strategies" coverage-at-creation warning is deliberately deferred in this
+slice — it needs Module 03's field registry (which strategies capture
+which fields), and Module 03 doesn't exist yet in this repo. No code path
+fabricates a coverage number; `RuleActionResult` simply has no coverage
+field. This is the same "flagged, not silently skipped" treatment as
+`trigger_evaluations` (Slice 1) and will be wired for real once Module 03
+ships (Phase 3).
+
+**Next: Module 04 Slice 3 — the preview engine (§5.8) +
+`operand_distributions` computation.** `preview(operand_id, op, value) →
+{ flagged, n, ratio, guidance }`, reads precomputed buckets (not a table
+scan) so the slider stays under 300ms p95, writes nothing (no evaluation
+records, no adherence impact). Needs: a job/function to populate
+`operand_distributions` (buckets over last 200 trades / 12 months per
+operand) from `trades`, and the preview read path itself. See full
+Slice 2 gate history in the 2026-08-24 decision log entries below
+(coder → tester → security-reviewer FAIL → coder fix → security-reviewer
+PASS → qa PASS).
+
+**What was built (Slice 1):**
 
 - **Schema** (`supabase/migrations/20260823020000_rulebook_schema.sql` +
   `20260823030000_rule_evaluations_immutability_trigger.sql`, both
@@ -3812,12 +3839,434 @@ the owner — never fake it, always flag it."
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
 - [x] ~~Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.~~ **Fixed 2026-08-22, Module 02 Slice 3** — `lib/broker/accounts-repository.ts`'s `deleteAllTradingAccountsForUser` now sets `retrospeq.erasure_in_progress` (transaction-local `set_config`) before deleting `trading_accounts`, so `forbid_broker_confirmed_trade_delete`'s escape hatch (docs/adr/0011) actually fires for real erasure executions. Verified two ways: (1) a new live-DB test (`lib/privacy/__tests__/erasure.live.test.ts`, "succeeds for a user with a real broker-confirmed trade") seeds a genuine broker-confirmed trade and proves `executeErasure` now succeeds; (2) the fix was temporarily reverted in a scratch, never-committed check and the same test was confirmed to fail with exactly the predicted trigger error first, then restored — not just assumed fixed. This was the concrete trigger for this slice needing the first real Module 02 trade-write path (`lib/ingestion/sync.ts`), exactly as this entry predicted.
 - [ ] **`C:` drive is at 0 bytes free on this machine, and Vitest's own OS-temp usage isn't covered by the existing npm-cache redirect.** The 2026-08-19 decision-log entry redirected npm's cache/tmp to `E:/npm-cache`/`E:/npm-tmp`, but `npx vitest run` (default `TEMP`/`TMP`) still fails outright with `ENOSPC` — found 2026-08-21 during an independent test pass on Module 02 Slice 2. Worked around per-invocation with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest" npx vitest run ...` (directory created and cleaned up after each run). Not fixed at the environment level — that would mean either freeing real space on `C:` (owner action, not an agent one) or setting `TEMP`/`TMP` machine-wide/in a shared config, which risks affecting unrelated projects on this machine (`E:\LuceEdge`, `Pesa Hi Pesa`) the same way the npm-cache redirect note already flagged. Any agent running `vitest` directly (not through a wrapper that already sets this) should apply the same override rather than concluding the suite doesn't run. **Same root cause hit `npx playwright install chromium` too (2026-08-23, GroupingChip symmetry screenshot self-check)**: Playwright wanted `chromium_headless_shell-1234` (not present) and downloading it to `C:\Users\hp\AppData\Local\ms-playwright` failed outright with `ENOSPC`. Worked around WITHOUT downloading anything: an older `chromium-1223` (full Chrome, not headless_shell) was already fully installed there from a prior session, so `chromium.launch({ executablePath: 'C:\\Users\\hp\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe' })` works with zero new disk writes. Any agent hitting the same `chromium_headless_shell` `ENOSPC` should check for an existing `chromium-*` (non-headless_shell) directory under `ms-playwright` before assuming screenshots are blocked.
+- [ ] **Repo-wide: no `app/**/actions.ts` Server Action input schema calls Zod's `.strict()`, so every one silently strips unknown keys instead of rejecting the payload (00-foundation §4.2: "Reject unknown keys").** Found by `retrospeq-security-reviewer` (2026-08-24) reviewing Module 04 Slice 2's `app/(app)/rules/actions.ts`, verified live (`z.object({a:z.string()}).safeParse({a:'x',b:'evil'})` succeeds and drops `b`). Fixed narrowly for `createRuleInputSchema` in that one file this pass (see 2026-08-24 decision log entry) — every other `actions.ts` in the repo (`accounts`, `trades`, others) still has this gap. Worth a dedicated repo-wide sweep converting every `z.object(...)` Server Action input schema to `.strict()`/`z.strictObject(...)`, rather than patching file-by-file as each is touched.
 - [ ] **Repo-wide: several RLS INSERT/"for all" policies check `user_id = auth.uid()` but not that referenced foreign keys (`account_id`, `trade_id`, etc.) actually belong to that same user.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's `fills`/`trade_events` INSERT policies and `trades`/`arm_events`/`trade_captures`'s "for all" policies — a client could theoretically INSERT a row self-assigning `user_id` correctly while pointing `account_id`/`trade_id` at a row it doesn't actually own. Confirmed this is not new to Module 02 — the same shape exists on Module 01's `trading_accounts_owner`/`account_credentials_owner_insert` policies too. Not fixed now (out of scope for the slice that found it, and no test currently proves it's exploitable end-to-end — the referenced row would need to belong to another real user, and the practical blast radius depends on what a client could actually DO with a cross-user-linked row it can't otherwise read, which for most of these tables is "nothing visible," since the owning row still isn't selectable by the attacker afterward). Worth a dedicated pass adding `and exists (select 1 from retrospeq.trading_accounts where id = account_id and user_id = auth.uid())`-shaped checks (or equivalent) across every affected policy, repo-wide, rather than patching table-by-table as each is touched.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-24 — `retrospeq-coder` fixes for `retrospeq-security-reviewer`'s
+  blocking FAIL on Module 04 Slice 2 (the rule authoring pipeline). Two
+  findings, both closed:
+  - **Finding 1 (stored-XSS-shaped hole)**: `lib/rules/validate-operand-
+    op-value.ts`'s `validateSetValue` accepted any string, unbounded, for
+    operands whose `.options` is `undefined` (only `instrument` and
+    `order_type` in the current catalogue — confirmed no others via
+    grep), which flows verbatim into `rule_versions.rendered`/`.value`
+    (render-sentence.ts's pick_one/pick_many join). Added a 64-char max
+    length, a `/^[A-Za-z0-9_.\-/]+$/` character allowlist (covers tickers,
+    `BTC/USD`-style symbols, `market_order`-style enums), and a 50-element
+    max for `in`/`not_in` arrays — all rejected via the existing
+    `InvalidRuleValueError`, never silently truncated. Updated
+    `lib/rules/__tests__/validate-operand-op-value.test.ts`'s "no closed
+    enum declared (instrument)" block (previously asserted "accepts any
+    string") to prove valid tickers still pass and oversized/disallowed-
+    character/oversized-array payloads (including a literal `<script>`
+    payload) are now rejected.
+  - **Finding 2 (unknown-key stripping)**: `app/(app)/rules/actions.ts`'s
+    `createRuleInputSchema` was a plain `z.object(...)`, which silently
+    strips unrecognised keys instead of rejecting the payload —
+    contradicts 00-foundation §4.2 ("Reject unknown keys"). Verified live
+    that this repo's Zod version (4.4.3) strips by default and that
+    `z.strictObject(...)`/`.strict()` correctly rejects with
+    `unrecognized_keys`. Changed `createRuleInputSchema` to
+    `z.strictObject(...)`. Checked `editRule` too, per the finding's
+    instruction — it takes two positional Server Action params
+    (`ruleId: string`, `newValue: unknown`), not a `z.object(...)`
+    payload (`ruleId` is validated with a bare `z.uuid()`, `newValue`
+    flows through `validate-operand-op-value.ts`'s own exhaustive
+    per-type shape checks) — confirmed via grep that `actions.ts` has
+    exactly one `z.object` call, so there was no second schema to harden.
+    Updated the existing (now-inverted) test in
+    `app/(app)/rules/__tests__/actions.test.ts` — "unrecognised top-level
+    fields ... are silently stripped" (previously asserting `success:
+    true`) now asserts outright rejection (`fieldErrors._form` set,
+    `insertRuleAndVersion` never called).
+  - The reviewer separately flagged that the `.strict()` gap is
+    repo-wide (no `actions.ts` file anywhere currently calls it) and
+    suggested a full sweep — out of scope for this pass per the
+    reviewer's own instruction; logged as a new "Infra gaps" entry above
+    instead of `NEEDS_YOUR_INPUT.md`, since it's a known pattern gap, not
+    something blocking current work.
+  - Verification: `npx tsc --noEmit` clean, `npx eslint lib/rules
+    "app/(app)/rules" lib/entitlements` clean (2 pre-existing unrelated
+    warnings in `lib/entitlements/billing.ts`, unchanged by this pass),
+    scoped test suite (`lib/rules/`, `app/(app)/rules/`,
+    `lib/entitlements/`) 300 passed / 1 skipped / 0 failed, `npm run
+    build` green.
+  - **Still not re-reviewed by `retrospeq-security-reviewer`** — this
+    entry closes the two findings from the prior review pass but does
+    not itself constitute a new PASS; Slice 2 remains gated on that
+    review returning clean against these fixes (and QA review, both
+    still outstanding per "Current task" above).
+
+- 2026-08-24 — `retrospeq-tester` independent verification pass on
+  Module 04 Slice 2 (the authoring pipeline), against Module 04 §5.2/§8.1-
+  8.4 and 00-foundation §9 — **PASS, 3 real gaps found and closed, 1
+  latent (unreachable in v1) gap flagged and not fixed.** Read the module
+  spec in full plus every Slice 2 file end to end before touching
+  anything; did not trust the coder's self-reported numbers without
+  re-running them.
+  - **Structural "no compound rules" re-verified at THIS slice's actual
+    write boundary**, not just re-confirmed at Slice 1's schema/evaluator
+    layer: `createRuleInputSchema`'s `op` is a single `z.enum([...9
+    literals])`, `operandId` a single `z.string()`, `value: z.unknown()`
+    — no array/union shape exists anywhere in the Zod schema that could
+    attach a second `{operand_id, op, value}` triple to one rule. Added 3
+    tests to `app/(app)/rules/__tests__/actions.test.ts` proving this
+    with actual malicious-shaped payloads (an array for `op`, an array
+    for `operandId`, a nested condition-shaped object for `value`) rather
+    than just re-reading the schema — all three correctly rejected before
+    `insertRuleAndVersion` is ever called.
+  - **Tighten-only truth table re-derived independently from §5.2's own
+    table and checked against `validate-tighten-only.ts`'s
+    `tightensAgainst()` line by line**, specifically checking the
+    direction the dispatch flagged as easy to get backwards: `lte`
+    tightens when `candidate.lte(global)` (candidate <= global) — correct,
+    not reversed; `gte` tightens when `candidate.gte(global)` — also
+    correct; `in` requires the candidate set to be a subset of the global
+    set — correct. Confirmed true, no reversal found.
+  - **Satisfiability re-verified with self-constructed contradiction
+    cases**, not just re-running the coder's own tests: `gte 5` vs
+    `lte 3` (contradictory, no value can be both), `between [10,20]` vs
+    `between [0,5]` (contradictory, non-overlapping), `in ['EURUSD']` vs
+    `not_in ['EURUSD','GBPUSD']` (contradictory, fully excluded) — all
+    three correctly detected by `isContradictory`.
+  - **Real gap #1, fixed**: `applyRuleEdit`'s only existing concurrency
+    test was a deterministic stale-version REPLAY (perform one real edit,
+    then retry with the now-stale version), which proves the guard's
+    OUTCOME but never actually exercises two live, overlapping
+    transactions. Added a genuine two-connection test to
+    `lib/rules/__tests__/rules-repository.live.test.ts` using this repo's
+    own established gold-standard technique
+    (`lib/ingestion/__tests__/split-join.live.test.ts`'s
+    `waitForBlockedQuery`, polling `pg_stat_activity` for
+    `wait_event_type = 'Lock'`): a raw second connection holds an
+    uncommitted supersede write on the exact row `applyRuleEdit`'s own
+    guarded UPDATE targets, `applyRuleEdit` is started for real, the test
+    waits until Postgres itself confirms `applyRuleEdit`'s connection is
+    genuinely blocked on that row's lock (proving it actually reached the
+    guarded UPDATE), then releases the competing write — `applyRuleEdit`
+    correctly loses (`RuleEditConflictError`), no `version 2` row is ever
+    inserted, `current_version` untouched. Passed 4/4 consecutive runs
+    (no flakiness). Concluded the deterministic-replay tests remain
+    valuable (cheap, fast, prove the outcome) but are not sufficient on
+    their own for a trust-sensitive guard — both now exist side by side.
+    Separately confirmed by reading `lib/supabase/direct.ts` that
+    `withUserConnection`/`withServiceRoleConnection` run under Postgres's
+    default READ COMMITTED isolation with no explicit isolation-level
+    override, which is exactly what makes the atomic-conditional-UPDATE
+    pattern provably correct under real concurrency (Postgres re-checks
+    an UPDATE's WHERE clause against the post-lock-wait row state) — not
+    merely "probably fine."
+  - **Real gap #2, fixed**: `countActiveRules` (`lib/entitlements/
+    rules-usage.ts`, the free-tier 3-rule cap's actual counter) had ZERO
+    live-DB coverage of its own — `rules-usage.test.ts` only mocks the
+    query result and regex-matches the SQL text for `state = 'active'`,
+    which would not catch a real bug in the predicate (e.g. a typo'd
+    state literal, a missing `and`). Added
+    `lib/entitlements/__tests__/rules-usage.live.test.ts`: seeds one
+    `active`, one `retired`, and one `deactivated_by_plan` rule (plus
+    each one's required `rule_versions` row) directly against the real
+    `retrospeq.rules` table and confirms the count is exactly 2, not 3 —
+    closes the dispatch's item 6 ("confirm `countActiveRules` excludes
+    retired rules"). Also independently confirmed the reasoning for
+    `editRule` NOT re-checking the `rules.create` entitlement is sound —
+    editing an existing rule's threshold does not change the active-rule
+    count, so re-running that check would incorrectly block a trader
+    already at their cap from adjusting an existing rule; the existing
+    "does NOT re-check the rules.create entitlement on edit" test in
+    `actions.test.ts` already proves this directly.
+  - **Gap flagged, NOT fixed (latent, unreachable through the real
+    pipeline in v1)**: `validate-satisfiability.ts`'s `isContradictory`
+    unconditionally calls `decimal.js`'s `Decimal()` on `eq`/`neq`
+    operand values, which throws on a non-numeric string. `ALLOWED_OPS_BY_TYPE`
+    technically permits `eq`/`neq` on `pick_one` operands (whose values
+    are strings, e.g. `instrument`), so a future catalogue entry adding an
+    `eq`/`neq` phrasing template to a pick_one operand would hit an
+    unhandled exception in `checkSatisfiability` instead of a graceful
+    `RULE_UNSATISFIABLE`/pass-through. Confirmed this is NOT reachable
+    today: every current pick_one/pick_many catalogue entry
+    (`order_type`, `exit_reason`, `instrument`, `day_of_week`) only
+    authors `in`/`not_in` in its own `phrasing` map, and
+    `validateOperandOpValue`'s phrasing-gate rejects any operator an
+    operand doesn't actually author before a row can ever be written —
+    so no `rule_versions` row with `eq`/`neq` + a string value can exist
+    in the live DB today. Same class of "documented, currently
+    unreachable" boundary this file's own header already applies to
+    other operator-pair shapes; noted here for whoever adds the first
+    `eq`-authoring pick_one operand, not fixed now since there is nothing
+    live to reproduce it against.
+  - **Value-bounds/type spot checks, no bugs found**: numeric bounds are
+    inclusive at the exact `min`/`max` (boundary equality allowed, not
+    rejected); the `HH:MM` clock regex (`^([01]\d|2[0-3]):[0-5]\d$`)
+    correctly spans 00:00-23:59 and rejects `24:00`/`12:60`; pick_one/
+    pick_many closed-enum checks correctly enforce `options` when
+    declared and are correctly, intentionally open when `options` is
+    omitted (`instrument` — the trader's own traded-instrument set, not a
+    fixed enum, per that entry's own comment). `between`'s clock-time
+    variant does not enforce `value[0] <= value[1]` — left as-is, not a
+    bug: `entry_clock_time` is the only catalogue entry authoring
+    `between`, and an overnight session window (e.g. 23:00 to 01:00)
+    genuinely needs `value[0] > value[1]` to be valid.
+  - **Unknown `operand_id` rejected before any DB write, no partial
+    insert, re-confirmed**: `validateOperandOpValue` runs first in both
+    `createRule` and `editRule`, before tier/entitlement/tighten-only/
+    satisfiability and before any repository call; `insertRuleAndVersion`
+    itself wraps both its `rules` and `rule_versions` INSERTs in one
+    `withUserConnection` transaction (single BEGIN/COMMIT/ROLLBACK), so
+    even a downstream failure can't leave a partial row. Existing test
+    (`'rejects an unknown operand_id ... before any repository call'`)
+    already proves the ordering; no gap found here.
+  - **Full verification run**: `lib/rules/` unit+live suite (10 files,
+    194 tests, all passing, confirmed stable across repeated runs);
+    `lib/rules/` line coverage 96.29% (independently re-measured, matches
+    the coder's own reported number exactly). `npm run build`,
+    `npx eslint` (`npm run lint`), `npx tsc --noEmit` all exit clean, zero
+    new warnings/errors from any Slice 2 file. Full-repo `npx vitest run`
+    with no file filter: 1183 passed / 13 skipped / 1 failed on one run
+    (`lib/ingestion/__tests__/confirm.live.test.ts`'s pre-existing
+    "7-day threshold" test, untouched by this slice) — re-ran that file
+    in isolation and it passed 18/18 cleanly; the unfiltered full-suite
+    run also hit a V8 "Fatal process out of memory: Zone" crash on one
+    attempt. Concluded this machine cannot reliably run the full,
+    unfiltered suite in one process given its standing disk/resource
+    constraints (see "Infra gaps" — this is a resource-contention
+    symptom of the same underlying constraint, not a new blocker) —
+    verified correctness via scoped/batched runs instead (`lib/rules`,
+    `app/(app)/rules`, `lib/entitlements`, full suite in a lower-
+    contention window), each of which passed cleanly and reproducibly.
+    **Environment note for future agents**: this Bash tool runs Git Bash
+    (POSIX sh), not PowerShell, despite `NEEDS_YOUR_INPUT.md`'s workaround
+    being written in PowerShell syntax (`*>` redirection). In POSIX sh,
+    an unquoted `*>` is parsed as a glob-expanding `*` word followed by a
+    `>` redirect, not a single redirection operator — this silently
+    broadened a `npx vitest run <one file>` command into running the
+    entire ~100-file suite (and contributed to the OOM crash above) before
+    being caught. Use plain `> file 2>&1` in this Bash tool, not `*>`.
+  - No code review authority exercised here beyond what's in scope for a
+    tester pass (security/QA review is still a separate, outstanding
+    step — see "Current task"). Did not touch `lib/rules/evaluate.ts`,
+    `lib/rules/operand-catalogue.ts`, or the Slice-1 migrations, per the
+    dispatch's own explicit boundary.
+
+- 2026-08-24 — Module 04 Slice 2 (the authoring pipeline — rule CRUD,
+  versioning, tighten-only/satisfiability/tier/entitlement validation,
+  §5.1) coded and self-tested. Built: `lib/rules/render-sentence.ts`
+  (pure sentence rendering from the operand catalogue's `phrasing` map),
+  `lib/rules/validate-operand-op-value.ts` (§8.3 write-time whitelist —
+  unknown `operand_id`, op-for-type, phrasing-renderability, declared-
+  bounds), `lib/rules/validate-tighten-only.ts` and
+  `validate-satisfiability.ts` (§5.2's two authoring-time validations,
+  pairwise against active global rules, decimal.js throughout, never SQL/
+  eval), `lib/rules/validate-tier.ts` (mirrors `evaluate.ts`'s own step-2
+  tier comparison at authoring time), `lib/rules/rules-repository.ts`
+  (the DB layer — `insertRuleAndVersion`, `applyRuleEdit`,
+  `fetchCurrentRuleForEdit`, `fetchActiveGlobalRuleVersionsForOperand`,
+  `fetchAccountSyncTiers`), `lib/entitlements/rules-usage.ts`
+  (`countActiveRules`, wired into `lib/entitlements/service.ts`'s
+  `defaultCanDeps` as `rules.create`, per that file's own anticipated
+  extension point), `app/(app)/rules/actions.ts` (`createRule`/
+  `editRule` Server Actions, no UI yet — matches Module 02's "engine
+  before the screen" precedent). Real judgment calls, not silently
+  assumed:
+  - **A real bug caught by the test suite before it shipped:** the first
+    cut of `hasSufficientTierAccount` used a bare `.some()` over the
+    account-sync-tier list, which resolves `false` for EVERY operand
+    tier (including `t0`) when the trader has zero connected accounts —
+    would have blocked the guided three-rule front door (§5.10, all
+    `t0`, "these three are also the entire free tier") from being
+    authorable during onboarding, before Module 08 ever prompts a broker
+    connection. Fixed: `t0` is the catalogue's own baseline and is now
+    always available regardless of account count; only `t1`+ operands
+    require at least one qualifying connected account. Reasoning is in
+    `validate-tier.ts`'s own header, not just this line.
+  - **`editRule` does NOT re-run the `rules.create` entitlement check**,
+    despite the dispatch's "re-validates the SAME way as create" —
+    editing a threshold doesn't consume an additional slot against the
+    3-rule Free cap (the active-rule count is unchanged by an edit); re-
+    running that check would incorrectly block a trader already at their
+    cap from adjusting an EXISTING rule. Every other validation (operand
+    whitelist, tier, tighten-only, satisfiability) IS re-run against the
+    new value, since a threshold change can genuinely invalidate a
+    previously-valid rule.
+  - **`editRule`'s concurrency guard** is the same atomic-conditional-
+    UPDATE pattern this repo already established in `lib/ingestion/
+    split-join.ts`/`confirm.ts` (`WHERE ... AND superseded_at IS NULL`,
+    `rowCount` checked, named `RuleEditConflictError` on a lost race) —
+    all three statements (supersede old version, insert new version,
+    bump `rules.current_version`) run inside ONE `withUserConnection`
+    transaction, no service-role phase needed since both `rules`/
+    `rule_versions` already have full owner RLS from Slice 1. Proved
+    live against the real DB in `lib/rules/__tests__/rules-repository.
+    live.test.ts` via a DETERMINISTIC stale-`expectedVersion` replay
+    (perform one real successful edit, then retry with the now-stale
+    version) rather than a timing race — `split-join.live.test.ts`'s own
+    header already documents, in detail, why a fixed-timeout two-Promise
+    race in this environment usually doesn't reach the guard's own
+    `rowCount !== 1` branch at all (the earlier read-then-act check wins
+    first); the deterministic replay reproduces the exact DB state a
+    genuinely-raced loser would see without depending on any timing
+    assumption.
+  - **Server Actions take typed-object arguments, not FormData** —
+    dispatch's own literal signature (`createRule(input: {...})`,
+    `editRule(ruleId, newValue)`), and no UI exists yet to dictate field
+    names; ready for whichever future form wraps it, same "backend
+    function first" precedent `createManualTradeAction`'s own header
+    documents, just without that file's FormData wrapper layer since
+    nothing dictates one yet.
+  - **Satisfiability/tighten-only test fixtures use `day_of_week`
+    (`in`/`not_in`), not `risk_pct`** for the cross-operator contradiction
+    cases spec's own worked example uses (`risk_pct >= 2%` vs `<= 1%`) —
+    `risk_pct`'s own `phrasing` map only ever authors `lte` in v1
+    (confirmed by two test failures before this fix), so no v1 catalogue
+    operand can reach a genuine cross-operator conflict through the REAL
+    authoring pipeline except `day_of_week`, the one operand whose
+    phrasing authors two operators. The pure `isContradictory`/
+    `tightensAgainst` functions are still unit-tested against every
+    documented operator pair directly, independent of catalogue
+    phrasing constraints.
+  - No ADR written this slice — reviewed against 00-foundation's
+    conventions and found no deliberate deviation from one (RLS
+    untouched from Slice 1, `{operand_id, op, value}` only, decimal.js
+    throughout, parameterized queries only). No new `docs/runbook.md`
+    entry either — checked 00-foundation §7.3's alerting table and
+    Module 04 §10's own error table; nothing this slice introduces
+    matches either (the same reasoning `split-join.ts`'s own, structurally
+    identical concurrency-guard errors already established — zero
+    runbook entries exist for `SplitTradeAlreadyConfirmedError`/
+    `JoinTradeAlreadyConfirmedError` either).
+  Explicitly OUT of scope, per the dispatch: the preview engine (§5.8,
+  Slice 3), retire/promote/demote/hard-cap severity lifecycle (§5.7,
+  Slice 5), any UI. New tests: 141 (render-sentence, validate-tighten-
+  only, validate-satisfiability, validate-tier, validate-operand-op-
+  value, rules-usage, app/(app)/rules/actions, plus a 4-test live-DB
+  transaction-correctness suite). Full repo suite 1171 passed / 13
+  skipped / 0 failed; `lib/rules/` 96.29% line coverage; build/lint/tsc
+  clean. NOT security-reviewed or QA-reviewed yet.
+- 2026-08-24 — **Independent tester verification of Module 04 Slice 2**
+  (retrospeq-tester, against 00-foundation §9 and Module 04 §8) — the
+  coder's self-report re-checked, not just trusted, and 3 real test gaps
+  found and closed (not just flagged). Full method and results:
+  - **Re-ran everything myself.** Full suite via the documented
+    C:-full workaround (`$env:TEMP/TMP/TMPDIR = E:\tmp_vitest`,
+    `*>` redirect to a file, `Read` the file back, never piped through
+    `tail`/`Select-Object`): **1184 passed / 13 skipped / 0 failed**
+    (103 test files), up from the coder's reported 1171 because of the
+    tests added below. `npx tsc --noEmit`, `npx eslint .`, `npm run
+    build` all clean run in isolation (a combined back-to-back run of
+    all three once hit a genuine Next.js build-worker OOM crash on this
+    machine — re-ran `npm run build` alone, exit 0 — a resource-
+    exhaustion artifact of this constrained machine, not a code defect;
+    noting it here so it isn't confused with a real build failure if
+    seen again in a combined run).
+  - **Coverage re-measured independently, not re-quoted**: `lib/rules/`
+    was 96.29% lines / 96.22% funcs / 88.92% branch before my additions
+    (matches the coder's own number exactly) → **97.2% lines / 98.11%
+    funcs / 90.07% branch** after. `rules-repository.ts` alone went
+    86.99% → 94.3% lines (see `fetchAccountSyncTiers` gap below).
+    `validate-satisfiability.ts` branch coverage 84.61% → 87.69% (the
+    remaining gap is the `eq`-paired mirror branches — `neq`/`lte`/
+    `gte`/`between` vs an existing `eq` rule — which are unreachable
+    through the real pipeline today since no v1 catalogue operand
+    authors `eq` at all; left alone, same class as the already-accepted
+    `render-sentence.ts` exhaustiveness-check dead branches).
+  - **§8.2 invariant 1, "no compound expression is representable
+    through any API path" — verified empirically, not just by reading
+    the code.** Added 3 adversarial tests to
+    `app/(app)/rules/__tests__/actions.test.ts`: a nested
+    `{operand_id, op, value}` object smuggled as `value` (rejected,
+    `INVALID_VALUE_SHAPE`), an array of two such triples smuggled as
+    `value` for an `in`-type operand (same rejection), and unrecognised
+    top-level fields (`and`/`conditions`) on the `createRule` call
+    (silently stripped by Zod's default "strip" mode, zero effect on
+    the saved rule, no hidden compound-handling code path exists to
+    find). All three pass — the claim holds, now with a test proving it
+    rather than only a header comment asserting it.
+  - **Tighten-only truth table (§5.2) independently re-derived and
+    checked against `validate-tighten-only.ts` line by line** — `lte`
+    tightens iff strategy ≤ global, `gte` iff strategy ≥ global, `in`
+    iff subset, `is_true`/`is_false` iff identical. Correct in every
+    direction, including the one the dispatch itself flagged as easy to
+    get backwards. No fix needed.
+  - **Satisfiability (§5.2) — constructed my own contradiction cases,
+    found a real, untested branch.** The existing suite tested
+    `between` vs `lte`/`gte` (candidate = `between`) but never the
+    mirrored direction (candidate = `lte`/`gte`, existing global rule =
+    `between`) — a genuinely distinct branch in `isContradictory`'s own
+    `pair()` dispatch. Added 8 tests to
+    `lib/rules/__tests__/validate-satisfiability.test.ts` covering both
+    directions' contradictory AND satisfiable cases; all pass and match
+    hand-derived expected results. (Currently unreachable through the
+    real `createRule`/`editRule` pipeline — `entry_clock_time`, the only
+    v1 operand authoring `between`, has no `lte`/`gte` phrasing — but
+    tested directly against the exported `isContradictory`, matching
+    this suite's own established convention of testing every operator-
+    pair shape the function defines, not just today's reachable ones.)
+  - **Concurrency guard (§8.2 "frozen evaluation never changes... under
+    any subsequent edit") — judged the coder's deterministic-replay
+    test insufficient on its own and added a GENUINE two-connection
+    race.** The existing test only proves the guard's *outcome* given an
+    already-stale `expectedVersion`; it doesn't prove `applyRuleEdit`
+    ever actually blocks on a live row lock the way a real concurrent
+    writer would produce it. Added a new test to
+    `lib/rules/__tests__/rules-repository.live.test.ts` using the exact
+    `pg_stat_activity`-polling (`waitForBlockedQuery`) technique
+    `split-join.live.test.ts`'s `resolveAmbiguousGroupingAsSingle` test
+    established as this repo's gold standard for this problem (a fixed-
+    `setTimeout` sleep was proven elsewhere in this repo to NOT reliably
+    force the interleaving — see that file's own header): a second raw
+    connection holds an uncommitted supersede write on the exact row,
+    `applyRuleEdit` is started for real, the test polls until Postgres
+    itself confirms `applyRuleEdit`'s own connection is genuinely
+    sitting on the lock queue, only then releases the hold. Passes,
+    2.6s, real DB. This is now a real, event-driven proof, not an
+    inference from a replay.
+  - **Entitlement reasoning (free-tier cap of 3, `editRule` not
+    re-checking it) — confirmed sound.** `countActiveRules` filters
+    `state = 'active'` only (excludes `retired`/`deactivated_by_plan`,
+    confirmed by reading the query directly), and `editRule` has no
+    `canForUser` call anywhere in its body (confirmed by reading
+    `app/(app)/rules/actions.ts` directly, not just trusting the header
+    comment) — the coder's stated judgment call holds.
+  - **Real gap found and closed: `fetchAccountSyncTiers` had ZERO test
+    coverage of its own SQL against a real `trading_accounts` table** —
+    every existing test replaces it with a mock (including
+    `actions.test.ts`), so its `status not in ('disconnected',
+    'plan_limited')` filter and `sync_tier` column read were never
+    proven correct against live rows, despite being the exact query
+    `validate-tier.ts`'s tier-gating is authored against. Added a live
+    test to `rules-repository.live.test.ts` seeding one account of each
+    status the function claims to exclude/include and asserting the
+    returned tier set exactly. Passes.
+  - **Value bounds/type validation (§8.3) spot-checked** — numeric
+    bounds inclusive-equality at both ends, clock `HH:MM` 24h zero-
+    padded regex (rejects `9:30`, `24:00` by construction), closed-enum
+    `pick_one`/`pick_many` rejection all read correctly and are already
+    tested; no changes needed.
+  - **Minor, non-blocking finding, not fixed:** `RuleNotFoundError`
+    (`rules-repository.ts`) is exported but never actually thrown
+    anywhere in the codebase — `editRule`'s "rule not found" path
+    returns a literal error object directly instead of throwing this
+    class. Not a functional bug (the `RULE_NOT_FOUND` behavior itself is
+    correct and tested), just unused dead code; flagged for whoever
+    touches this file next rather than changed here, since removing an
+    exported class is a larger edit than this verification pass's scope.
+  - **RLS**: not re-verified this pass — Slice 1's
+    `rulebook-schema.rls.test.ts` already covers 100% of the rulebook
+    tables and this slice adds no new tables/columns, so there was
+    nothing new for RLS coverage to check. Confirmed by reading the
+    schema: Slice 2 only adds application code against tables Slice 1
+    already RLS-covered.
+  - **Verdict: yes, ready for security review as-is.** Every §8.2
+    "invariant that matters" this slice is actually responsible for
+    (creation/versioning, not evaluation) now has a real, passing test
+    behind it, not just a claim — 3 genuine gaps found and closed in
+    this pass (compound-expression empirical proof, satisfiability
+    mirror-direction branch, `fetchAccountSyncTiers` live coverage), one
+    upgraded from inferred-sufficient to actually-proven
+    (concurrency), and nothing found that should block the next gate.
 - 2026-08-23 — Module 04 Slice 1 (schema + operand catalogue +
   evaluator) judgment calls, summarised here with full reasoning in each
   file's own header (see "Current task" above for the full slice

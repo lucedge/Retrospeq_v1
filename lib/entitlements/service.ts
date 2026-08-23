@@ -1,6 +1,7 @@
 import 'server-only';
 import { can, type CanDeps } from './can';
 import { countActiveTradingAccounts } from './account-usage';
+import { countActiveRules } from './rules-usage';
 import { getUserPlan } from './subscription-repository';
 import type { Capability, EntitlementResult } from './types';
 
@@ -20,6 +21,9 @@ export const defaultCanDeps: CanDeps = {
   getPlan: getUserPlan,
   usageCounters: {
     'account.connect': countActiveTradingAccounts,
+    // Module 04 (Rulebook & Evaluation) authoring pipeline — see
+    // rules-usage.ts's own header for why 'active' is the right filter.
+    'rules.create': countActiveRules,
   },
 };
 
