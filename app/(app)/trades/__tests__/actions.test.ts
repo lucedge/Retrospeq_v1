@@ -23,8 +23,11 @@ const {
   createManualTradeMock,
   splitTradeMock,
   joinTradesMock,
+  resolveAmbiguousGroupingAsSingleMock,
   confirmDayMock,
   isAccountOwnedByUserMock,
+  withUserConnectionMock,
+  writeTradeCaptureMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -35,8 +38,11 @@ const {
   createManualTradeMock: vi.fn(),
   splitTradeMock: vi.fn(),
   joinTradesMock: vi.fn(),
+  resolveAmbiguousGroupingAsSingleMock: vi.fn(),
   confirmDayMock: vi.fn(),
   isAccountOwnedByUserMock: vi.fn(),
+  withUserConnectionMock: vi.fn(),
+  writeTradeCaptureMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -61,7 +67,12 @@ vi.mock('@/lib/ingestion/manual-entry', async (importOriginal) => {
 });
 vi.mock('@/lib/ingestion/split-join', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ingestion/split-join')>();
-  return { ...actual, splitTrade: splitTradeMock, joinTrades: joinTradesMock };
+  return {
+    ...actual,
+    splitTrade: splitTradeMock,
+    joinTrades: joinTradesMock,
+    resolveAmbiguousGroupingAsSingle: resolveAmbiguousGroupingAsSingleMock,
+  };
 });
 vi.mock('@/lib/ingestion/confirm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ingestion/confirm')>();
@@ -71,6 +82,13 @@ vi.mock('@/lib/broker/accounts-repository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/broker/accounts-repository')>();
   return { ...actual, isAccountOwnedByUser: isAccountOwnedByUserMock };
 });
+vi.mock('@/lib/supabase/direct', () => ({
+  withUserConnection: withUserConnectionMock,
+}));
+vi.mock('@/lib/ingestion/trade-captures', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ingestion/trade-captures')>();
+  return { ...actual, writeTradeCapture: writeTradeCaptureMock };
+});
 vi.mock('server-only', () => ({}));
 
 const {
@@ -78,7 +96,9 @@ const {
   createManualTradeAction,
   splitTradeAction,
   joinTradesAction,
+  resolveAmbiguousGroupingAction,
   confirmDayAction,
+  writeTradeCaptureAction,
 } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const {
@@ -92,6 +112,9 @@ const {
   SplitBoundaryNotMemberError,
   JoinTradeNotFoundError,
   JoinTradeSameTradeError,
+  ResolveAmbiguousGroupingNotFoundError,
+  ResolveAmbiguousGroupingAlreadyConfirmedError,
+  ResolveAmbiguousGroupingNotAmbiguousError,
 } = await import('@/lib/ingestion/split-join');
 const { ConfirmDayAccountNotFoundError, ConfirmDayNoEligibleTradesError } = await import('@/lib/ingestion/confirm');
 
@@ -154,8 +177,13 @@ beforeEach(() => {
   createManualTradeMock.mockReset();
   splitTradeMock.mockReset();
   joinTradesMock.mockReset();
+  resolveAmbiguousGroupingAsSingleMock.mockReset();
   confirmDayMock.mockReset();
   isAccountOwnedByUserMock.mockReset().mockResolvedValue(true);
+  withUserConnectionMock.mockReset().mockImplementation(async (_userId: string, cb: (client: unknown) => unknown) =>
+    cb({ query: vi.fn().mockResolvedValue({ rows: [], rowCount: 1 }) }),
+  );
+  writeTradeCaptureMock.mockReset().mockResolvedValue({ applied: true, created: true });
 });
 
 describe('toggleNotADecisionAction', () => {
@@ -442,6 +470,78 @@ describe('joinTradesAction', () => {
   });
 });
 
+describe('resolveAmbiguousGroupingAction', () => {
+  it('happy path: calls resolveAmbiguousGroupingAsSingle with the caller-bound tradeId', async () => {
+    resolveAmbiguousGroupingAsSingleMock.mockResolvedValue({ tradeId: TRADE_ID });
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.success).toBe(true);
+    expect(resolveAmbiguousGroupingAsSingleMock).toHaveBeenCalledWith(FAKE_USER.id, TRADE_ID);
+    expect(revalidatePathMock).toHaveBeenCalledWith('/trades');
+  });
+
+  it('session missing: TRADE_SESSION_MISSING, no backend call', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('TRADE_SESSION_MISSING');
+    expect(resolveAmbiguousGroupingAsSingleMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limited: TRADE_RATE_LIMITED, no backend call', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('resolveAmbiguousGrouping', 'ip:1.2.3.4', 3600));
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('TRADE_RATE_LIMITED');
+    expect(resolveAmbiguousGroupingAsSingleMock).not.toHaveBeenCalled();
+  });
+
+  it('validation failure: a malformed bound tradeId never reaches the backend', async () => {
+    const result = await resolveAmbiguousGroupingAction('not-a-uuid', undefined, new FormData());
+
+    expect(result.fieldErrors?.tradeId).toBeTruthy();
+    expect(resolveAmbiguousGroupingAsSingleMock).not.toHaveBeenCalled();
+  });
+
+  it('not found: ResolveAmbiguousGroupingNotFoundError maps to RESOLVE_GROUPING_NOT_FOUND', async () => {
+    resolveAmbiguousGroupingAsSingleMock.mockRejectedValue(new ResolveAmbiguousGroupingNotFoundError(TRADE_ID));
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('RESOLVE_GROUPING_NOT_FOUND');
+  });
+
+  it('already confirmed: maps to a named, non-retryable-sounding error', async () => {
+    resolveAmbiguousGroupingAsSingleMock.mockRejectedValue(new ResolveAmbiguousGroupingAlreadyConfirmedError(TRADE_ID));
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('RESOLVE_GROUPING_ALREADY_CONFIRMED');
+  });
+
+  it('not ambiguous: ResolveAmbiguousGroupingNotAmbiguousError maps to RESOLVE_GROUPING_NOT_AMBIGUOUS', async () => {
+    resolveAmbiguousGroupingAsSingleMock.mockRejectedValue(
+      new ResolveAmbiguousGroupingNotAmbiguousError(TRADE_ID, 'confident_single'),
+    );
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('RESOLVE_GROUPING_NOT_AMBIGUOUS');
+  });
+
+  it('never leaks a raw internal error message', async () => {
+    resolveAmbiguousGroupingAsSingleMock.mockRejectedValue(new Error('pg: connection terminated unexpectedly'));
+
+    const result = await resolveAmbiguousGroupingAction(TRADE_ID, undefined, new FormData());
+
+    expect(result.error?.code).toBe('RESOLVE_AMBIGUOUS_GROUPING_INTERNAL');
+    expect(result.error?.user_message).not.toContain('pg:');
+  });
+});
+
 describe('confirmDayAction', () => {
   const fields = { accountId: ACCOUNT_ID, serverDay: '2026-08-22' };
 
@@ -529,5 +629,81 @@ describe('confirmDayAction', () => {
     await confirmDayAction(undefined, formData({ ...fields, kind: 'deliberate_no_trade' }));
 
     expect(confirmDayMock).toHaveBeenCalledWith(ACCOUNT_ID, '2026-08-22', { kind: 'deliberate_no_trade' });
+  });
+});
+
+describe('writeTradeCaptureAction', () => {
+  const call = () => writeTradeCaptureAction(TRADE_ID, undefined, formData({ reason: 'target' }));
+
+  it('happy path: writes the trim reason and returns it', async () => {
+    const result = await call();
+
+    expect(result.success).toBe(true);
+    expect(result.value).toBe('target');
+    expect(writeTradeCaptureMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tradeId: TRADE_ID,
+        userId: FAKE_USER.id,
+        fieldId: 'trim_reason',
+        value: 'target',
+        moment: 'post_close',
+      }),
+    );
+    expect(revalidatePathMock).toHaveBeenCalledWith('/trades');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/trades/close-out');
+  });
+
+  it('session missing: TRADE_SESSION_MISSING, no DB connection opened', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+
+    const result = await call();
+
+    expect(result.error?.code).toBe('TRADE_SESSION_MISSING');
+    expect(withUserConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('rate limited: no DB connection opened', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('writeTradeCapture', 'ip:1.2.3.4', 3600));
+
+    const result = await call();
+
+    expect(result.error?.code).toBe('TRADE_RATE_LIMITED');
+    expect(withUserConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('validation failure: an out-of-catalogue reason never reaches the backend', async () => {
+    const result = await writeTradeCaptureAction(TRADE_ID, undefined, formData({ reason: 'greed' }));
+
+    expect(result.error?.code).toBe('TRADE_CAPTURE_INVALID_INPUT');
+    expect(withUserConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('not owned: the explicit ownership check rejects before writeTradeCapture is ever called', async () => {
+    withUserConnectionMock.mockImplementation(async (_userId: string, cb: (client: unknown) => unknown) =>
+      cb({ query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }) }),
+    );
+
+    const result = await call();
+
+    expect(result.error?.code).toBe('TRADE_NOT_FOUND');
+    expect(writeTradeCaptureMock).not.toHaveBeenCalled();
+  });
+
+  it('locked (should be structurally impossible for trim_reason, still handled): applied:false maps to TRADE_CAPTURE_LOCKED', async () => {
+    writeTradeCaptureMock.mockResolvedValue({ applied: false, reason: 'pre_entry_locked' });
+
+    const result = await call();
+
+    expect(result.error?.code).toBe('TRADE_CAPTURE_LOCKED');
+  });
+
+  it('never leaks a raw internal error message', async () => {
+    withUserConnectionMock.mockRejectedValue(new Error('pg: connection terminated unexpectedly at socket 42'));
+
+    const result = await call();
+
+    expect(result.error?.code).toBe('WRITE_TRADE_CAPTURE_INTERNAL');
+    expect(JSON.stringify(result)).not.toContain('socket 42');
   });
 });

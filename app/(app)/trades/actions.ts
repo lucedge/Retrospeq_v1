@@ -17,6 +17,7 @@ import {
 import {
   splitTrade,
   joinTrades,
+  resolveAmbiguousGroupingAsSingle,
   SplitTradeNotFoundError,
   SplitTradeAlreadyConfirmedError,
   SplitBoundaryNotMemberError,
@@ -26,16 +27,23 @@ import {
   JoinTradeAlreadyConfirmedError,
   JoinTradeDifferentBlockError,
   JoinTradeSameTradeError,
+  ResolveAmbiguousGroupingNotFoundError,
+  ResolveAmbiguousGroupingAlreadyConfirmedError,
+  ResolveAmbiguousGroupingNotAmbiguousError,
   type SplitTradeResult,
   type JoinTradesResult,
+  type ResolveAmbiguousGroupingResult,
 } from '@/lib/ingestion/split-join';
 import {
   confirmDay,
   ConfirmDayAccountNotFoundError,
   ConfirmDayNoEligibleTradesError,
   type ConfirmDaySuccess,
+  type ConfirmDayBlockAnomalyRefusal,
 } from '@/lib/ingestion/confirm';
 import { isAccountOwnedByUser } from '@/lib/broker/accounts-repository';
+import { withUserConnection } from '@/lib/supabase/direct';
+import { writeTradeCapture, TRIM_REASONS, TRIM_REASON_FIELD_ID, type TrimReason } from '@/lib/ingestion/trade-captures';
 
 /**
  * Module 02 Slice 7a — the Server Actions layer wiring every Module 02
@@ -86,6 +94,42 @@ import { isAccountOwnedByUser } from '@/lib/broker/accounts-repository';
  * "sync now" tap implies talking to a real broker) or surface a
  * permanently-broken button, neither of which is honest. Deferred until
  * a real `BrokerAdapter` exists, matching AGENTS.md's "never fake it."
+ *
+ * **Slice 7b addition: `writeTradeCaptureAction`.** The one genuinely new
+ * action in this file since Slice 7a — the close-out screen's trim-reason
+ * chip row (§3.3/§5.1/§5.2). Unlike every other action here, its backend
+ * call (`writeTradeCapture`, `lib/ingestion/trade-captures.ts`) takes a
+ * raw `PoolClient`, not a `userId`-scoped repository function — this
+ * action is therefore the one place in this file that opens its own
+ * `withUserConnection` block directly, doing its own ownership check
+ * (`select 1 from retrospeq.trades where id = $1 and user_id = $2`) before
+ * calling it, since `trade_captures`'s own RLS policy only constrains
+ * `trade_captures.user_id` (self-supplied, always correct here), not
+ * whether the `trade_id` being written actually belongs to that same
+ * user's own trade — see this action's own inline comment.
+ *
+ * **Slice 7b addition: `confirmDayAction`'s error shape now carries the
+ * refusal's own detail (`gapIds`/`tradeIds`/`trades`), not just the code
+ * and message.** `confirmDay()` already computed this detail (Slice 5);
+ * Slice 7a's action discarded it. The close-out screen needs it to render
+ * §9's "silence over wrongness" honestly — a real, working link to
+ * exactly which trade is blocking, not a generic "something's wrong."
+ * Purely additive (existing `code`/`user_message` fields unchanged), and
+ * the values are the same already-computed, non-sensitive ids the caller
+ * is already entitled to see (their own account's own trades/gaps).
+ *
+ * **Design-ethics fix addition (2026-08-23): `resolveAmbiguousGroupingAction`.**
+ * Closes a real `.rq-btn--equal` symmetry violation retrospeq-qa flagged on
+ * `GroupingChip.tsx`: Slice 7b wired "Separate" to a real, working deep
+ * link but left "Same trade" permanently disabled (no backing write
+ * existed). Follows this file's exact established pattern — session check,
+ * rate limit, Zod-validate `tradeId`, call the backend function
+ * (`resolveAmbiguousGroupingAsSingle`, `lib/ingestion/split-join.ts`), map
+ * every thrown error to a named, user-safe message, `revalidatePath`. No
+ * new ownership-check pattern needed — same as `splitTradeAction`/
+ * `joinTradesAction` above, the backend function itself enforces ownership
+ * via `withUserConnection` in its own phase 1 before this action's caller
+ * id is passed through unchanged.
  */
 
 const uuidSchema = z.uuid();
@@ -418,12 +462,94 @@ export async function joinTradesAction(
 }
 
 // ---------------------------------------------------------------------
+// resolveAmbiguousGroupingAction — Module 02 §4.3/§4.7 design-ethics fix,
+// 2026-08-23 (see this file's header)
+// ---------------------------------------------------------------------
+
+export interface ResolveAmbiguousGroupingActionState {
+  fieldErrors?: Partial<Record<string, string[]>>;
+  error?: { code: string; user_message: string };
+  success?: boolean;
+  result?: ResolveAmbiguousGroupingResult;
+}
+
+const resolveAmbiguousGroupingInputSchema = z.strictObject({
+  tradeId: z.uuid(),
+});
+
+/**
+ * Bound to a specific `tradeId` at the call site
+ * (`resolveAmbiguousGroupingAction.bind(null, tradeId)`), same convention
+ * as `toggleNotADecisionAction`/`writeTradeCaptureAction`. `GroupingChip`'s
+ * "Same trade" button submits this action with no other fields — the
+ * whole point of this operation is that it resolves the grouping VERDICT
+ * on an already-correctly-grouped trade, never restructures membership,
+ * so there is no boundary/counterpart id to collect from the trader.
+ */
+export async function resolveAmbiguousGroupingAction(
+  tradeId: string,
+  _prevState: ResolveAmbiguousGroupingActionState | undefined,
+  _formData: FormData,
+): Promise<ResolveAmbiguousGroupingActionState> {
+  const user = await requireSessionUser();
+  if (isErrorState(user)) return user;
+
+  try {
+    await enforceRateLimit('resolveAmbiguousGrouping', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) return rateLimitedState();
+    throw err;
+  }
+
+  const parsed = resolveAmbiguousGroupingInputSchema.safeParse({ tradeId });
+  if (!parsed.success) {
+    return { fieldErrors: issuesToFieldErrors(parsed.error.issues) };
+  }
+
+  try {
+    const result = await resolveAmbiguousGroupingAsSingle(user.id, parsed.data.tradeId);
+    revalidatePath('/trades');
+    return { success: true, result };
+  } catch (err) {
+    if (err instanceof ResolveAmbiguousGroupingNotFoundError) {
+      return { error: { code: 'RESOLVE_GROUPING_NOT_FOUND', user_message: "We couldn't find that trade." } };
+    }
+    if (err instanceof ResolveAmbiguousGroupingAlreadyConfirmedError) {
+      return {
+        error: {
+          code: 'RESOLVE_GROUPING_ALREADY_CONFIRMED',
+          user_message: 'This trade is already confirmed and its grouping can no longer be changed.',
+        },
+      };
+    }
+    if (err instanceof ResolveAmbiguousGroupingNotAmbiguousError) {
+      return {
+        error: {
+          code: 'RESOLVE_GROUPING_NOT_AMBIGUOUS',
+          user_message: 'This trade no longer needs a grouping decision.',
+        },
+      };
+    }
+    return internalErrorState('RESOLVE_AMBIGUOUS_GROUPING', err);
+  }
+}
+
+// ---------------------------------------------------------------------
 // confirmDayAction — Module 02 §4.6
 // ---------------------------------------------------------------------
 
 export interface ConfirmDayActionState {
   fieldErrors?: Partial<Record<string, string[]>>;
-  error?: { code: string; user_message: string };
+  error?: {
+    code: string;
+    user_message: string;
+    /** Only set when `code === 'CONFIRM_DAY_COVERAGE_GAP'`. */
+    gapIds?: string[];
+    /** Only set when `code === 'CONFIRM_DAY_AMBIGUOUS_GROUPING'`. */
+    tradeIds?: string[];
+    /** Only set when `code === 'CONFIRM_DAY_UNRESOLVED_BLOCK_ANOMALY'`. */
+    trades?: ConfirmDayBlockAnomalyRefusal['trades'];
+  };
   success?: boolean;
   result?: ConfirmDaySuccess;
 }
@@ -482,9 +608,17 @@ export async function confirmDayAction(
       parsed.data.kind ? { kind: parsed.data.kind } : {},
     );
     if (!result.confirmed) {
-      return { error: { code: `CONFIRM_DAY_${result.code}`, user_message: result.message } };
+      const code = `CONFIRM_DAY_${result.code}`;
+      if (result.code === 'COVERAGE_GAP') {
+        return { error: { code, user_message: result.message, gapIds: result.gapIds } };
+      }
+      if (result.code === 'AMBIGUOUS_GROUPING') {
+        return { error: { code, user_message: result.message, tradeIds: result.tradeIds } };
+      }
+      return { error: { code, user_message: result.message, trades: result.trades } };
     }
     revalidatePath('/trades');
+    revalidatePath('/trades/close-out');
     return { success: true, result };
   } catch (err) {
     if (err instanceof ConfirmDayAccountNotFoundError) {
@@ -499,5 +633,91 @@ export async function confirmDayAction(
       };
     }
     return internalErrorState('CONFIRM_DAY', err);
+  }
+}
+
+// ---------------------------------------------------------------------
+// writeTradeCaptureAction — Module 02 §3.3/§4.5's trade_captures write
+// path, wired here for the close-out screen's trim-reason chip row
+// (Slice 7b). See this file's header for why this action opens its own
+// `withUserConnection` block rather than calling a repository function.
+// ---------------------------------------------------------------------
+
+export interface WriteTradeCaptureActionState {
+  error?: { code: string; user_message: string };
+  success?: boolean;
+  value?: TrimReason;
+}
+
+const trimReasonValueSchema = z.enum(TRIM_REASONS);
+
+/**
+ * Bound to a specific `tradeId` at the call site
+ * (`writeTradeCaptureAction.bind(null, tradeId)`), same convention as
+ * `toggleNotADecisionAction`. Only ever writes the built-in
+ * `TRIM_REASON_FIELD_ID` (see `lib/ingestion/trade-captures.ts`'s own
+ * header for why this is a literal, not a registry-defined, field id) at
+ * `moment: 'post_close'` — §3.3: "one tap, fixed options, always
+ * skippable," so this is never called on skip, only on a real chip tap.
+ */
+export async function writeTradeCaptureAction(
+  tradeId: string,
+  _prevState: WriteTradeCaptureActionState | undefined,
+  formData: FormData,
+): Promise<WriteTradeCaptureActionState> {
+  const user = await requireSessionUser();
+  if (isErrorState(user)) return user;
+
+  try {
+    await enforceRateLimit('writeTradeCapture', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) return rateLimitedState();
+    throw err;
+  }
+
+  const parsedTradeId = uuidSchema.safeParse(tradeId);
+  const parsedValue = trimReasonValueSchema.safeParse(formData.get('reason'));
+  if (!parsedTradeId.success || !parsedValue.success) {
+    return { error: { code: 'TRADE_CAPTURE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.' } };
+  }
+
+  try {
+    // trade_captures's own RLS policy (`trade_captures_owner`) only
+    // constrains `trade_captures.user_id`, which we always supply as the
+    // caller's own session id — it has no way to also constrain whether
+    // `trade_id` belongs to that same user's own trade (no FK ties
+    // trade_captures.user_id to trades.user_id). This explicit ownership
+    // check is therefore the real security boundary here, same posture
+    // as `confirmDayAction`'s own `isAccountOwnedByUser` call above.
+    const result = await withUserConnection(user.id, async (client) => {
+      const ownedRes = await client.query('select 1 from retrospeq.trades where id = $1 and user_id = $2', [
+        parsedTradeId.data,
+        user.id,
+      ]);
+      if ((ownedRes.rowCount ?? 0) === 0) return null;
+      return writeTradeCapture(client, {
+        tradeId: parsedTradeId.data,
+        userId: user.id,
+        fieldId: TRIM_REASON_FIELD_ID,
+        value: parsedValue.data,
+        moment: 'post_close',
+      });
+    });
+
+    if (result === null) {
+      return { error: { code: 'TRADE_NOT_FOUND', user_message: "We couldn't find that trade." } };
+    }
+    if (!result.applied) {
+      // Structurally should not happen for trim_reason (always written at
+      // moment 'post_close', never 'pre_entry') — handled anyway per this
+      // repo's "should be structurally impossible, still handled" posture.
+      return { error: { code: 'TRADE_CAPTURE_LOCKED', user_message: 'This value can no longer be changed.' } };
+    }
+
+    revalidatePath('/trades');
+    revalidatePath('/trades/close-out');
+    return { success: true, value: parsedValue.data };
+  } catch (err) {
+    return internalErrorState('WRITE_TRADE_CAPTURE', err);
   }
 }

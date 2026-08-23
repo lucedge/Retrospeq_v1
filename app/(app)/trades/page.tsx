@@ -1,28 +1,45 @@
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import {
   listOpenTrades,
   listClosedUnconfirmedTrades,
   listConfirmedTrades,
   listTradeMembers,
+  listJoinableTradeGroups,
   type TradeRow,
   type TradeMemberRow,
 } from '@/lib/ingestion/trades-repository';
 import { formatAge, formatClockTime, formatDirection, formatFillCount, formatRMultiple, formatRiskPct } from './format';
 import { NotADecisionToggle } from './NotADecisionToggle';
 import { GroupingChip } from './GroupingChip';
+import { SplitControl } from './SplitControl';
+import { JoinControl } from './JoinControl';
+import { AutoExpandFillsOnHash } from './AutoExpandFillsOnHash';
 
 /**
- * Module 02 §5.1/§5.2 — the trade list screen (Slice 7a, 2026-08-22, the
- * FIRST rendered surface in Module 02). Reads directly via
- * `lib/ingestion/trades-repository.ts` (direct-`pg`, ADR 0006 — `.from()`
- * can't reach the `retrospeq` schema, same reason `accounts/page.tsx`
- * already reads this way), never a client-side fetch.
+ * Module 02 §5.1/§5.2 — the trade list screen (Slice 7a, 2026-08-22, then
+ * extended by Slice 7b, 2026-08-23, which added the split/join UI controls
+ * and closed the "Separate" deep-link deferral this file's own header used
+ * to flag). Reads directly via `lib/ingestion/trades-repository.ts`
+ * (direct-`pg`, ADR 0006 — `.from()` can't reach the `retrospeq` schema,
+ * same reason `accounts/page.tsx` already reads this way), never a
+ * client-side fetch.
  *
- * **Deliberately out of scope for this slice** (see the dispatch this
- * was built against, and `docs/PROGRESS.md`'s own note): the close-out
- * screen, the manual-entry form, and any split/join UI beyond the
- * ambient grouping chip's own honest-scoping decision
- * (`GroupingChip.tsx`'s header) — all Slice 7b/7c.
+ * **Slice 7b additions:** `TradeFillsSection` (shared between open and
+ * closed/confirmed trade cards) gives every trade's fills table a stable
+ * `id="trade-<id>"` anchor — the first time this repo has one — and a
+ * real "Split here" control (`SplitControl.tsx`) per eligible fill row.
+ * `<AutoExpandFillsOnHash />` makes that anchor actually open/scroll when
+ * targeted from `GroupingChip`'s "Separate" link or the close-out screen's
+ * "which trade is blocking" links. A "Same position, separate trades"
+ * section surfaces a real "Join with…" control (`JoinControl.tsx`) for
+ * every pair of unconfirmed trades sharing one `block_id`
+ * (`listJoinableTradeGroups`). Close-out (§5.1/§5.2's "close-out day list")
+ * and manual entry (§4.8) now have their own routes, linked from here.
+ *
+ * **Deliberately still out of scope**: a generic strategy-field editor
+ * (Module 03), a working "sync now" button (no real `BrokerAdapter` yet —
+ * standing infra gap), `arm_events`-creation UI (Module 03/08 territory).
  *
  * **No currency P&L anywhere on this screen**, per AGENTS.md's
  * non-negotiable — even though it isn't literally "the home screen,"
@@ -48,10 +65,11 @@ export default async function TradesPage() {
     );
   }
 
-  const [openTrades, closedTrades, confirmedTrades] = await Promise.all([
+  const [openTrades, closedTrades, confirmedTrades, joinableGroups] = await Promise.all([
     listOpenTrades(user.id),
     listClosedUnconfirmedTrades(user.id),
     listConfirmedTrades(user.id),
+    listJoinableTradeGroups(user.id),
   ]);
 
   const allTradeIds = [...openTrades, ...closedTrades, ...confirmedTrades].map((t) => t.id);
@@ -68,9 +86,21 @@ export default async function TradesPage() {
 
   return (
     <section className="flex flex-col gap-8" aria-labelledby="trades-h">
-      <h1 id="trades-h" className="rq-h1">
-        Trades
-      </h1>
+      <AutoExpandFillsOnHash />
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 id="trades-h" className="rq-h1">
+          Trades
+        </h1>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/trades/close-out" className="rq-btn rq-btn--ghost">
+            Close out a day
+          </Link>
+          <Link href="/trades/manual-entry" className="rq-btn rq-btn--ghost">
+            Log a manual trade
+          </Link>
+        </div>
+      </div>
 
       {/* AGENTS.md's own non-negotiable: "'Not enough data yet' is a
           correct, intended state — not an error, not a bug." A brand-new
@@ -83,12 +113,41 @@ export default async function TradesPage() {
         </p>
       )}
 
+      {joinableGroups.length > 0 && (
+        <div className="flex flex-col gap-4">
+          <h2 className="rq-h2">Same position, separate trades</h2>
+          <p className="rq-sub">
+            These trades share one continuous position and are both still unconfirmed. If they
+            should be one trade, join them.
+          </p>
+          <ul className="flex flex-col gap-3">
+            {joinableGroups.flatMap((group) =>
+              group.trades.slice(1).map((trade, i) => {
+                const previous = group.trades[i];
+                const label = `${trade.instrument} at ${formatClockTime(trade.openedAt)}`;
+                return (
+                  <li key={`${previous.id}-${trade.id}`} className="rq-card flex items-center justify-between gap-3">
+                    <span className="rq-body">{label}</span>
+                    <JoinControl tradeIdA={previous.id} tradeIdB={trade.id} label={label} />
+                  </li>
+                );
+              }),
+            )}
+          </ul>
+        </div>
+      )}
+
       {openTrades.length > 0 && (
         <div className="flex flex-col gap-4">
           <h2 className="rq-h2">Open positions</h2>
           <ul className="flex flex-col gap-4">
             {openTrades.map((trade) => (
-              <OpenPositionCard key={trade.id} trade={trade} now={now} />
+              <OpenPositionCard
+                key={trade.id}
+                trade={trade}
+                members={membersByTrade.get(trade.id) ?? []}
+                now={now}
+              />
             ))}
           </ul>
         </div>
@@ -138,8 +197,23 @@ export default async function TradesPage() {
  * **`pos.live_r` (the reference markup's "Now" field) is also
  * deliberately omitted** for the identical reason — it is a Module 05
  * analytic, and Module 05 doesn't exist yet.
+ *
+ * **Slice 7b: a fills section (with a real "Split here" control) is
+ * rendered here too, but ONLY when the trade is ambiguous** — §5.2's own
+ * reference markup for the open-position card has no fills table, and
+ * this stays true for the ordinary case; it's added specifically so
+ * `GroupingChip`'s "Separate" link has a real, same-card destination to
+ * open (see that component's own header for the reasoning).
  */
-function OpenPositionCard({ trade, now }: { trade: TradeRow; now: Date }) {
+function OpenPositionCard({
+  trade,
+  members,
+  now,
+}: {
+  trade: TradeRow;
+  members: TradeMemberRow[];
+  now: Date;
+}) {
   return (
     <li>
       <article className="rq-card flex flex-col gap-3" data-trade-id={trade.id} data-status="open">
@@ -161,82 +235,127 @@ function OpenPositionCard({ trade, now }: { trade: TradeRow; now: Date }) {
 
         {/* §4.3's confidence bands: only the ambiguous band ever asks.
             confident_single/confident_split are never surfaced here. */}
-        {trade.grouping_confidence === 'ambiguous' && <GroupingChip instrument={trade.instrument} />}
+        {trade.grouping_confidence === 'ambiguous' && (
+          <>
+            <GroupingChip tradeId={trade.id} instrument={trade.instrument} />
+            <TradeFillsSection trade={trade} members={members} />
+          </>
+        )}
       </article>
     </li>
   );
 }
 
 /**
- * Module 02 §5.2's `<article class="trade">` reference markup — closed
- * (unconfirmed) and confirmed trades share this component, since both
- * need the same fields (instrument, direction, R-multiple, time, fill
- * count, expandable fills, the `not_a_decision` toggle). Expand uses a
- * native `<details>`/`<summary>` — no client JS needed for this
- * disclosure, matching "nothing on a fast-capture screen takes a
- * keyboard" in spirit (this isn't a capture screen, but the same bias
- * toward the simplest working control applies).
+ * Module 02 §5.2's `<article class="trade">` reference markup's fills
+ * table, factored out (Slice 7b) so `OpenPositionCard` and `TradeRowCard`
+ * share one implementation rather than two copies that could drift —
+ * both need the same table, the same `id="trade-<id>"` anchor
+ * (`AutoExpandFillsOnHash.tsx` targets this exact id), and the same
+ * "Split here" eligibility rule.
+ *
+ * **Split eligibility, matching `splitTrade`'s own refusal rules exactly
+ * (`lib/ingestion/split-join.ts`):** offered for every member except
+ * index 0 (the trade's chronologically-first member —
+ * `SplitBoundaryIsFirstMemberError`) and any ADR-0001 synthetic
+ * flip-opening entry (`SplitBoundaryIsSyntheticEntryError` — always
+ * index 0 in practice per that file's own proof, checked here
+ * independently anyway rather than assumed). Never offered at all once
+ * the trade is confirmed (§4.7: "before freeze only") — the column
+ * itself is omitted rather than rendered with every button disabled, so
+ * a confirmed trade's fills table reads as a plain historical record,
+ * not a form with nothing to submit.
+ */
+function TradeFillsSection({ trade, members }: { trade: TradeRow; members: TradeMemberRow[] }) {
+  const canSplit = trade.confirmed_at === null;
+  return (
+    <details id={`trade-${trade.id}`}>
+      <summary className="flex cursor-pointer flex-wrap items-center gap-3">
+        <span className="rq-row__name">{trade.instrument}</span>
+        <span className="rq-sub">{formatDirection(trade.direction)}</span>
+        <span
+          className="rq-num"
+          title={trade.r_multiple === null ? 'Not applicable — the stop was never known.' : undefined}
+        >
+          {formatRMultiple(trade.r_multiple)}
+        </span>
+        <time className="rq-sub" dateTime={trade.opened_at}>
+          {formatClockTime(trade.opened_at)}
+        </time>
+        <span className="rq-sub">{formatFillCount(members.length)}</span>
+        {/* Informational only — never an actionable control here. A
+            trader resolves this via close-out, the "Same position,
+            separate trades" join list above, or a real split boundary
+            picked from the table below. */}
+        {trade.grouping_confidence === 'ambiguous' && (
+          <span className="rq-tag rq-tag--muted">Ambiguous grouping</span>
+        )}
+      </summary>
+
+      <div className="mt-3 rq-scroll-x">
+        <table className="w-full text-left">
+          <caption className="sr-only">Fills making up this trade</caption>
+          <thead>
+            <tr>
+              <th scope="col" className="rq-label">
+                Time
+              </th>
+              <th scope="col" className="rq-label">
+                Role
+              </th>
+              <th scope="col" className="rq-label">
+                Volume
+              </th>
+              <th scope="col" className="rq-label">
+                Price
+              </th>
+              {canSplit && (
+                <th scope="col" className="rq-label">
+                  <span className="sr-only">Split</span>
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {members.map((member, index) => {
+              const offerSplit = canSplit && index > 0 && !member.syntheticEntryEvent;
+              return (
+                <tr key={member.fillId} className="rq-row">
+                  <td>
+                    <time dateTime={member.filledAt}>{formatClockTime(member.filledAt)}</time>
+                  </td>
+                  <td className="capitalize">{member.role}</td>
+                  <td className="rq-num">{member.volume}</td>
+                  <td className="rq-num">{member.price}</td>
+                  {canSplit && (
+                    <td className="text-right">
+                      {offerSplit && <SplitControl tradeId={trade.id} fillId={member.fillId} />}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Closed (unconfirmed) and confirmed trades share this component, since
+ * both need the same fields (instrument, direction, R-multiple, time,
+ * fill count, expandable fills, the `not_a_decision` toggle). Expand uses
+ * a native `<details>`/`<summary>` (via `TradeFillsSection`) — no client
+ * JS needed for the disclosure itself, matching "nothing on a
+ * fast-capture screen takes a keyboard" in spirit (this isn't a capture
+ * screen, but the same bias toward the simplest working control applies).
  */
 function TradeRowCard({ trade, members }: { trade: TradeRow; members: TradeMemberRow[] }) {
   return (
     <li>
       <article className="rq-card flex flex-col gap-3" data-trade-id={trade.id} data-outcome={trade.outcome ?? undefined}>
-        <details>
-          <summary className="flex cursor-pointer flex-wrap items-center gap-3">
-            <span className="rq-row__name">{trade.instrument}</span>
-            <span className="rq-sub">{formatDirection(trade.direction)}</span>
-            <span className="rq-num" title={trade.r_multiple === null ? 'Not applicable — the stop was never known.' : undefined}>
-              {formatRMultiple(trade.r_multiple)}
-            </span>
-            <time className="rq-sub" dateTime={trade.opened_at}>
-              {formatClockTime(trade.opened_at)}
-            </time>
-            <span className="rq-sub">{formatFillCount(members.length)}</span>
-            {/* Informational only — never an actionable control here.
-                A trader resolves this via close-out (Module 06) or a
-                future split/join control (Slice 7c); confirmDay itself
-                already refuses to confirm any day containing one
-                (Module 02 §4.6). */}
-            {trade.grouping_confidence === 'ambiguous' && (
-              <span className="rq-tag rq-tag--muted">Ambiguous grouping</span>
-            )}
-          </summary>
-
-          <div className="mt-3 rq-scroll-x">
-            <table className="w-full text-left">
-              <caption className="sr-only">Fills making up this trade</caption>
-              <thead>
-                <tr>
-                  <th scope="col" className="rq-label">
-                    Time
-                  </th>
-                  <th scope="col" className="rq-label">
-                    Role
-                  </th>
-                  <th scope="col" className="rq-label">
-                    Volume
-                  </th>
-                  <th scope="col" className="rq-label">
-                    Price
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((member) => (
-                  <tr key={member.fillId} className="rq-row">
-                    <td>
-                      <time dateTime={member.filledAt}>{formatClockTime(member.filledAt)}</time>
-                    </td>
-                    <td className="capitalize">{member.role}</td>
-                    <td className="rq-num">{member.volume}</td>
-                    <td className="rq-num">{member.price}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-
+        <TradeFillsSection trade={trade} members={members} />
         <NotADecisionToggle tradeId={trade.id} initialValue={trade.not_a_decision} />
       </article>
     </li>

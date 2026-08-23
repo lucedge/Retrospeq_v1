@@ -21,7 +21,7 @@ authority.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
-| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **In progress.** Module 01 is fully done. Module 02 Slices 1-6b (the entire backend, §4.1-§4.8) and Slice 7a (Server Actions + trade list screen, §5.1/§5.2 — Module 02's first rendered UI surface) are all done — coded, tested, security-reviewed, QA-reviewed. Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap, plus Slice 7a's ownership-check confirmation). Remaining: Slice 7b (close-out screen, manual entry form, split/join UI controls), then the Phase 1 boundary process |
+| 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **Module 01 and Module 02 are both fully done.** Module 02 Slices 1-6b (backend, §4.1-§4.8), 7a (Server Actions + trade list), and 7b (close-out screen, manual entry form, split/join UI controls, plus a design-ethics fix building a third real corrections operation, `resolveAmbiguousGroupingAsSingle`) are all coded, tested, security-reviewed, QA-reviewed. Every backend security review this module required found and closed at least one real issue before passing (concurrency races in `confirm.ts` and `split-join.ts`, a DB-level lock-enforcement gap in `trade_captures`, a freeze-trigger transition-window gap) — the gate did its job every time. Remaining before Phase 1 is marked complete in this table: the Phase 1 boundary process (AGENTS.md step 5 — `/code-review`/`simplify`, then `retrospeq-docs`) |
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | Not started |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
@@ -2995,26 +2995,470 @@ security-reviewer flag is warranted.**
 - **Module 02 Slice 7a is now genuinely done.** Full suite: **924
   passing**, 12 skipped, 0 failed. `npm run build`, `npx tsc --noEmit`,
   `npm run lint` all clean.
+- **Module 02 Slice 7b built (2026-08-23) — coded and self-checked by
+  retrospeq-coder, not yet reviewed by tester/qa/security-reviewer.**
+  Resumed from an earlier dispatch that was interrupted after building
+  only backend groundwork (`lib/ingestion/trade-captures.ts`'s
+  `TRIM_REASON_FIELD_ID`/`TRIM_REASONS`, `lib/rate-limit/config.ts`'s
+  `writeTradeCapture` scope, `trades-repository.ts`'s
+  `listTradesForAccountDay`/`listTradeCaptures`,
+  `app/(app)/trades/actions.ts`'s `writeTradeCaptureAction` and the
+  widened `ConfirmDayActionState` error shape) — that groundwork was
+  reviewed on its own merits and built on, not redone. This dispatch
+  added the close-out screen (`app/(app)/trades/close-out/{page,
+  ConfirmDayForm,TrimReasonChips}.tsx`), the manual-entry form
+  (`app/(app)/trades/manual-entry/{page,ManualEntryForm}.tsx`), and
+  real split/join UI controls (`app/(app)/trades/{SplitControl,
+  JoinControl,AutoExpandFillsOnHash}.tsx`, wired into `trades/page.tsx`'s
+  new shared `TradeFillsSection`), closing Slice 7a's own documented
+  deferral of `GroupingChip.tsx`'s "Separate" action. New repository
+  read: `trades-repository.ts`'s `listJoinableTradeGroups`. New unit
+  tests: `writeTradeCaptureAction` (7 cases — happy path, session
+  missing, rate limited, invalid input, not-owned, locked, internal-error
+  leak) in the existing `app/(app)/trades/__tests__/actions.test.ts`.
+  Full suite: **931 passing**, 12 skipped, 0 failed (up from 924 —
+  matches the 7 new tests, nothing else changed). `npm run build`,
+  `npm run lint` clean.
+  **One real build-time bug the mandatory "leave the build green" step
+  caught, not a code read:** `TrimReasonChips.tsx` (a Client Component)
+  imported `TRIM_REASONS`/`TrimReason` from `lib/ingestion/
+  trade-captures.ts`, which starts with `import 'server-only'` — Turbopack
+  correctly failed the build ("'server-only' cannot be imported from a
+  Client Component module"). Fixed by extracting those constants into a
+  new `lib/ingestion/trim-reason.ts` with no `server-only` import,
+  re-exported from `trade-captures.ts` for the existing server-side
+  import in `actions.ts`. Not an ADR-worthy deviation — a Next.js
+  server/client boundary fix, documented inline in both files.
+  **Screenshot self-check (`tmp/screenshot-closeout-manual-split-join.mjs`,
+  a real Supabase test-user + live dev server, not a mock) also caught a
+  real timing bug in the *test script itself*, not the product code**:
+  the first pass captured every post-submit screenshot mid-transition
+  (still showing "Closing out…"/"Logging…"/"Splitting…"/"Joining…")
+  because `waitForSelector('[role="alert"], [role="status"]')` matched
+  Next.js's own always-present dev-mode rendering-indicator badge
+  (`role="status"`) instead of waiting for the real result — fixed by
+  waiting on the pending-state text disappearing instead. Once fixed, all
+  six required scenarios rendered correctly and were verified as real,
+  not assumed: a coverage-gap refusal (honest no-retry-sync copy, no dead
+  button), an ambiguous-grouping refusal (a real `/trades#trade-<id>`
+  link), a clean close-out with a trim-reason pill tapped and visibly
+  selected before "Day done" confirms it ("1 trade confirmed... counts
+  toward your streak"), the manual-entry form's zero-manual-accounts
+  state and a real submission producing "Trade logged", a real split via
+  the UI (one ambiguous 2-fill open BTCUSD position became two
+  independent open positions, `risk_pct` honestly `—` post-recompute
+  since the seed fills carried no `stop_at_fill`, never a fabricated
+  value), and a real join via the UI (two 2-fill ETHUSD trades sharing a
+  `block_id` merged into one real 4-fill trade, the pre-join joinable-pair
+  entry correctly disappearing from "Same position, separate trades"
+  after). The join step also incidentally proved a genuine product
+  behaviour worth naming: performing a split creates a brand-new
+  joinable pair in the same render pass (the two new same-block trades
+  are, correctly, both immediately eligible to be joined again) — the
+  test script's first pass used an under-specific button locator that
+  hit this new pair instead of the intended one, fixed by naming the
+  target instrument in the locator; not a product bug, but a reminder
+  that "Same position, separate trades" can grow from an action taken
+  on the same page, not just from sync.
+  **Judgment calls made, none deviating from a stated 00-foundation
+  convention:** (1) `OpenPositionCard` now renders a fills section (with
+  a working split control) but ONLY when `grouping_confidence ===
+  'ambiguous'` — §5.2's own open-position reference markup has no fills
+  table, so this stays true for the ordinary case; it exists specifically
+  so `GroupingChip`'s "Separate" link has a same-card destination to open,
+  via a small client-side assist (`AutoExpandFillsOnHash.tsx`) since a
+  native `<details>` isn't reliably auto-opened by every browser just
+  because a URL fragment targets it. (2) The trim-reason chip row is
+  rendered once per trade at close-out, not per scale-out fill in
+  real time — no real-time fill-notification surface exists yet (already
+  flagged in the interrupted prior session's own `trade-captures.ts`
+  header, restated here). (3) "Skip" is a transient, client-only
+  dismissal (never persisted), matching `GroupingChip`'s existing
+  "Later" precedent — reappears on reload, which is the honest reading
+  of "always skippable," not "skip is remembered forever." (4) The
+  join list offers consecutive pairs, not an N-way join, when a block
+  hosts more than two eligible trades, matching `joinTrades`'s own
+  two-argument signature. (5) Close-out's hidden `kind` field defaults
+  to `'traded'` when the day has any trades, else `'deliberate_no_trade'`
+  automatically — completes the confirm flow honestly for a genuinely
+  empty day without inventing streak/no-trade-day UI (Module 07/08
+  territory, explicitly out of scope). **Security-review recommendation
+  (coder's own, not final):** the one new server-side write this slice
+  adds beyond Slice 7a (`writeTradeCaptureAction`) was already built and
+  reasoned through in the interrupted prior session, including its
+  explicit `trade_captures` ownership check — this dispatch reused that
+  reasoning rather than re-deriving it, and every other write this slice
+  triggers from the UI (`splitTradeAction`/`joinTradesAction`/
+  `confirmDayAction`/`createManualTradeAction`) is Slice 7a's own
+  already-reviewed code, called with no new privilege path. Recommend a
+  fresh security pass focus narrowly on `writeTradeCaptureAction` (not
+  yet independently reviewed) and on the new client components
+  (`SplitControl`/`JoinControl`/`TrimReasonChips`) purely for "does the
+  client only ever call the already-reviewed Server Action, never a new
+  privileged path" — expect this to be fast, not a full Module 02
+  re-review.
+  **Not marked done — that's tester/qa's call next, then security-reviewer
+  if their pass agrees a narrow one is warranted.**
 
-**Next slice: Module 02 Slice 7b — the close-out screen, manual entry
-form, and split/join UI controls** (the remaining §5.1 elements: "trim
-reason chip row, close-out day list, grouping resolution control,
-manual entry form"). This deep-links the grouping chip's currently-disabled
-"Separate" action to a real manual-split control (Slice 7a's
-`GroupingChip.tsx` documents this as its own deferred follow-up).
-**After Slice 7b, run the Phase 1 boundary process** (AGENTS.md step 5 —
+- **retrospeq-tester independent pass on Slice 7b (2026-08-23) — a real
+  re-test, not a re-read of the coder's own self-check.** Findings:
+  1. **`writeTradeCaptureAction`'s explicit ownership check is real and
+     correctly placed.** Read `app/(app)/trades/actions.ts` in full: the
+     `select 1 from retrospeq.trades where id = $1 and user_id = $2` query
+     runs inside the same `withUserConnection` block, before
+     `writeTradeCapture` is ever called, and its result gates whether that
+     call happens at all. Independently confirmed `trade_captures_owner`'s
+     RLS policy (`20260822010000_ingestion_schema.sql`) really is
+     `user_id = auth.uid()` only — no clause ties `trade_id` back to its
+     owning trade — so this check is not defence-in-depth on top of an
+     already-sufficient RLS policy, it is the actual security boundary for
+     this write path, exactly as the coder's comment claims. Agree with
+     the coder's own narrow-pass recommendation: this one write path is
+     sound; nothing else in the file introduces a new privileged path.
+  2. **Close-out's three refusal codes render honestly, with real detail,
+     and `COVERAGE_GAP` has no working retry-sync control.** Verified by
+     reading `ConfirmDayForm.tsx` and independently via a real browser
+     (screenshots below) — `COVERAGE_GAP` shows the actual gap count in
+     the message text (not a generic "something's wrong"), plus an
+     explicit "Sync isn't automated yet" note; no `<button>` or `<a>`
+     matching /retry/i exists anywhere on the page (asserted in a new E2E
+     test, not just eyeballed). `AMBIGUOUS_GROUPING` and
+     `UNRESOLVED_BLOCK_ANOMALY` both render real `/trades#trade-<id>` deep
+     links per blocking trade.
+  3. **Split/join controls correctly mirror the backend's own eligibility
+     rules — verified at the query level, not assumed.** `SplitControl`
+     is only offered for `index > 0 && !member.syntheticEntryEvent`; cross-
+     checked `listTradeMembers`'s `order by trade_id, filled_at, fill_id`
+     against `split-join.ts`'s own `loadTradeMemberRows`'s identical
+     `order by filled_at, fill_id` — the two orderings agree, so "index 0"
+     means the same fill in both places. `listJoinableTradeGroups`'s
+     `where user_id = $1 and confirmed_at is null`, grouped by `block_id`,
+     size > 1, matches `joinTrades`'s own `loadAndValidateJoin` precondition
+     exactly (same block, both unconfirmed, no adjacency requirement either
+     side imposes).
+  4. **Real gap found and closed: three new `trades-repository.ts`
+     functions shipped with zero test coverage.** Full-suite coverage
+     before this pass showed `trades-repository.ts` at only 55.2% lines
+     (95-193 uncovered) — exactly `listTradesForAccountDay`,
+     `listTradeCaptures`, and `listJoinableTradeGroups`, all three
+     backing client-reachable screens (close-out, the trade list's join
+     section). Added 6 new live-DB tests to
+     `lib/ingestion/__tests__/trades-repository.live.test.ts` (scoping
+     correctness + RLS cross-user isolation for all three) — file now at
+     100% lines. One near-miss caught before landing: an early draft of
+     the "excludes a confirmed trade" test used
+     `update ... where id != $1` to confirm one trade, which would have
+     mutated every OTHER trade in the shared live-DB test project
+     (parallel suites) — narrowed to `where id = $1` before running.
+  5. **Independent screenshot self-check, real browser, real dev server,
+     real Supabase Auth — not a re-trust of the coder's own screenshots.**
+     New permanent suite `e2e/trades-slice7b.spec.ts` (7 tests, all
+     passing in isolation) covers: `COVERAGE_GAP` refusal, `AMBIGUOUS_
+     GROUPING` refusal + deep-link-and-auto-expand, a successful close-out
+     with a trim-reason chip tapped first, manual-entry's zero-accounts
+     state, a real manual-entry submission, a real split via the UI (DB-
+     verified: 1 trade becomes 2), and a real join via the UI (DB-verified:
+     2 trades become 1). Also updated `e2e/trades.spec.ts`'s grouping-chip
+     test, which had gone stale: it asserted "Separate" was disabled
+     (Slice 7a's own deferral), but Slice 7b deliberately closed that
+     deferral, making "Separate" a real link — a passing-but-wrong
+     assertion is worse than a failing one, so this was fixed, not left.
+     Screenshots reviewed directly (`Read` on each PNG, not just asserted
+     on): no red/green anywhere (the accent colour used throughout —
+     pills, primary buttons, the grouping-chip's warm well — is the brand
+     amber, never a semantic success/danger pair); every numeric value
+     (`+1.5R`, `1.0%`, prices) rendered in `.rq-num`; exactly one primary
+     `.rq-btn` per screen (close-out's "Day done", manual-entry's "Log
+     trade" — "Skip"/pills/ghost buttons correctly excluded); the trim-
+     reason chip row and grouping chip both use plain outline/pill styling
+     with no colour-coded states. The split screenshot incidentally proved
+     a genuine, correct product behaviour: performing a split immediately
+     creates a new joinable pair in the same block (both post-split trades
+     show up under "Same position, separate trades" right after), matching
+     the coder's own self-check finding.
+  6. **`server-only` poisoning fix verified independently**: a clean
+     `npm run build` (Turbopack) succeeds; `lib/ingestion/trade-captures.ts`
+     re-exports `TRIM_REASON_FIELD_ID`/`TRIM_REASONS`/`TrimReason` from the
+     new `lib/ingestion/trim-reason.ts` with no circular import (`trim-
+     reason.ts` has no imports from `trade-captures.ts`) and no duplicate
+     runtime definition (single source, re-exported, not copy-pasted).
+  **Rate-limiting was legitimately triggered by this pass's own repeated
+  E2E runs against the real signin scope (`ip:::1`, 20/900s), not a bug**
+  — confirmed by inspecting `retrospeq.rate_limit_hits` directly; cleared
+  the test-only buckets between runs (a test-environment reset, not a
+  product change) rather than weakening the limit.
+  **Full suite after this pass: 937 passing (up from 931 — 6 new live-DB
+  repository tests), 12 skipped, 0 failed. Coverage: 98.5% lines / 93.75%
+  branches / 98.75% functions overall** — every ingestion-engine file
+  (`grouping.ts` 98.61%, `confirm.ts` 100%, `blocks.ts` 100%, `split-
+  join.ts` 91.23%, `arm-matching.ts` 100%) clears the 90%-line bar,
+  `trades-repository.ts` now clears it too (100%, was 55.2%). `npm run
+  build`, `npm run lint` (0 errors, 17 pre-existing warnings unrelated to
+  this slice), `npx tsc --noEmit` all clean, run independently, not
+  trusted from the coder's own report. **Not run/verified by this pass:
+  golden-fixture replay** — this slice touches no grouping-engine code
+  (UI + read-only repository queries only), so 00-foundation §9.3's replay
+  requirement doesn't apply here; flagging explicitly rather than silently
+  omitting.
+  **Verdict: agree with the coder's own security-review recommendation —
+  a narrow pass on `writeTradeCaptureAction` specifically is warranted and
+  sufficient, not a full Module 02 re-review.** Every other write this
+  slice's UI triggers (`splitTradeAction`/`joinTradesAction`/
+  `confirmDayAction`/`createManualTradeAction`) is Slice 7a's own
+  already-reviewed code, called with no new privilege path — independently
+  re-confirmed here, not just re-stated. **Slice 7b is now tester-passed.
+  Next: retrospeq-qa (non-negotiables + design-system check) and
+  retrospeq-security-reviewer's narrow pass on `writeTradeCaptureAction`.**
+- **retrospeq-qa design-ethics finding on Slice 7b, fixed same session
+  (2026-08-23):** `GroupingChip.tsx`'s ambient grouping question is a
+  `.rq-btn--equal` pair (AGENTS.md: "no primary/secondary distinction ...
+  the relaxation prompt must not imply a recommendation"). Slice 7b wired
+  "Separate" to a real deep link but left "Same trade" permanently
+  `disabled` (Slice 7a's own honest-scoping note — no backing write
+  existed), breaking the pair's required symmetry once "Separate" became
+  real: one option worked, the other looked permanently unavailable.
+  **Fix: built the missing write for real rather than reverting
+  "Separate" to disabled.** New backend function
+  `resolveAmbiguousGroupingAsSingle(userId, tradeId)`
+  (`lib/ingestion/split-join.ts`) resolves an `ambiguous` trade's grouping
+  VERDICT to `confident_single` with **no membership change at all** — no
+  `trade_fills`/`trade_events` writes, no new trade row, no delete — the
+  simplest of the three corrections operations in that file. Backed by a
+  new migration
+  (`supabase/migrations/20260823010000_trades_grouping_source_confirmed_single.sql`)
+  widening `trades_grouping_source_check` to allow a new
+  `'user_confirmed_single'` value (deliberately distinct from
+  `'user_split'`/`'user_join'`, which both restructure membership — this
+  one never does), applied to and verified against the live shared dev
+  Supabase project (`information_schema`/`pg_get_constraintdef` plus a
+  direct bogus-value-still-rejected probe). Follows every established
+  convention from `splitTrade`/`joinTrades` exactly: named errors
+  (`ResolveAmbiguousGroupingNotFoundError`/`AlreadyConfirmedError`/
+  `NotAmbiguousError`), the `withUserConnection` -> `withServiceRoleConnection`
+  two-phase shape, and — the specific bug class
+  retrospeq-security-reviewer already found and fixed twice this session
+  in `splitTrade`/`joinTrades` — the atomic `and confirmed_at is null`
+  concurrency guard applied to the write from the start, not bolted on
+  after a race was found. New Server Action
+  `resolveAmbiguousGroupingAction` (`app/(app)/trades/actions.ts`) and rate
+  limit scope `resolveAmbiguousGrouping`
+  (`lib/rate-limit/config.ts`, same moderate budget as `splitTrade`/
+  `joinTrades`). `GroupingChip.tsx`'s "Same trade" button now calls it for
+  real — `disabled`/dimmed styling and the "Not available yet" copy both
+  removed; both buttons in the `.rq-btn--equal` pair are now genuinely
+  live, equal, real actions with no CSS or behavioural asymmetry. **Tests:**
+  5 new live-DB tests in `lib/ingestion/__tests__/split-join.live.test.ts`
+  (happy path — confirmed via direct Postgres query that membership is
+  untouched; refuses a confirmed trade; refuses a non-ambiguous trade; RLS
+  cross-user isolation; the concurrency guard, using the same
+  held-uncommitted-transaction-on-a-raw-connection technique
+  `splitTrade`'s own concurrency test established) — all passing. 8 new
+  unit tests in `app/(app)/trades/__tests__/actions.test.ts` (happy path,
+  session missing, rate limited, validation failure, all three named
+  error mappings, internal-error-never-leaks) — all passing. Full suite:
+  **950 passing** (up from 937), 12 skipped, 0 failed. `npm run build`,
+  `npx tsc --noEmit` clean; `npm run lint` 0 errors, 19 warnings (up from
+  17 — two new, both the same `_prevState`/`_formData`-unused-because-
+  this-action-takes-no-form-fields pattern already established at
+  `app/(auth)/actions.ts:152`, not a new category). **Screenshot
+  self-check** (`tmp/screenshot-grouping-chip-symmetry.mjs`, real dev
+  server, real Supabase Auth, real Postgres verification, not simulated):
+  before-state screenshot shows both "Same trade"/"Separate" visually
+  identical (same outline, weight, no dimming, no color distinction) on
+  two independent ambiguous open positions; clicking "Same trade" on one
+  produces a real DB row change (`grouping_confidence` ->
+  `confident_single`, `grouping_source` -> `'user_confirmed_single'`,
+  `ambiguity_resolved_at` set) confirmed by direct query, and that trade's
+  chip disappears while the untouched sibling trade's chip is unaffected;
+  "Separate" on the remaining trade still opens its real fills section
+  with a working "Split here" control, proving the other half of the pair
+  is equally real, not regressed by this fix. No red/green anywhere in
+  any screenshot. **Not run by this pass: retrospeq-qa/security-reviewer
+  re-verification of this specific fix — flagging explicitly, per this
+  file's own header ("not marked done — that's the qa/security-reviewer's
+  call"). Security-reviewer recommendation (not a unilateral decision): a
+  narrow pass on `resolveAmbiguousGroupingAsSingle` +
+  `resolveAmbiguousGroupingAction` is warranted for the same reason
+  `writeTradeCaptureAction` already got one — a new write to `trades`
+  interacting with the freeze trigger and `confirmed_at` semantics, the
+  exact pattern that has required review every other time it appeared in
+  this module. Can likely be folded into the same security-reviewer pass
+  already queued for `writeTradeCaptureAction` rather than a separate
+  dispatch, since both are narrow, both touch the same table/trigger.**
+
+- **retrospeq-tester independent re-verification of the `resolveAmbiguousGroupingAsSingle`
+  design-ethics fix (2026-08-23, separate pass from the coder's own
+  self-check above) — confirms the core claims, found and fixed one real
+  gap in the test suite, added one missing test:**
+  - **Zero-membership-writes claim: CONFIRMED by direct code reading.**
+    `resolveAmbiguousGroupingAsSingle` (`lib/ingestion/split-join.ts`)
+    contains exactly one write statement in its entire body — the guarded
+    `UPDATE retrospeq.trades SET grouping_confidence=..., grouping_signals=...,
+    grouping_source=..., ambiguity_resolved_at=...`. No `trade_fills`/
+    `trade_events` statement appears anywhere in the function or its shared
+    `loadAndValidateResolveAmbiguous` helper.
+  - **Atomic concurrency guard: CONFIRMED present and correctly placed** —
+    `where id = $1 and confirmed_at is null` is literally in the UPDATE's own
+    WHERE clause (not a separate check), `rowCount` is checked immediately
+    after, `ResolveAmbiguousGroupingAlreadyConfirmedError` thrown on a lost
+    race. Verified this is the REAL protection, not just present syntax, by
+    directly deleting the clause and re-running the concurrency test (see
+    below) — it then failed, hitting the DB-level
+    `forbid_frozen_trade_regrouping` trigger's raw, untranslated Postgres
+    error instead of the clean named error. Restored immediately after
+    confirming.
+  - **Real, non-trivial finding: the concurrency-guard test, as originally
+    written (100ms fixed `setTimeout` before releasing the raw connection's
+    held lock), was NOT actually exercising the atomic guard it claimed to
+    prove — for ANY of the three operations in this file (`splitTrade`,
+    `joinTrades`, `resolveAmbiguousGroupingAsSingle`), not just the new one.**
+    Coverage showed the guarded UPDATE's own `rowCount !== 1` throw branch had
+    ZERO hits across the entire test file, including its own dedicated
+    concurrency tests. Root cause: in this environment, the cumulative
+    round-trip latency of phase 1 + phase 2's own connect/BEGIN/SELECT chain
+    routinely exceeds 100ms on its own, so by the time the guarded UPDATE
+    is even sent, the racing connection has usually already committed — the
+    race gets caught by phase 2's own EARLIER upfront re-validation SELECT
+    (a read-then-act check, not the atomic guard) before the guarded UPDATE
+    is ever reached. Proven empirically: temporarily removed the atomic
+    `and confirmed_at is null` clause from all three guarded UPDATEs in turn
+    and reran each operation's own "concurrency guard" test — **all three
+    still passed**, meaning none of them were actually proving what their own
+    names/comments claimed. **Fixed for `resolveAmbiguousGroupingAsSingle`
+    only** (the function under direct review this pass): replaced the fixed
+    sleep with a new `waitForBlockedQuery()` helper
+    (`lib/ingestion/__tests__/split-join.live.test.ts`) that polls
+    `pg_stat_activity` for a backend whose query matches the guarded UPDATE's
+    own text and whose `wait_event_type = 'Lock'` — i.e. proof from Postgres
+    itself that the guarded UPDATE is genuinely on the lock queue — before
+    committing the race connection. Re-verified this new version: passes
+    against the real guarded code, and genuinely FAILS (non-tautological)
+    when the atomic clause is removed. **`splitTrade`'s and `joinTrades`'
+    own concurrency tests have the SAME weakness and were NOT touched by this
+    pass** (pre-existing, inherited pattern predating this session's fix, out
+    of this narrow review's scope to silently rewrite) — flagging for
+    whoever next touches those two tests or does a broader concurrency-test
+    audit; they currently prove "some check catches this race" rather than
+    "the atomic guard specifically catches this race."
+  - **`ResolveAmbiguousGroupingNotAmbiguousError` refusal: confirmed genuine,
+    one test gap closed.** The existing test only proved refusal against
+    `confident_single`; added a second test proving refusal against
+    `confident_split` too (the schema's third `grouping_confidence` value,
+    `trades_grouping_confidence_check`) — this function's `!== 'ambiguous'`
+    check is a refusal rule specific to it (`splitTrade`/`joinTrades` don't
+    look at `grouping_confidence` at all), so it deserved proof against both
+    non-ambiguous values, not just one.
+  - **Equal-pair symmetry: independently confirmed genuine, not just
+    re-read.** `GroupingChip.tsx`'s "Same trade" (`<button>`) and "Separate"
+    (`<a>`) both carry identical `className="rq-btn rq-btn--equal"` with no
+    conditional/dimmed styling in their default state; "Same trade"'s
+    `disabled={isPending}` is `false` by default and only true transiently
+    mid-submit, "Separate" (an anchor) has no `disabled` concept at all —
+    no default-state asymmetry. Read `tmp/dev-screenshots/grouping-chip-
+    symmetry-before.png`, `grouping-chip-same-trade-clicked.png`,
+    `grouping-chip-separate-still-works.png`, `trades-grouping-chip-
+    same-trade.png`, `trades-grouping-chip-separate.png` directly —
+    both buttons render with identical outline/weight/no color distinction
+    in the default state; the gray-fill hover/focus state observed in two of
+    the screenshots is applied symmetrically to whichever button is
+    interacted with (confirmed by comparing both screenshots side by side),
+    not a permanent asymmetry. No red/green anywhere. Post-click, the
+    resolved trade's chip disappears while the untouched sibling's chip and
+    "Ambiguous grouping" badge are unaffected, matching the coder's own
+    described optimistic-dismiss behavior.
+  - **Tests: 951 passing** (up from 950 — the coder's own 5 new live-DB
+    tests plus this pass's 1 new `confident_split` test, minus 0 net since
+    the concurrency test was rewritten in place, not added), 12 skipped, 0
+    failed. `npm run build`, `npx tsc --noEmit`, `npm run lint` (0 errors,
+    19 warnings, same pre-existing pattern) all re-run independently and
+    clean.
+  - **Security-review recommendation: independently agree a pass is
+    warranted, not deferring to the coder's own flag.** This is a new write
+    to `retrospeq.trades` that interacts directly with the freeze/
+    `confirmed_at` semantics and the `forbid_frozen_trade_regrouping`
+    trigger — the exact shape that required review (and, twice, found real
+    concurrency bugs) every other time it appeared in this session
+    (`confirm.ts`, `splitTrade`, `joinTrades`). The atomic guard here is
+    correctly shaped and the zero-membership-writes claim holds, but the
+    now-documented gap in how the guard was being *tested* (not the guard
+    itself) is exactly the kind of thing a second reviewer should
+    independently re-check rather than take on trust from one pass. Can
+    fold into the same already-queued pass on `writeTradeCaptureAction` per
+    the coder's own note, no separate dispatch needed.
+  - **Not verified this pass (infra/scope, not silently assumed passing):**
+    no golden-fixture replay was run for this change — correctly out of
+    scope, `resolveAmbiguousGroupingAsSingle` never touches the grouping
+    engine's fixture-covered surface (no `trade_fills`/`trade_events`
+    writes, no re-derivation of roles), consistent with 00-foundation §9.3
+    applying only to changes that touch the grouping engine itself. RLS on
+    `retrospeq.trades` was not re-audited from scratch (it's an existing
+    table with an existing, already-covered `trades_owner` policy — this
+    pass added a new WRITE code path against that table, not a new table or
+    a new policy, so 00-foundation §9.1's "100% of tables" bar doesn't gain
+    a new denominator here; RLS cross-user isolation for this specific
+    operation IS covered by its own dedicated live test, confirmed passing
+    above).
+
+- **retrospeq-security-reviewer: PASS, no findings, 2026-08-23.**
+  Narrow pass on `resolveAmbiguousGroupingAsSingle`/
+  `resolveAmbiguousGroupingAction` (the genuinely new write path from
+  the design-ethics fix). Independently confirmed: zero membership
+  writes (the function's only write is the one guarded `trades` UPDATE,
+  no `trade_fills`/`trade_events` touched); the atomic
+  `and confirmed_at is null` concurrency guard was present from this
+  function's FIRST version, not bolted on after a FAIL like its two
+  siblings (`splitTrade`/`joinTrades`) needed — the right way to build
+  it the first time; the new concurrency test's determinism is genuine
+  and specific to this function (`'user_confirmed_single'` is a literal
+  string unique to this function's guarded UPDATE, unlike `splitTrade`/
+  `joinTrades`' shared parameterized clause, so `waitForBlockedQuery`'s
+  pattern match can't ambiguously match anything else); the new
+  "refuses a non-ambiguous trade" rule is correct and distinct from the
+  "already confirmed" check; RLS/ownership genuinely enforced; the
+  migration's new `grouping_source` value is safe, distinct, and
+  well-documented; no injection surface, no raw error leakage, rate
+  limiting present and reasonable.
+- **retrospeq-qa: PASS, no findings, 2026-08-23 — Module 02 complete.**
+  Independently re-verified the equal-pair symmetry fix by reading
+  `GroupingChip.tsx` directly (both buttons share identical classes, no
+  `disabled` on either in default state, `.rq-btn--equal`'s CSS has a
+  single undifferentiated rule set) and confirmed both paths lead to a
+  real, working outcome. Formed an independent view on the orchestrator's
+  decision to revert `splitTrade`'s/`joinTrades`' own concurrency tests
+  to their original fixed-delay approach (after the deterministic
+  technique hit real connection-pool interference) — judged this an
+  acceptable, honestly-documented test-precision tradeoff, not a
+  blocker, since the underlying code fix in both functions is unchanged
+  from its own already-passed security review. Spot-checked every §5.1
+  UI element (open position card with grouping chip, trade list row
+  with expandable fills, trim reason chip row, close-out day list,
+  grouping resolution control, manual entry form) has a real, working
+  implementation, not just a claim. Re-swept the non-negotiables across
+  all of `app/(app)/trades/` (not just this fix's files): zero red/green
+  matches repo-wide, R-multiple the only headline number, `.rq-num` on
+  every numeric display, honest empty/N-A states throughout.
+- **Module 02 Slice 7b is now genuinely done — and this completes
+  Module 02's entire feature set: backend §4.1-§4.8 (Slices 1-6b) plus
+  UI §5.1/§5.2 (Slices 7a-7b).** Full suite: **951 passing**, 12
+  skipped, 0 failed. `npm run build`, `npx tsc --noEmit`, `npm run lint`
+  all clean.
+
+**Next: run the Phase 1 boundary process** (AGENTS.md step 5 —
 `/code-review` or `simplify`, then dispatch `retrospeq-docs` to refresh
 `docs/DEVELOPMENT.md`) before marking Phase 1 complete in the Phase
-status table, since Module 01 + Module 02 will both be fully done at
-that point. The BLOCK_EXTENSION_DEFERRED tracked gap from Slice 3/4 is
-closed at the confirm-transaction level (Slice 5) — a stuck-open/
-stale-facts trade can no longer be silently confirmed — but in-place
-block extension itself is still not built; a trade whose block gains a
-late fill after derivation can still sit unconfirmed indefinitely
-(manual split/join doesn't reach this specific case — see the runbook
-entry). Also still open: resolving `coverage_gaps` rows (nothing sets
-`resolved_at` anywhere in this repo yet) — flagged in the runbook, not
-silently dropped.
+status table, since Module 01 + Module 02 are both now fully done. The
+BLOCK_EXTENSION_DEFERRED tracked gap from Slice 3/4 is closed at the
+confirm-transaction level (Slice 5) — a stuck-open/stale-facts trade can
+no longer be silently confirmed — but in-place block extension itself is
+still not built; a trade whose block gains a late fill after derivation
+can still sit unconfirmed indefinitely (manual split/join doesn't reach
+this specific case — see the runbook entry). Also still open: resolving
+`coverage_gaps` rows (nothing sets `resolved_at` anywhere in this repo
+yet) — flagged in the runbook, not silently dropped. A known, tracked,
+non-blocking test-precision limitation remains in `splitTrade`'s/
+`joinTrades`' own concurrency-guard tests (see "KNOWN LIMITATION" in
+`lib/ingestion/__tests__/split-join.live.test.ts`) — a reasonable future
+pickup, not required before Phase 1 is marked complete.
 
 ## Needs-your-input signal
 
@@ -3035,13 +3479,80 @@ the owner — never fake it, always flag it."
 - [ ] No transactional email provider configured (00-foundation §10's "Email provider" row — a separate dependency from Supabase Auth's own, already-broken mailer). `lib/privacy/email-provider.ts` (Module 01 stories 5.x, 2026-08-21) throws `EmailProviderNotConfiguredError` unconditionally rather than faking a send. Not currently blocking anything real: `lib/privacy/erasure.ts`'s confirmation email is best-effort and never gates the actual deletion, so this is a standing gap, not a stalled task — see that file's own doc comment. Needs an owner-created account with a real provider (Resend/SendGrid/Postmark/etc) plus its API key wired into env vars.
 - [ ] Node version is 20.11.0; several deps warn they want >=22 (`@supabase/*@2.112.3`, `eslint-visitor-keys@5`). Still warn-only for those. **One hard incompatibility already hit and fixed**: vitest 4.x pulls in a rolldown-based Vite that requires `node:util`'s `styleText` (Node ≥20.12) — pinned `vitest`/`@vitest/coverage-v8` to `3.2.7` instead (classic esbuild-based Vite, no rolldown), see decision log. Revisit the pin when Node is upgraded past 20.11.
 - [x] ~~Module 01's erasure flow will break the moment any user has a broker-confirmed `trades` row, until fixed.~~ **Fixed 2026-08-22, Module 02 Slice 3** — `lib/broker/accounts-repository.ts`'s `deleteAllTradingAccountsForUser` now sets `retrospeq.erasure_in_progress` (transaction-local `set_config`) before deleting `trading_accounts`, so `forbid_broker_confirmed_trade_delete`'s escape hatch (docs/adr/0011) actually fires for real erasure executions. Verified two ways: (1) a new live-DB test (`lib/privacy/__tests__/erasure.live.test.ts`, "succeeds for a user with a real broker-confirmed trade") seeds a genuine broker-confirmed trade and proves `executeErasure` now succeeds; (2) the fix was temporarily reverted in a scratch, never-committed check and the same test was confirmed to fail with exactly the predicted trigger error first, then restored — not just assumed fixed. This was the concrete trigger for this slice needing the first real Module 02 trade-write path (`lib/ingestion/sync.ts`), exactly as this entry predicted.
-- [ ] **`C:` drive is at 0 bytes free on this machine, and Vitest's own OS-temp usage isn't covered by the existing npm-cache redirect.** The 2026-08-19 decision-log entry redirected npm's cache/tmp to `E:/npm-cache`/`E:/npm-tmp`, but `npx vitest run` (default `TEMP`/`TMP`) still fails outright with `ENOSPC` — found 2026-08-21 during an independent test pass on Module 02 Slice 2. Worked around per-invocation with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest" npx vitest run ...` (directory created and cleaned up after each run). Not fixed at the environment level — that would mean either freeing real space on `C:` (owner action, not an agent one) or setting `TEMP`/`TMP` machine-wide/in a shared config, which risks affecting unrelated projects on this machine (`E:\LuceEdge`, `Pesa Hi Pesa`) the same way the npm-cache redirect note already flagged. Any agent running `vitest` directly (not through a wrapper that already sets this) should apply the same override rather than concluding the suite doesn't run.
+- [ ] **`C:` drive is at 0 bytes free on this machine, and Vitest's own OS-temp usage isn't covered by the existing npm-cache redirect.** The 2026-08-19 decision-log entry redirected npm's cache/tmp to `E:/npm-cache`/`E:/npm-tmp`, but `npx vitest run` (default `TEMP`/`TMP`) still fails outright with `ENOSPC` — found 2026-08-21 during an independent test pass on Module 02 Slice 2. Worked around per-invocation with `TEMP="E:\tmp_vitest" TMP="E:\tmp_vitest" TMPDIR="E:/tmp_vitest" npx vitest run ...` (directory created and cleaned up after each run). Not fixed at the environment level — that would mean either freeing real space on `C:` (owner action, not an agent one) or setting `TEMP`/`TMP` machine-wide/in a shared config, which risks affecting unrelated projects on this machine (`E:\LuceEdge`, `Pesa Hi Pesa`) the same way the npm-cache redirect note already flagged. Any agent running `vitest` directly (not through a wrapper that already sets this) should apply the same override rather than concluding the suite doesn't run. **Same root cause hit `npx playwright install chromium` too (2026-08-23, GroupingChip symmetry screenshot self-check)**: Playwright wanted `chromium_headless_shell-1234` (not present) and downloading it to `C:\Users\hp\AppData\Local\ms-playwright` failed outright with `ENOSPC`. Worked around WITHOUT downloading anything: an older `chromium-1223` (full Chrome, not headless_shell) was already fully installed there from a prior session, so `chromium.launch({ executablePath: 'C:\\Users\\hp\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe' })` works with zero new disk writes. Any agent hitting the same `chromium_headless_shell` `ENOSPC` should check for an existing `chromium-*` (non-headless_shell) directory under `ms-playwright` before assuming screenshots are blocked.
 - [ ] **Repo-wide: several RLS INSERT/"for all" policies check `user_id = auth.uid()` but not that referenced foreign keys (`account_id`, `trade_id`, etc.) actually belong to that same user.** Found by retrospeq-security-reviewer (2026-08-22) reviewing Module 02's `fills`/`trade_events` INSERT policies and `trades`/`arm_events`/`trade_captures`'s "for all" policies — a client could theoretically INSERT a row self-assigning `user_id` correctly while pointing `account_id`/`trade_id` at a row it doesn't actually own. Confirmed this is not new to Module 02 — the same shape exists on Module 01's `trading_accounts_owner`/`account_credentials_owner_insert` policies too. Not fixed now (out of scope for the slice that found it, and no test currently proves it's exploitable end-to-end — the referenced row would need to belong to another real user, and the practical blast radius depends on what a client could actually DO with a cross-user-linked row it can't otherwise read, which for most of these tables is "nothing visible," since the owning row still isn't selectable by the attacker afterward). Worth a dedicated pass adding `and exists (select 1 from retrospeq.trading_accounts where id = account_id and user_id = auth.uid())`-shaped checks (or equivalent) across every affected policy, repo-wide, rather than patching table-by-table as each is touched.
 
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-23 — Module 02 Slice 7b design-ethics fix: added a third,
+  distinct `grouping_source` value, `'user_confirmed_single'` (migration
+  `20260823010000_trades_grouping_source_confirmed_single.sql`), backing a
+  new `resolveAmbiguousGroupingAsSingle` corrections operation
+  (`lib/ingestion/split-join.ts`). Not a literal §4.7 line item — §4.7
+  only names "Manual split"/"Manual join" — but a direct, small
+  consequence of AGENTS.md's `.rq-btn--equal` symmetry rule once
+  "Separate" became real: leaving "Same trade" permanently disabled
+  implied a recommendation between two options the design system requires
+  to be equal. Chose a NEW distinct value over reusing `'user_split'`/
+  `'user_join'` specifically because this operation, unlike those two,
+  never touches `trade_fills`/`trade_events` membership — conflating the
+  provenance would misrepresent what actually happened to any future
+  analytics/audit code reading `grouping_source`. Full reasoning inline in
+  `resolveAmbiguousGroupingAsSingle`'s own header comment and the
+  migration's own comment. Reconciles no spec disagreement (§4.7 doesn't
+  forbid a third corrections operation, it just doesn't anticipate this
+  one); reconciles a real design-system tension the spec's own reference
+  markup for `GroupingChip` (§5.2) didn't resolve on its own, since that
+  markup predates "Separate" having a real backing write.
+- 2026-08-23 — Module 02 Slice 7b (close-out screen, manual entry form,
+  split/join UI controls — §5.1's remaining elements). Full reasoning
+  inline in the new files' own headers (`app/(app)/trades/close-out/
+  {page,ConfirmDayForm,TrimReasonChips}.tsx`,
+  `app/(app)/trades/manual-entry/{page,ManualEntryForm}.tsx`,
+  `app/(app)/trades/{SplitControl,JoinControl,AutoExpandFillsOnHash}.tsx`,
+  `trades-repository.ts`'s `listJoinableTradeGroups`), summarized in
+  "Current task" above. Resumed from an interrupted prior dispatch's
+  backend groundwork rather than redoing it. Judgment calls worth
+  restating here: (1) `OpenPositionCard` now renders a fills section
+  (with a working split control) only when `grouping_confidence ===
+  'ambiguous'`, beyond §5.2's literal open-position markup, specifically
+  so `GroupingChip`'s "Separate" link has a same-card destination — closes
+  Slice 7a's own documented deferral; (2) the trim-reason chip row is
+  rendered once per trade at close-out, not per scale-out fill in real
+  time (no real-time fill-notification surface exists yet); (3) "Skip" is
+  a transient, client-only dismissal, matching `GroupingChip`'s existing
+  "Later" precedent, not a persisted "never ask again"; (4) the join list
+  offers consecutive pairs (not an N-way join) when a block hosts more
+  than two eligible trades, matching `joinTrades`'s own two-argument
+  signature; (5) close-out's hidden `kind` field defaults to `'traded'`
+  when the day has any trades, else `'deliberate_no_trade'` automatically,
+  completing the confirm flow honestly for a genuinely empty day without
+  inventing streak/no-trade-day UI (Module 07/08 territory). None of
+  these deviate from a stated 00-foundation convention, so no new ADR.
+  **One real build bug found and fixed via the mandatory `npm run build`
+  step** (not a code read): `TrimReasonChips.tsx`, a Client Component,
+  imported constants from `lib/ingestion/trade-captures.ts`, whose
+  `import 'server-only'` poisons any client bundle importing it, even for
+  a plain string constant — Turbopack correctly failed the build. Fixed
+  by extracting `TRIM_REASON_FIELD_ID`/`TRIM_REASONS`/`TrimReason` into a
+  new `lib/ingestion/trim-reason.ts` with no `server-only` import,
+  re-exported from `trade-captures.ts` for the existing server-side
+  import site. **One real test-script timing bug found via the mandatory
+  screenshot self-check** (not the product code): the first screenshot
+  pass captured every post-submit state mid-transition because
+  `waitForSelector('[role="status"]')` matched Next.js's own
+  always-present dev-mode rendering-indicator badge instead of the real
+  result — fixed by waiting for the pending-state button text to clear.
+  Once fixed, all six required scenarios (coverage-gap refusal,
+  ambiguous-grouping refusal with a real deep link, a clean close-out
+  with a trim-reason pill tapped, the manual-entry form's
+  zero-manual-accounts state and a real submission, a real split via the
+  UI, a real join via the UI) rendered correctly — screenshots under
+  `tmp/dev-screenshots/{closeout,manual-entry,split,join}-*.png`. Not
+  marked done — awaiting retrospeq-tester and retrospeq-qa, with a
+  narrow-scope security-reviewer recommendation (see "Current task").
 - 2026-08-22 — Module 02 Slice 7a (Server Actions + trade list screen,
   §5.1/§5.2). Full reasoning inline in `app/(app)/trades/actions.ts`'s and
   `app/(app)/trades/GroupingChip.tsx`'s own headers, summarized in

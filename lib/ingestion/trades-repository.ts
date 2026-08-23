@@ -80,6 +80,118 @@ export async function listConfirmedTrades(
   });
 }
 
+/**
+ * Module 02 Slice 7b — the close-out screen's day list (§5.1/§5.2, "Blocked
+ * while a coverage gap exists"). Unlike `listOpenTrades`/
+ * `listClosedUnconfirmedTrades`/`listConfirmedTrades`, this is scoped to
+ * ONE (account, server_day) pair across EVERY status — the close-out screen
+ * needs to show the trader everything on that day, including a trade an
+ * earlier partial confirm or auto-confirm already settled, honestly. This
+ * mirrors exactly the set `lib/ingestion/confirm.ts`'s `confirmDay` itself
+ * queries (`allTradesThisDay`) for its own assertions, so the screen and
+ * the transaction it submits to never disagree about which trades are "in"
+ * this day.
+ */
+export async function listTradesForAccountDay(
+  userId: string,
+  accountId: string,
+  serverDay: string,
+): Promise<TradeRow[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<TradeRow>(
+      `select ${TRADE_COLUMNS}
+         from retrospeq.trades
+        where user_id = $1 and account_id = $2 and server_day = $3
+        order by opened_at asc`,
+      [userId, accountId, serverDay],
+    );
+    return res.rows;
+  });
+}
+
+export interface TradeCaptureRow {
+  tradeId: string;
+  fieldId: string;
+  value: unknown;
+  moment: string;
+}
+
+/**
+ * Every `trade_captures` row for a batch of trades, in one round trip —
+ * the close-out screen derives BOTH facts it needs from this one query
+ * (never a fabricated "Add now" editor, per this slice's own scope
+ * boundary): whether a trade has ANY `moment = 'pre_entry'` row (the
+ * "Pre-entry captured" chip), and the current `trim_reason` value if one
+ * was already set (so re-visiting close-out shows what was already
+ * chosen, not a blank chip row every time). RLS-scoped via
+ * `withUserConnection` — `trade_captures_owner`'s real owner "for all"
+ * policy (`20260822010000_ingestion_schema.sql`) already covers this read.
+ */
+export async function listTradeCaptures(userId: string, tradeIds: string[]): Promise<TradeCaptureRow[]> {
+  if (tradeIds.length === 0) return [];
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ trade_id: string; field_id: string; value: unknown; moment: string }>(
+      `select trade_id, field_id, value, moment
+         from retrospeq.trade_captures
+        where trade_id = any($1::uuid[]) and user_id = $2`,
+      [tradeIds, userId],
+    );
+    return res.rows.map((r) => ({ tradeId: r.trade_id, fieldId: r.field_id, value: r.value, moment: r.moment }));
+  });
+}
+
+export interface JoinableTradeGroupMember {
+  id: string;
+  instrument: string;
+  openedAt: string;
+}
+
+export interface JoinableTradeGroup {
+  blockId: string;
+  /** Chronological (`opened_at` ascending) — every entry shares one
+   *  `block_id` and is unconfirmed. §4.7's "manual join... same block" is
+   *  a two-trade operation (`joinTrades(userId, tradeIdA, tradeIdB)`), so a
+   *  block hosting more than two candidate trades is offered to the UI as
+   *  consecutive pairs, not a single N-way join — see
+   *  `app/(app)/trades/page.tsx`'s own rendering of this list. */
+  trades: JoinableTradeGroupMember[];
+}
+
+/**
+ * Module 02 Slice 7b — the trade list's "Join with [instrument] at [time]"
+ * control (§4.7: "Manual join | Before freeze only, same block | Merges,
+ * recomputes"). Mirrors `joinTrades`'s own eligibility precondition
+ * exactly (`confirmed_at is null`, `split-join.ts`'s `loadAndValidateJoin`)
+ * so this list never offers a pairing the backend would reject on freeze
+ * grounds — grouped by `block_id` in JS rather than SQL (`array_agg`)
+ * since the set size per user is small and this keeps the query itself
+ * trivial to audit against RLS, same posture as `page.tsx`'s own
+ * `membersByTrade` grouping.
+ */
+export async function listJoinableTradeGroups(userId: string): Promise<JoinableTradeGroup[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ block_id: string; id: string; instrument: string; opened_at: string }>(
+      `select block_id, id, instrument, opened_at
+         from retrospeq.trades
+        where user_id = $1 and confirmed_at is null
+        order by block_id, opened_at asc`,
+      [userId],
+    );
+    const byBlock = new Map<string, JoinableTradeGroupMember[]>();
+    for (const row of res.rows) {
+      const entry = { id: row.id, instrument: row.instrument, openedAt: row.opened_at };
+      const list = byBlock.get(row.block_id);
+      if (list) list.push(entry);
+      else byBlock.set(row.block_id, [entry]);
+    }
+    const groups: JoinableTradeGroup[] = [];
+    for (const [blockId, trades] of byBlock) {
+      if (trades.length > 1) groups.push({ blockId, trades });
+    }
+    return groups;
+  });
+}
+
 export interface TradeMemberRow {
   tradeId: string;
   fillId: string;

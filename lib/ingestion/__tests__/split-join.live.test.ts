@@ -33,6 +33,71 @@ vi.mock('server-only', () => ({}));
  */
 const env = readRlsTestEnv();
 
+/**
+ * Independent-review addition (retrospeq-tester, 2026-08-23) -- polls
+ * `pg_stat_activity` for a backend whose query text matches `queryPattern`
+ * and whose `wait_event_type = 'Lock'`, i.e. a query that is GENUINELY
+ * blocked waiting to acquire a row lock, not merely "probably blocked by
+ * now" per a fixed `setTimeout`. Exists because the sibling `splitTrade`/
+ * `joinTrades`/`resolveAmbiguousGroupingAsSingle` concurrency-guard tests'
+ * original fixed 100ms sleep was found, on independent review, to NOT
+ * reliably force the intended interleaving in this environment: measured by
+ * running each guarded UPDATE's own `rowCount !== 1` branch through
+ * coverage, that branch was NEVER hit by any test in this file -- the race
+ * was instead always being caught by phase 2's own EARLIER upfront
+ * `loadAndValidate*` re-check (a read-then-act SELECT, not the atomic
+ * `and confirmed_at is null` UPDATE guard), because in this environment the
+ * cumulative round-trip latency of phase 1 + phase 2's own connect/BEGIN/
+ * SELECT chain routinely exceeds 100ms on its own -- i.e. the race was
+ * ALWAYS being won by the earlier check before the fixed sleep even
+ * elapsed. Proven by temporarily removing the atomic guard's own SQL clause
+ * from each guarded UPDATE and re-running: every one of the three
+ * concurrency tests still passed, meaning none of them were actually
+ * exercising the atomic guard they claim to prove.
+ *
+ * This resolves that for `resolveAmbiguousGroupingAsSingle`'s own test
+ * (the function under review) by making the wait EVENT-driven instead of
+ * time-driven: only commit the raw connection's held write once Postgres
+ * itself confirms this session's own guarded UPDATE is sitting on the lock
+ * queue, which is only possible if every earlier read in the call
+ * (including phase 2's own upfront re-check) already ran and passed against
+ * the still-uncommitted (pre-freeze) snapshot -- the exact interleaving the
+ * guard exists for, now forced by the database's own lock manager rather
+ * than guessed at.
+ *
+ * **`splitTrade`'s/`joinTrades`' OWN concurrency tests were deliberately
+ * NOT converted to this helper in this same pass** (orchestrator,
+ * 2026-08-23) -- attempting the identical `%direction = $2, opened_at =
+ * $3%` pattern match against their shared `TRADES_RECOMPUTE_SET_CLAUSE`
+ * query text hit real connection-pool/transaction-state interference
+ * between this suite's own long-lived `db` owner connection and the app's
+ * internal connection pool, not cleanly resolved within this pass. Both
+ * tests still use the original fixed-delay wait, and both still pass and
+ * are still real, valid proofs that neither function silently overwrites
+ * a frozen trade -- they just don't deterministically pin down WHICH of
+ * the two independent defensive layers (the early `loadAndValidate*`
+ * re-check throw, or the atomic UPDATE guard itself) caught a given run's
+ * race, the way this function does for `resolveAmbiguousGroupingAsSingle`.
+ * Tracked in PROGRESS.md as a real, specific follow-up, not silently
+ * dropped -- the underlying fix in `splitTrade`/`joinTrades` is still
+ * sound (same guard-clause shape, already security-reviewed and PASSed),
+ * this is a test-precision refinement opportunity, not a functional gap.
+ */
+async function waitForBlockedQuery(ownerConn: Client, queryPattern: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await ownerConn.query<{ pid: number }>(
+      `select pid from pg_stat_activity where query ilike $1 and wait_event_type = 'Lock'`,
+      [queryPattern],
+    );
+    if (res.rows.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(
+    `waitForBlockedQuery: no pg_stat_activity row matching ${JSON.stringify(queryPattern)} with wait_event_type='Lock' appeared within ${timeoutMs}ms -- the guarded UPDATE never reached the lock queue, so this test cannot prove the atomic guard.`,
+  );
+}
+
 describe.skipIf(!env)('lib/ingestion/split-join.ts — splitTrade / joinTrades (live DB)', () => {
   let db: Client;
   let envBundle: EnvBundle;
@@ -588,8 +653,28 @@ describe.skipIf(!env)('lib/ingestion/split-join.ts — splitTrade / joinTrades (
           const { splitTrade, SplitTradeAlreadyConfirmedError } = await import('../split-join');
           const splitPromise = splitTrade(user.id, tradeId, splitAtFillId);
 
-          // Give splitTrade's own async chain time to reach and genuinely
-          // block on the held row lock before releasing it.
+          // KNOWN LIMITATION, tracked in PROGRESS.md, not silently
+          // dropped: this fixed-delay wait does not deterministically
+          // prove the race is caught specifically by the FINAL guarded
+          // UPDATE's own `and confirmed_at is null` clause, as opposed to
+          // an earlier defensive re-check in the same call path
+          // (`loadAndValidateSplit`'s `confirmed_at !== null` throw, called
+          // again at the start of phase 2 -- see that function's own
+          // comment). Both layers independently reject a lost race
+          // correctly (verified: the assertions below hold either way),
+          // so this test IS still a real, valid proof that splitTrade
+          // never silently overwrites a frozen trade -- it just doesn't
+          // pin down which specific defensive layer did the rejecting in
+          // a given run. `resolveAmbiguousGroupingAsSingle`'s own
+          // concurrency test (below) uses a deterministic,
+          // `pg_stat_activity`-polling technique (`waitForBlockedQuery`)
+          // that DOES pin this down precisely -- applying that same
+          // technique here hit real connection-pool/transaction-state
+          // interference between this suite's own `db` connection and the
+          // app's internal connection pool that wasn't resolved cleanly
+          // within this pass; tracked as a follow-up, not blocking, since
+          // the underlying fix (verified by `resolveAmbiguousGroupingAsSingle`'s
+          // own test, which shares the identical guard-clause shape) is sound.
           await new Promise((resolve) => setTimeout(resolve, 100));
           await raceConn.query('commit');
 
@@ -958,6 +1043,12 @@ describe.skipIf(!env)('lib/ingestion/split-join.ts — splitTrade / joinTrades (
           const { joinTrades, JoinTradeAlreadyConfirmedError } = await import('../split-join');
           const joinPromise = joinTrades(user.id, tradeA.tradeId, tradeB.tradeId);
 
+          // Same known limitation as splitTrade's own concurrency test
+          // above -- see that test's comment. Still a real, valid proof
+          // that joinTrades never silently overwrites a frozen trade; it
+          // just doesn't pin down which of the two independent defensive
+          // layers (the early re-validation throw vs. the atomic UPDATE
+          // guard) caught this specific run's race.
           await new Promise((resolve) => setTimeout(resolve, 100));
           await raceConn.query('commit');
 
@@ -983,6 +1074,254 @@ describe.skipIf(!env)('lib/ingestion/split-join.ts — splitTrade / joinTrades (
           [[tradeA.tradeId, tradeB.tradeId]],
         );
         expect(tfCountRes.rows.find((r) => r.trade_id === tradeB.tradeId)?.n).toBe(2); // tradeB's own fills never reassigned
+      },
+      20_000,
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // resolveAmbiguousGroupingAsSingle -- design-ethics fix, 2026-08-23
+  // (see split-join.ts's own header comment on this function)
+  // ---------------------------------------------------------------------
+
+  describe('resolveAmbiguousGroupingAsSingle', () => {
+    it('happy path: resolves an ambiguous trade to confident_single, no membership change', async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'resolve-happy');
+      cleanupUserIds.push(user.id);
+      const accountId = await seedAccount(user.id);
+
+      const { tradeId } = await seedTradeFromFills({
+        userId: user.id,
+        accountId,
+        instrument: 'EURUSD',
+        fills: [
+          { providerRef: 'resolve-1-entry', side: 'buy', volume: '50000', price: '1.10000000', filledAt: '2026-08-21T09:00:00Z', stopAtFill: '1.09500000' },
+          { providerRef: 'resolve-2-add', side: 'buy', volume: '50000', price: '1.09900000', filledAt: '2026-08-21T09:15:00Z' },
+        ],
+        groupingConfidence: 'ambiguous',
+        groupingSource: 'auto',
+      });
+
+      const { resolveAmbiguousGroupingAsSingle } = await import('../split-join');
+      const result = await resolveAmbiguousGroupingAsSingle(user.id, tradeId);
+      expect(result.tradeId).toBe(tradeId);
+
+      const row = await db.query(
+        `select grouping_confidence, grouping_signals, grouping_source, ambiguity_resolved_at,
+                direction, status, entry_price_avg, peak_volume
+           from retrospeq.trades where id = $1`,
+        [tradeId],
+      );
+      const trade = row.rows[0];
+      expect(trade.grouping_confidence).toBe('confident_single');
+      expect(trade.grouping_signals).toEqual({});
+      expect(trade.grouping_source).toBe('user_confirmed_single');
+      expect(trade.ambiguity_resolved_at).not.toBeNull();
+      // Derived facts untouched -- this operation never recomputes them.
+      expect(trade.direction).toBe('long');
+      expect(trade.entry_price_avg).toBe('1.09950000');
+      expect(trade.peak_volume).toBe('100000.00000000');
+
+      // Membership completely untouched -- both fills still on this trade,
+      // roles unchanged.
+      const tfRes = await db.query<{ role: string }>(
+        `select tf.role from retrospeq.trade_fills tf
+           join retrospeq.fills f on f.id = tf.fill_id
+          where tf.trade_id = $1 order by f.filled_at`,
+        [tradeId],
+      );
+      expect(tfRes.rows.map((r) => r.role)).toEqual(['entry', 'add']);
+      const countRes = await db.query(`select count(*)::int as n from retrospeq.trades where account_id = $1`, [accountId]);
+      expect(countRes.rows[0].n).toBe(1); // no new trade, no delete
+    });
+
+    it('refuses a confirmed trade (ResolveAmbiguousGroupingAlreadyConfirmedError)', async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'resolve-confirmed');
+      cleanupUserIds.push(user.id);
+      const accountId = await seedAccount(user.id);
+
+      const { tradeId } = await seedTradeFromFills({
+        userId: user.id,
+        accountId,
+        instrument: 'EURUSD',
+        fills: [
+          { providerRef: 'resolve-confirmed-entry', side: 'buy', volume: '1', price: '1.10000000', filledAt: '2026-08-21T10:00:00Z' },
+          { providerRef: 'resolve-confirmed-exit', side: 'sell', volume: '1', price: '1.10500000', filledAt: '2026-08-21T10:30:00Z', realizedPnl: '0.005' },
+        ],
+        groupingConfidence: 'ambiguous',
+        confirmedAt: '2026-08-21T11:00:00Z',
+      });
+
+      const { resolveAmbiguousGroupingAsSingle, ResolveAmbiguousGroupingAlreadyConfirmedError } = await import('../split-join');
+      await expect(resolveAmbiguousGroupingAsSingle(user.id, tradeId)).rejects.toThrow(
+        ResolveAmbiguousGroupingAlreadyConfirmedError,
+      );
+    });
+
+    it('refuses a trade that is not ambiguous (ResolveAmbiguousGroupingNotAmbiguousError)', async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'resolve-not-ambiguous');
+      cleanupUserIds.push(user.id);
+      const accountId = await seedAccount(user.id);
+
+      const { tradeId } = await seedTradeFromFills({
+        userId: user.id,
+        accountId,
+        instrument: 'EURUSD',
+        fills: [
+          { providerRef: 'resolve-na-entry', side: 'buy', volume: '1', price: '1.10000000', filledAt: '2026-08-21T12:00:00Z' },
+          { providerRef: 'resolve-na-exit', side: 'sell', volume: '1', price: '1.10500000', filledAt: '2026-08-21T12:30:00Z', realizedPnl: '0.005' },
+        ],
+        // default groupingConfidence is 'confident_single' -- never asks.
+      });
+
+      const { resolveAmbiguousGroupingAsSingle, ResolveAmbiguousGroupingNotAmbiguousError } = await import('../split-join');
+      await expect(resolveAmbiguousGroupingAsSingle(user.id, tradeId)).rejects.toThrow(
+        ResolveAmbiguousGroupingNotAmbiguousError,
+      );
+    });
+
+    // Independent-review addition (retrospeq-tester, 2026-08-23): the sibling
+    // test above only proves the refusal against 'confident_single' -- the
+    // schema's own trades_grouping_confidence_check allows exactly three
+    // values ('confident_single' | 'confident_split' | 'ambiguous',
+    // 20260822010000_ingestion_schema.sql), and unlike splitTrade/joinTrades
+    // (which don't care about grouping_confidence at all), this operation's
+    // own `!== 'ambiguous'` check is a NEW refusal rule specific to this
+    // function -- worth its own proof against the OTHER non-ambiguous value,
+    // not just inferred from the first.
+    it('refuses a confident_split trade too (ResolveAmbiguousGroupingNotAmbiguousError, not just confident_single)', async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'resolve-not-ambiguous-split');
+      cleanupUserIds.push(user.id);
+      const accountId = await seedAccount(user.id);
+
+      const { tradeId } = await seedTradeFromFills({
+        userId: user.id,
+        accountId,
+        instrument: 'EURUSD',
+        fills: [
+          { providerRef: 'resolve-na-split-entry', side: 'buy', volume: '1', price: '1.10000000', filledAt: '2026-08-21T12:45:00Z' },
+          { providerRef: 'resolve-na-split-exit', side: 'sell', volume: '1', price: '1.10500000', filledAt: '2026-08-21T13:00:00Z', realizedPnl: '0.005' },
+        ],
+        groupingConfidence: 'confident_split',
+      });
+
+      const { resolveAmbiguousGroupingAsSingle, ResolveAmbiguousGroupingNotAmbiguousError } = await import('../split-join');
+      await expect(resolveAmbiguousGroupingAsSingle(user.id, tradeId)).rejects.toThrow(
+        ResolveAmbiguousGroupingNotAmbiguousError,
+      );
+
+      // Untouched -- still confident_split, no write happened.
+      const row = await db.query(`select grouping_confidence from retrospeq.trades where id = $1`, [tradeId]);
+      expect(row.rows[0].grouping_confidence).toBe('confident_split');
+    });
+
+    it("RLS cross-user isolation: a second user cannot resolve the first user's trade", async () => {
+      if (!env) return;
+      const userA = await createTestAuthUser(env, 'resolve-owner');
+      const userB = await createTestAuthUser(env, 'resolve-attacker');
+      cleanupUserIds.push(userA.id, userB.id);
+      const accountId = await seedAccount(userA.id);
+
+      const { tradeId } = await seedTradeFromFills({
+        userId: userA.id,
+        accountId,
+        instrument: 'EURUSD',
+        fills: [
+          { providerRef: 'resolve-rls-entry', side: 'buy', volume: '1', price: '1.10000000', filledAt: '2026-08-21T13:00:00Z' },
+          { providerRef: 'resolve-rls-add', side: 'buy', volume: '1', price: '1.09900000', filledAt: '2026-08-21T13:15:00Z' },
+        ],
+        groupingConfidence: 'ambiguous',
+      });
+
+      const { resolveAmbiguousGroupingAsSingle, ResolveAmbiguousGroupingNotFoundError } = await import('../split-join');
+      await expect(resolveAmbiguousGroupingAsSingle(userB.id, tradeId)).rejects.toThrow(
+        ResolveAmbiguousGroupingNotFoundError,
+      );
+
+      const row = await db.query(`select grouping_confidence from retrospeq.trades where id = $1`, [tradeId]);
+      expect(row.rows[0].grouping_confidence).toBe('ambiguous'); // untouched
+    });
+
+    it(
+      'concurrency guard: a concurrent confirm that commits WHILE resolveAmbiguousGroupingAsSingle is blocked on the same row lock wins deterministically -- rejects with ResolveAmbiguousGroupingAlreadyConfirmedError, never silently overwrites a frozen trade\'s grouping state',
+      async () => {
+        if (!env) return;
+        const user = await createTestAuthUser(env, 'resolve-concurrency-guard');
+        cleanupUserIds.push(user.id);
+        const accountId = await seedAccount(user.id);
+        const { tradeId } = await seedTradeFromFills({
+          userId: user.id,
+          accountId,
+          instrument: 'EURUSD',
+          fills: [
+            { providerRef: 'resolve-race-entry', side: 'buy', volume: '1', price: '1.10000000', filledAt: '2026-08-21T14:00:00Z' },
+            { providerRef: 'resolve-race-exit', side: 'sell', volume: '1', price: '1.10500000', filledAt: '2026-08-21T14:30:00Z', realizedPnl: '0.005' },
+          ],
+          groupingConfidence: 'ambiguous',
+        });
+
+        // A second, raw connection deliberately holds an UNCOMMITTED
+        // confirm-shaped UPDATE on this exact row -- same technique
+        // splitTrade's/joinTrades' own concurrency-guard tests above use.
+        // Under READ COMMITTED, resolveAmbiguousGroupingAsSingle's own
+        // phase-1/phase-2 SELECTs still see the pre-commit state
+        // (confirmed_at null) and proceed normally, but its final guarded
+        // UPDATE ("... and confirmed_at is null") will BLOCK on this held
+        // row lock, deterministically forcing the exact interleaving the
+        // guard protects against.
+        const { Client } = await import('pg');
+        const raceConn = new Client({ connectionString: env.SUPABASE_DB_URL });
+        await raceConn.connect();
+        try {
+          await raceConn.query('begin');
+          const heldConfirm = await raceConn.query(
+            `update retrospeq.trades set confirmed_at = now(), confirmed_by = 'user', status = 'confirmed'
+              where id = $1 and status = 'closed' and confirmed_at is null`,
+            [tradeId],
+          );
+          expect(heldConfirm.rowCount).toBe(1); // lock acquired, held, not yet committed
+
+          const { resolveAmbiguousGroupingAsSingle, ResolveAmbiguousGroupingAlreadyConfirmedError } = await import(
+            '../split-join'
+          );
+          const resolvePromise = resolveAmbiguousGroupingAsSingle(user.id, tradeId);
+
+          // Independent-review fix (retrospeq-tester, 2026-08-23): wait for
+          // Postgres itself to report resolveAmbiguousGroupingAsSingle's own
+          // guarded UPDATE genuinely sitting on this row's lock queue --
+          // proof, not a guess -- before releasing raceConn's hold. Only
+          // possible if every earlier read in the call (phase 1's SELECT,
+          // phase 2's own upfront loadAndValidateResolveAmbiguous re-check)
+          // already ran and passed against the still-uncommitted snapshot,
+          // i.e. the exact interleaving this guard exists for. See this
+          // file's own `waitForBlockedQuery` header for why the previous
+          // fixed-sleep version did not reliably prove this.
+          await waitForBlockedQuery(db, '%user_confirmed_single%');
+          await raceConn.query('commit');
+
+          await expect(resolvePromise).rejects.toThrow(ResolveAmbiguousGroupingAlreadyConfirmedError);
+        } finally {
+          await raceConn.end();
+        }
+
+        // Final state: confirmed by the raw connection's write, grouping
+        // state NEVER touched by resolveAmbiguousGroupingAsSingle's
+        // blocked-then-guarded UPDATE -- still ambiguous, exactly as the
+        // freeze left it.
+        const row = await db.query(
+          `select confirmed_by, status, grouping_confidence, grouping_source, ambiguity_resolved_at
+             from retrospeq.trades where id = $1`,
+          [tradeId],
+        );
+        expect(row.rows[0].confirmed_by).toBe('user');
+        expect(row.rows[0].status).toBe('confirmed');
+        expect(row.rows[0].grouping_confidence).toBe('ambiguous');
+        expect(row.rows[0].grouping_source).toBe('auto');
+        expect(row.rows[0].ambiguity_resolved_at).toBeNull();
       },
       20_000,
     );

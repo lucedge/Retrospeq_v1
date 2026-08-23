@@ -181,7 +181,7 @@ test.describe('Trades list screen (Module 02 §5.1/§5.2)', () => {
     await page.screenshot({ path: 'tmp/dev-screenshots/trades-empty.png', fullPage: true });
   });
 
-  test('populated state: open position (incl. an ambiguous-grouping one with the honest disabled chip), closed-unconfirmed, and confirmed trades all render with no colour-coded outcome, direction as text, and .rq-num on every number', async ({
+  test('populated state: open position (incl. an ambiguous-grouping one with a real, equal grouping-chip pair), closed-unconfirmed, and confirmed trades all render with no colour-coded outcome, direction as text, and .rq-num on every number', async ({
     page,
   }) => {
     const user = await createConfirmedUser('trades-populated');
@@ -251,14 +251,30 @@ test.describe('Trades list screen (Module 02 §5.1/§5.2)', () => {
     await expect(closedCard.locator('.rq-num', { hasText: '-1.0R' })).toBeVisible();
   });
 
-  test('the "Same trade"/"Separate" grouping-chip buttons are genuinely disabled (not just dimmed) with an honest note, and "Later" genuinely dismisses the chip', async ({
+  test('the grouping chip\'s "Same trade" and "Separate" are both genuinely live, equal .rq-btn--equal actions with no CSS/behavioural asymmetry; "Later" genuinely dismisses the chip', async ({
     page,
   }) => {
+    // Rewritten by a design-ethics fix (2026-08-23, retrospeq-qa finding
+    // on Slice 7b): this test previously asserted "Same trade" was
+    // genuinely `disabled` — true at the time (no backing write existed),
+    // but Slice 7b had already made "Separate" real, which broke the
+    // `.rq-btn--equal` pair's required symmetry (one option worked, the
+    // other looked permanently unavailable). The fix built a real
+    // `resolveAmbiguousGroupingAsSingle` write and wired "Same trade" to
+    // it — this test is rewritten to prove BOTH options are now equally
+    // real, not left asserting a `disabled` state that no longer exists
+    // (a passing-but-wrong assertion is worse than a failing one, same
+    // principle this file already applied once to "Separate").
     const user = await createConfirmedUser('trades-chip');
     cleanupUserIds.push(user.id);
     const accountId = await seedAccount(user.id);
-    await seedTrade(user.id, accountId, {
+    const sameTradeId = await seedTrade(user.id, accountId, {
       instrument: 'EURJPY',
+      status: 'open',
+      groupingConfidence: 'ambiguous',
+    });
+    const separateTradeId = await seedTrade(user.id, accountId, {
+      instrument: 'CHFJPY',
       status: 'open',
       groupingConfidence: 'ambiguous',
     });
@@ -266,21 +282,57 @@ test.describe('Trades list screen (Module 02 §5.1/§5.2)', () => {
     await loginAs(page, user.email);
     await page.goto('/trades');
 
-    const sameTradeBtn = page.getByRole('button', { name: 'Same trade' });
-    const separateBtn = page.getByRole('button', { name: 'Separate' });
-    await expect(sameTradeBtn).toBeDisabled();
-    await expect(separateBtn).toBeDisabled();
-    await expect(page.getByText("Resolving this here isn't available yet")).toBeVisible();
+    const eurjpyChip = page.getByRole('group', { name: 'Grouping question for EURJPY' });
+    const chfjpyChip = page.getByRole('group', { name: 'Grouping question for CHFJPY' });
 
-    // A disabled button rejects a forced click attempt at the DOM/event
-    // level too, not merely via the `disabled` CSS look — Playwright's own
-    // actionability check refuses to click a disabled element, which is
-    // itself the proof; assert the chip is still present as evidence no
-    // click went through.
-    await expect(page.getByText('Is this add part of the same trade?')).toBeVisible();
+    // Both options are genuinely enabled -- neither `disabled`, neither
+    // dimmed -- on BOTH trades, the core symmetry claim itself.
+    for (const chip of [eurjpyChip, chfjpyChip]) {
+      await expect(chip.getByRole('button', { name: 'Same trade' })).toBeEnabled();
+      await expect(chip.getByRole('link', { name: 'Separate' })).toBeVisible();
+    }
+    await expect(page.getByText("isn't available yet", { exact: false })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Later' }).click();
-    await expect(page.getByText('Is this add part of the same trade?')).toHaveCount(0);
+    // "Same trade" genuinely works: a real write, verified against
+    // Postgres directly, and the chip disappears once resolved.
+    await eurjpyChip.getByRole('button', { name: 'Same trade' }).click();
+    await expect(eurjpyChip).toHaveCount(0, { timeout: 5_000 });
+    const resolvedRow = await db.query(
+      `select grouping_confidence, grouping_source, ambiguity_resolved_at from retrospeq.trades where id = $1`,
+      [sameTradeId],
+    );
+    expect(resolvedRow.rows[0].grouping_confidence).toBe('confident_single');
+    expect(resolvedRow.rows[0].grouping_source).toBe('user_confirmed_single');
+    expect(resolvedRow.rows[0].ambiguity_resolved_at).not.toBeNull();
+    // The untouched sibling trade's chip is unaffected by resolving a
+    // DIFFERENT trade -- proves the write is scoped to the clicked trade,
+    // not a page-wide effect.
+    await expect(chfjpyChip).toBeVisible();
+
+    // Wait for revalidatePath's own server round trip to finish (the
+    // EURJPY row's "Ambiguous grouping" pill is server-rendered, not part
+    // of the client-only optimistic `resolved` state that already hid the
+    // chip above) before screenshotting -- avoids the exact
+    // mid-transition capture timing bug this repo's own decision log
+    // already documented once for TrimReasonChips.
+    await expect(page.locator('article', { hasText: 'EURJPY' }).getByText('Ambiguous grouping')).toHaveCount(0, {
+      timeout: 5_000,
+    });
+    await page.screenshot({ path: 'tmp/dev-screenshots/trades-grouping-chip-same-trade.png', fullPage: true });
+
+    // "Separate" genuinely works: it opens this same trade's own fills
+    // section (rendered directly below the chip for an ambiguous open
+    // position, per `page.tsx`'s `OpenPositionCard`) with a real "Split
+    // here" control inside it, not a dead link.
+    await chfjpyChip.getByRole('link', { name: 'Separate' }).click();
+    await expect(page).toHaveURL(new RegExp(`#trade-${separateTradeId}$`));
+    await expect(page.locator(`#trade-${separateTradeId} table`)).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(`#trade-${separateTradeId}`).getByRole('button', { name: 'Split here' })).toHaveCount(0); // only member is the entry fill (index 0) -- never offered as its own boundary
+
+    await page.screenshot({ path: 'tmp/dev-screenshots/trades-grouping-chip-separate.png', fullPage: true });
+
+    await chfjpyChip.getByRole('button', { name: 'Later' }).click();
+    await expect(chfjpyChip).toHaveCount(0);
 
     await page.screenshot({ path: 'tmp/dev-screenshots/trades-grouping-chip-dismissed.png', fullPage: true });
   });

@@ -16,7 +16,16 @@ import { computeTradeFacts, type TradeFacts, type TradeFactsMember } from './tra
  * | Manual split | Before freeze only         | Creates two trades from one, recomputes facts, sets `grouping_source = 'user_split'` |
  * | Manual join  | Before freeze only, same block | Merges, recomputes                                          |
  *
- * Both reuse `grouping.ts`'s exported `assignRoles` (the exact function real
+ * A third, smaller operation lives at the bottom of this file, added
+ * 2026-08-23 as a design-ethics fix rather than a literal §4.7 line item:
+ * `resolveAmbiguousGroupingAsSingle` resolves an `ambiguous` trade's
+ * grouping VERDICT to `confident_single` with NO membership change at all
+ * — see that function's own header comment for the full reasoning (it
+ * exists to give `GroupingChip.tsx`'s "Same trade" option a real backing
+ * write, restoring the `.rq-btn--equal` pair's required symmetry with
+ * "Separate").
+ *
+ * Both split/join reuse `grouping.ts`'s exported `assignRoles` (the exact function real
  * grouping uses to turn a chronological fill list into entry/add/trim/exit
  * roles) and `trade-facts.ts`'s `computeTradeFacts` — "recomputes facts"
  * means literally calling the same functions the sync pipeline calls, never
@@ -830,5 +839,164 @@ export async function joinTrades(userId: string, tradeIdA: string, tradeIdB: str
     await client.query(`delete from retrospeq.trades where id = $1`, [absorbed.id]);
 
     return { survivingTradeId: survivor.id, absorbedTradeId: absorbed.id, blockId: survivor.block_id };
+  });
+}
+
+// ---------------------------------------------------------------------
+// resolveAmbiguousGroupingAsSingle
+// ---------------------------------------------------------------------
+
+/**
+ * Design-ethics fix (retrospeq-qa finding on Module 02 Slice 7b,
+ * 2026-08-23) -- `GroupingChip.tsx`'s ambient grouping question ("Is this
+ * add part of the same trade?") is a `.rq-btn--equal` pair
+ * (design-system rule: no primary/secondary distinction between the two
+ * options). Slice 7b wired "Separate" to a real deep link into
+ * `SplitControl`, but left "Same trade" disabled, because no write existed
+ * that resolves an ALREADY-correctly-grouped ambiguous trade's own VERDICT
+ * to `confident_single` without also touching `trade_fills`/`trade_events`
+ * membership -- `splitTrade`/`joinTrades` both require an explicit
+ * boundary/counterpart trade and neither operates on "no boundary chosen."
+ *
+ * This function is deliberately the SIMPLEST of the three corrections
+ * operations in this file: unlike `splitTrade`/`joinTrades`, it never
+ * touches `trade_fills`/`trade_events` at all. The trader is not telling
+ * the system anything new about which fills belong together -- the
+ * automatic grouping already put the right fills on the right trade, the
+ * trader is only resolving the QUESTION ("is this ambiguous grouping
+ * actually one trade?") to "yes." So the entire operation is one guarded
+ * `UPDATE ... trades SET grouping_confidence = 'confident_single', ...`,
+ * with no member reassignment, no new trade row, no delete -- the same
+ * three writes `splitTrade`/`joinTrades` already make to the *grouping
+ * provenance* columns on every trade they touch (see this file's header,
+ * judgment call #1), applied here on their own without the restructuring
+ * that normally accompanies them.
+ *
+ * Because there is no membership restructuring, there is also no need for
+ * `splitTrade`/`joinTrades`' two-phase `withUserConnection` ->
+ * `withServiceRoleConnection` split for its OWN sake (that split exists
+ * because `trade_fills`/`trade_events` have no client-role UPDATE policy
+ * at all -- see this file's header). This function still follows the same
+ * shape anyway, for two reasons worth being explicit about: (1) it is the
+ * established convention every trade-state-mutating operation in this file
+ * uses, and a lone exception would be a real, unexplained inconsistency,
+ * not a simplification; (2) phase 1 (`withUserConnection`) is still the
+ * only place ownership is genuinely RLS-enforced against the caller's own
+ * session -- `trades_owner`'s `for all using (user_id = auth.uid())`
+ * policy would in principle let an authenticated-role UPDATE succeed
+ * directly, but every other write in this file goes through the
+ * service-role connection for its actual mutation, and diverging here
+ * would mean this is the only trade-mutating function in the file NOT
+ * doing so, for no functional gain.
+ */
+
+export class ResolveAmbiguousGroupingNotFoundError extends Error {
+  constructor(tradeId: string) {
+    super(`resolveAmbiguousGroupingAsSingle: no retrospeq.trades row for id ${tradeId} owned by the calling user.`);
+    this.name = 'ResolveAmbiguousGroupingNotFoundError';
+  }
+}
+
+export class ResolveAmbiguousGroupingAlreadyConfirmedError extends Error {
+  constructor(tradeId: string) {
+    super(
+      `resolveAmbiguousGroupingAsSingle: trade ${tradeId} is already confirmed -- this correction is allowed before freeze only (Module 02 §4.7's "before freeze only" posture, matching manual split/join).`,
+    );
+    this.name = 'ResolveAmbiguousGroupingAlreadyConfirmedError';
+  }
+}
+
+export class ResolveAmbiguousGroupingNotAmbiguousError extends Error {
+  constructor(tradeId: string, actualConfidence: string) {
+    super(
+      `resolveAmbiguousGroupingAsSingle: trade ${tradeId} has grouping_confidence '${actualConfidence}', not 'ambiguous' -- this operation only resolves a trade that is actually asking the question (Module 02 §4.3's confidence bands); calling it on an already-confident trade is a caller error, not a legitimate no-op.`,
+    );
+    this.name = 'ResolveAmbiguousGroupingNotAmbiguousError';
+  }
+}
+
+export interface ResolveAmbiguousGroupingResult {
+  tradeId: string;
+}
+
+interface ResolveAmbiguousGroupingValidatedState {
+  tradeId: string;
+}
+
+/** Shared by both phases, same reasoning as `loadAndValidateSplit`/
+ *  `loadAndValidateJoin` above -- a race that only manifests in phase 2
+ *  surfaces identically to a phase-1 rejection. */
+async function loadAndValidateResolveAmbiguous(
+  client: PoolClient,
+  tradeId: string,
+  scopeToUserId: string | null,
+): Promise<ResolveAmbiguousGroupingValidatedState> {
+  const res = await client.query<{ id: string; confirmed_at: string | null; grouping_confidence: string }>(
+    scopeToUserId
+      ? `select id, confirmed_at, grouping_confidence from retrospeq.trades where id = $1 and user_id = $2`
+      : `select id, confirmed_at, grouping_confidence from retrospeq.trades where id = $1`,
+    scopeToUserId ? [tradeId, scopeToUserId] : [tradeId],
+  );
+  const trade = res.rows[0];
+  if (!trade) throw new ResolveAmbiguousGroupingNotFoundError(tradeId);
+  if (trade.confirmed_at !== null) throw new ResolveAmbiguousGroupingAlreadyConfirmedError(tradeId);
+  if (trade.grouping_confidence !== 'ambiguous') {
+    throw new ResolveAmbiguousGroupingNotAmbiguousError(tradeId, trade.grouping_confidence);
+  }
+  return { tradeId: trade.id };
+}
+
+/**
+ * Module 02 §4.3/§4.7 -- resolves an `ambiguous` trade's grouping VERDICT to
+ * `confident_single`, with no change to trade membership. See this
+ * function's own header comment above for the full reasoning and why this
+ * is intentionally the simplest of the three corrections operations in
+ * this file.
+ */
+export async function resolveAmbiguousGroupingAsSingle(
+  userId: string,
+  tradeId: string,
+): Promise<ResolveAmbiguousGroupingResult> {
+  uuidSchema.parse(userId);
+  uuidSchema.parse(tradeId);
+
+  // Phase 1 -- withUserConnection, genuinely RLS-enforced. Read-only.
+  await withUserConnection(userId, (client) => loadAndValidateResolveAmbiguous(client, tradeId, userId));
+
+  // Phase 2 -- withServiceRoleConnection. Re-validates from scratch (the
+  // same defensive re-check posture `splitTrade`/`joinTrades` use), then
+  // performs the one guarded write.
+  return withServiceRoleConnection(async (client) => {
+    const state = await loadAndValidateResolveAmbiguous(client, tradeId, null);
+
+    // Atomic, conditional -- same concurrency-guard shape
+    // `splitTrade`/`joinTrades`/`confirmDay` already use (`and confirmed_at
+    // is null` in the WHERE clause itself, `rowCount` checked, the
+    // already-confirmed error thrown on a lost race), deliberately applied
+    // here from the start rather than risking the exact unguarded-UPDATE
+    // bug class retrospeq-security-reviewer already found and fixed twice
+    // this session in `splitTrade`/`joinTrades` (see this file's own
+    // inline comments on those two UPDATEs). A concurrent
+    // confirmDay/autoConfirmStaleTrades call could freeze this trade
+    // between phase 1 committing (or this phase's own re-validation read
+    // above) and this UPDATE; without the guard, that UPDATE would still
+    // fire unconditionally, silently rewriting grouping_confidence/
+    // grouping_signals/ambiguity_resolved_at on a now-frozen trade -- a
+    // direct violation of "rule evaluations freeze at close-out and are
+    // never recomputed retroactively."
+    const updateRes = await client.query(
+      `update retrospeq.trades
+          set grouping_confidence = 'confident_single',
+              grouping_signals = '{}'::jsonb,
+              grouping_source = 'user_confirmed_single',
+              ambiguity_resolved_at = now()
+        where id = $1 and confirmed_at is null`,
+      [state.tradeId],
+    );
+    if ((updateRes.rowCount ?? 0) !== 1) {
+      throw new ResolveAmbiguousGroupingAlreadyConfirmedError(state.tradeId);
+    }
+
+    return { tradeId: state.tradeId };
   });
 }

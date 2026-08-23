@@ -1,5 +1,15 @@
 import 'server-only';
 import type { PoolClient } from 'pg';
+import { TRIM_REASON_FIELD_ID, TRIM_REASONS, type TrimReason } from './trim-reason';
+
+// Re-exported for backward compatibility with existing server-side call
+// sites (`app/(app)/trades/actions.ts`) — see `trim-reason.ts`'s own
+// header for why these constants now live there, not here: this file's
+// `import 'server-only'` poisons any client bundle that imports it, even
+// for a plain constant, and `close-out/TrimReasonChips.tsx` (a Client
+// Component) needs these values too.
+export { TRIM_REASON_FIELD_ID, TRIM_REASONS };
+export type { TrimReason };
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.5's second paragraph — the
@@ -48,6 +58,31 @@ import type { PoolClient } from 'pg';
  * retrofit, but the next one (an in-trade/post-close capture Server
  * Action, Module 03/06 territory) should import `writeTradeCapture`
  * rather than hand-rolling its own INSERT.
+ */
+
+/**
+ * Module 02 Slice 7b — the trim-reason chip row (§5.1/§5.2's own named UI
+ * element: "Chip row on fill notification: Target · Trail · Discretionary ·
+ * Fear · Time. Optional" (§3.3), rendered here at close-out since no
+ * real-time fill-notification surface exists yet — see
+ * `app/(app)/trades/close-out/TrimReasonChips.tsx`'s own header).
+ *
+ * **Honest scoping decision, made explicitly rather than left implicit
+ * (00-foundation §12):** `trade_captures.field_id` is meant to reference
+ * whatever fields a strategy defines (Module 03's field registry), which
+ * does not exist in this repo yet. Rather than skip this named UI element
+ * entirely, or invent a fake registry lookup, this is a built-in, literal
+ * field id — not a registry-defined one — used by exactly one write path
+ * (`app/(app)/trades/actions.ts`'s `writeTradeCaptureAction`). When Module
+ * 03 ships a real field registry, this should either become a real
+ * registered field with this same id (so no historical data needs
+ * migrating) or be explicitly superseded — flagged for that module's own
+ * build, not decided here.
+ *
+ * `TRIM_REASON_FIELD_ID`/`TRIM_REASONS`/`TrimReason` themselves now live in
+ * `./trim-reason.ts` (see this file's top-of-file re-export and that
+ * file's own header for why) — this comment block is kept here since it's
+ * the actual product reasoning, not moved to avoid losing it in a diff.
  */
 
 export interface WriteTradeCaptureParams {

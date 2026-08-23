@@ -260,6 +260,34 @@ export const RATE_LIMITS = {
     ip: { limit: 20, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * `writeTradeCaptureAction` — Module 02 Slice 7b's trim-reason chip row
+   * (§3.3/§5.1/§5.2, "one tap, fixed options, always skippable"). Not
+   * credential- or destruction-shaped, and re-tagging a trim reason a
+   * handful of times while deciding is normal use — similar reasoning to
+   * `toggleNotADecision`'s loose budget, kept slightly tighter since this
+   * writes per-trade rather than being a single global toggle.
+   */
+  writeTradeCapture: {
+    ip: { limit: 60, windowSeconds: 3600 },
+    email: { limit: 40, windowSeconds: 3600 },
+  },
+  /**
+   * `resolveAmbiguousGroupingAction` -- the design-ethics fix closing
+   * `GroupingChip.tsx`'s "Same trade" gap (2026-08-23). Same eligibility
+   * shape as `splitTrade`/`joinTrades` (before-freeze-only, restructures
+   * (here: resolves) an existing trade's own grouping state rather than
+   * creating new financial records), but touches strictly fewer columns
+   * than either (no trade_fills/trade_events writes, no new trade row) --
+   * given the same moderate budget as `splitTrade`/`joinTrades` rather
+   * than a tighter one, since it is equally low-risk on a lost race (the
+   * worst case is a few wasted attempts against an already-confirmed or
+   * already-resolved trade).
+   */
+  resolveAmbiguousGrouping: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;
