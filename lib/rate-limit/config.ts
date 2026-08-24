@@ -316,6 +316,24 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * `previewRule` — Module 04 §5.8, `lib/rules/preview.ts`. Deliberately
+   * the LOOSEST, shortest-window budget in this file, unlike every other
+   * scope above: this is a READ-ONLY call (`preview()`'s own contract:
+   * "writes nothing, ever") driven by a live slider the trader drags
+   * during authoring — §12's own performance budget ("Preview < 300ms
+   * p95") assumes many rapid calls per authoring session, not the
+   * occasional-write cadence `createRule`/`editRule`'s hourly windows are
+   * sized for. A 60-second window (rather than this file's usual 900/3600)
+   * matches that interactive, bursty usage pattern directly, while still
+   * being a real backstop against a scripted flood — a genuine slider drag
+   * cannot realistically exceed a few requests per second even at native
+   * `input[type=range]` event-firing rates.
+   */
+  previewRule: {
+    ip: { limit: 240, windowSeconds: 60 },
+    email: { limit: 150, windowSeconds: 60 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

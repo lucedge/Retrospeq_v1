@@ -34,6 +34,10 @@ vi.mock('server-only', () => ({}));
  *    `confirmed_at is null`").
  * 3. Coverage-gap detection on a genuine steady-state (non-first) sync,
  *    and cross-account isolation during a multi-account sync scenario.
+ * 4. (Module 04 Slice 3, added 2026-08-24) The "on demand after a sync"
+ *    `operand_distributions` recompute wiring (§12) — a successful
+ *    `runSync` call genuinely writes real `operand_distributions` rows
+ *    for that account's user, not just in a mocked unit test.
  */
 const env = readRlsTestEnv();
 
@@ -331,6 +335,51 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
         20_000,
       );
     },
+  );
+
+  it(
+    'wires the "on demand after a sync" operand_distributions recompute (Module 04 §12) — a successful sync populates real operand_distributions rows for the account\'s user',
+    async () => {
+      if (!env) return;
+      const { input } = loadFixture('simple_daytrades');
+      const user = await createTestAuthUser(env, 'sync-live-distributions-wiring');
+      cleanupUserIds.push(user.id);
+
+      const connectedAt = new Date(earliestFilledAt(input.fills).getTime() - 24 * 3600 * 1000);
+      const { accountId, masterKeyProvider } = await seedAccountWithCredential(db, user.id, input.account, connectedAt);
+
+      // Sanity: nothing exists yet for this brand-new user.
+      const before = await db.query('select count(*)::int as n from retrospeq.operand_distributions where user_id = $1', [user.id]);
+      expect(before.rows[0].n).toBe(0);
+
+      const { createFixtureBrokerAdapter } = await import('@/lib/broker/fixture-adapter');
+      const { runSync } = await import('../sync');
+      const adapter = createFixtureBrokerAdapter({
+        behavior: 'connect_ok',
+        fills: input.fills as unknown as Parameters<typeof createFixtureBrokerAdapter>[0]['fills'],
+      });
+
+      const result = await runSync(accountId, adapter, { trigger: 'connect', masterKeyProvider });
+      expect(result.skipped).toBe(false);
+
+      // `recomputeOperandDistributionsForUser` runs unconditionally after
+      // every successful, non-manual, non-failed sync (this file's own
+      // header + `sync.ts`'s own call-site comment) — one row per
+      // computable operand, REGARDLESS of whether this fixture's trades
+      // happen to be `confirmed` yet (they are not — sync.ts never
+      // confirms a trade, Module 02 §4.6 is a separate transaction). A
+      // real, non-empty distribution ISN'T the point of this test; that
+      // the wiring actually fired or a real DB write happened is.
+      const after = await db.query<{ operand_id: string; n: number }>(
+        `select operand_id, n from retrospeq.operand_distributions where user_id = $1 order by operand_id`,
+        [user.id],
+      );
+      expect(after.rows).toHaveLength(8);
+      // No `confirmed` trades exist yet -> every operand's n is 0, not a
+      // fabricated non-zero count.
+      for (const row of after.rows) expect(row.n).toBe(0);
+    },
+    20_000,
   );
 
   it(

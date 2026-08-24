@@ -22,46 +22,39 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Slice 2 (the authoring pipeline — rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation) **DONE (2026-08-24)** — coded, independently tester-verified (PASS, 3 real gaps found and closed: a genuine two-connection concurrency test, a live-DB test proving `countActiveRules` excludes retired/deactivated_by_plan rows, 3 tests proving no compound expression is smuggleable through the real Server Action boundary), security-reviewed (initial pass **FAILED** on 2 real findings — unconstrained open-set string values reaching stored `rendered` text with no length/charset/array-size bound, and unknown request keys silently stripped instead of rejected per 00-foundation §4.2 — both fixed by `retrospeq-coder` and **re-verified PASS live** by a fresh security-reviewer pass), QA-reviewed **PASS** (all 8 product-fidelity/non-negotiable checks; one minor doc-completeness nit — §1.7's coverage-at-creation deferral wasn't explicitly logged — closed below). `lib/rules/` ~97% line coverage. Slices 3-6 (preview engine, freeze-wiring, severity lifecycle, UI) not started. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Slice 2 (the authoring pipeline — rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation) **DONE (2026-08-24)** — coded, independently tester-verified (PASS, 3 real gaps found and closed), security-reviewed (initial pass **FAILED** on 2 real findings — both fixed and **re-verified PASS live**), QA-reviewed **PASS** (one minor doc-completeness nit closed). `lib/rules/` ~97% line coverage. Slice 3 (the preview engine, §5.8, + `operand_distributions` computation, scoped to the 8 `computableToday: true` operands) **DONE (2026-08-24)** — coded, independently tester-verified **PASS** (312 tests, 95-100% coverage on the 3 new files, confirmed the `risk_pct`→`initial_risk_pct` trap and the 3-way `pre_entry_captured_before_fill` NOT-ANY distinction, confirmed §8.1's "identical counts to a full scan" test exists and passes), security-reviewed **PASS** (7/7 checklist items — confirmed genuine `compare()` reuse with no second comparison implementation, confirmed service-role query scoping and RLS backstop, confirmed rate-limit sanity; one non-blocking note: no unit test mocking the post-sync recompute failure path, code verified correct by direct read), QA-reviewed **PASS** (all 7 focus checks — exact §5.8 guidance copy verbatim, "not enough data yet"/`operand_not_computable` states correctly distinct and never rendered as errors, no red/green anywhere, preview writes nothing, calibration coaching built and product-sane, scope honestly logged). Slices 4-6 (freeze-wiring, severity lifecycle, UI) not started. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Module 04 (Rulebook & Evaluation) Slice 2 — the authoring pipeline —
-is DONE (2026-08-24).** Full gate sequence: coded → independently
-tester-verified (PASS, 3 real gaps found and closed) → security-reviewed
-(**first pass FAILED** on 2 real findings, both fixed by `retrospeq-coder`
-and **re-verified PASS live** by a fresh security-reviewer pass) →
-QA-reviewed (**PASS**, all 8 non-negotiable/product-fidelity checks;
-one doc-completeness nit closed inline below). Files built:
-`lib/rules/render-sentence.ts`,
-`lib/rules/validate-operand-op-value.ts`,
-`lib/rules/validate-tighten-only.ts`,
-`lib/rules/validate-satisfiability.ts`, `lib/rules/validate-tier.ts`,
-`lib/rules/rules-repository.ts`, `lib/entitlements/rules-usage.ts`,
-`app/(app)/rules/actions.ts` (`createRule`/`editRule`, no UI yet).
+**→ Module 04 (Rulebook & Evaluation) Slice 3 is DONE (2026-08-24).**
+Full gate sequence: coded → independently tester-verified PASS →
+security-reviewed PASS → QA-reviewed PASS. Files built:
+`lib/rules/computable-operand-values.ts` (single-trade extraction for the
+8 `computableToday: true` operands), `lib/rules/distributions-repository.ts`
+(fetch/bucket/upsert `operand_distributions`, service-role, "last 200
+trades AND 12 months" windowing), `lib/rules/preview.ts` (`preview(userId,
+operandId, op, value)`, reads-only, reuses `evaluate.ts`'s real `compare()`),
+`app/(app)/rules/actions.ts`'s new `previewRule` Server Action,
+`lib/ingestion/sync.ts`'s new post-sync recompute call, `docs/runbook.md`'s
+new entry. Full report, judgment calls, and test list are in the matching
+2026-08-24 decision log entries below (coder → tester → security-reviewer
+→ qa).
 
-**QA doc-completeness nit, closed here:** §1.7's "applies to 2 of your 4
-strategies" coverage-at-creation warning is deliberately deferred in this
-slice — it needs Module 03's field registry (which strategies capture
-which fields), and Module 03 doesn't exist yet in this repo. No code path
-fabricates a coverage number; `RuleActionResult` simply has no coverage
-field. This is the same "flagged, not silently skipped" treatment as
-`trigger_evaluations` (Slice 1) and will be wired for real once Module 03
-ships (Phase 3).
-
-**Next: Module 04 Slice 3 — the preview engine (§5.8) +
-`operand_distributions` computation.** `preview(operand_id, op, value) →
-{ flagged, n, ratio, guidance }`, reads precomputed buckets (not a table
-scan) so the slider stays under 300ms p95, writes nothing (no evaluation
-records, no adherence impact). Needs: a job/function to populate
-`operand_distributions` (buckets over last 200 trades / 12 months per
-operand) from `trades`, and the preview read path itself. See full
-Slice 2 gate history in the 2026-08-24 decision log entries below
-(coder → tester → security-reviewer FAIL → coder fix → security-reviewer
-PASS → qa PASS).
+**Next: Module 04 Slice 4 — freeze-wiring (§5.4, §7.1).** The full
+cross-trade `TradeFacts` assembly for the other 30 `computableToday: false`
+operands (day/week aggregation, streak counts, T1 position-snapshot data
+where available), wired into Module 02's confirm/freeze transaction
+(`lib/ingestion/confirm.ts` "owns the freeze trigger" per Module 04 §13) so
+`rule_evaluations` rows actually get written and frozen at close-out —
+this is where the hard-adherence number starts being real instead of
+theoretical. Also needs `adherence_weekly` materialization (§5.6) and
+session-rule attachment ("Max 3 trades per day... attach the break to the
+fourth trade," §5.4). This is the single most trust-sensitive slice in
+Module 04 — "rule evaluations freeze at close-out and are never
+recomputed retroactively" is a non-negotiable, not a suggestion.
 
 **What was built (Slice 1):**
 
@@ -3830,7 +3823,7 @@ the owner — never fake it, always flag it."
 
 ## Infra gaps (tracked, not blocking on code)
 
-- [ ] No Vercel project for Retrospeq. Owner needs to create one and either connect this repo via Vercel's GitHub integration or supply a deploy token.
+- [ ] No Vercel project for Retrospeq. Owner needs to create one and either connect this repo via Vercel's GitHub integration or supply a deploy token. **Blocks a real nightly job** (added 2026-08-24, Module 04 Slice 3): §12's "`operand_distributions` recompute nightly and on demand after a sync" only has its "on demand after a sync" half built (`lib/ingestion/sync.ts`'s `runSync` calls `recomputeOperandDistributionsForUser` after every successful sync, best-effort — see `docs/runbook.md`'s new entry for the failure mode). Nightly recompute needs a real cron/scheduler surface this repo doesn't have yet — not stubbed, per AGENTS.md's "never fake it."
 - [x] ~~No Supabase project for Retrospeq~~ — **dev/test only, as of 2026-08-20, and now actually verified, not just configured.** Sharing the existing LuceEdge project (`vbuzudbipftgsuosreuy`), isolated via a dedicated `retrospeq` Postgres schema — see `docs/adr/0002-shared-dev-supabase-project.md`. `.env.local` has the URL, keys, and `SUPABASE_DB_URL` (direct connection). The `retrospeq` schema has been created for real (`20260819010000_init_schema.sql` applied and confirmed via `information_schema`). **Still open, not closed by this:** a dedicated paid-tier project is required before real launch (00-foundation §1.1) — this only unblocks local RLS/migration verification.
 - [ ] No external KMS account (AWS KMS / GCP KMS / equivalent) for the envelope-encryption master key. Cannot be created by an agent — needs owner action.
 - [x] ~~No git remote for this repo~~ — **resolved**, `origin` now points at `https://github.com/lucedge/Retrospeq_v1.git` (a dedicated repo, not the LuceEdge one — confirmed 2026-08-20). **New, smaller gap:** `git push` to `origin main` is being blocked in this environment by a local permission-system classifier (not a git/GitHub-side rejection — the command was denied before it ran). Commits are landing locally and are safe; they are not reaching the remote. Flagged for the owner to check the permission/auto-mode settings for this session type if pushes are expected to go through automatically per the autonomy policy above.
@@ -3845,6 +3838,297 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-24 — **Module 04 Slice 3 (the preview engine, §5.8, +
+  `operand_distributions` computation) — coded by `retrospeq-coder`, NOT
+  yet independently tester/security/QA-reviewed.** Read Module 04 §5.8
+  (preview engine), §3.1 (`operand_distributions` DDL, already existing
+  from Slice 1), §12 (performance budgets), §1's stories 1.2/1.3, plus
+  `lib/rules/operand-catalogue.ts`'s own header (the `computableToday`
+  accounting) in full before writing any code.
+
+  **Files built:**
+  - `lib/rules/computable-operand-values.ts` — single-trade operand-value
+    extraction for exactly the 8 `computableToday: true` operands
+    (`risk_pct`, `day_of_week`, `hold_seconds`, `stop_set_at_entry`,
+    `peak_risk_vs_planned`, `held_past_stop`, `instrument`,
+    `pre_entry_captured_before_fill`). `risk_pct` reads
+    `trades.initial_risk_pct`, NOT the peak `trades.risk_pct` — the
+    documented trap the dispatch named explicitly, gotten right and
+    tested. `pre_entry_captured_before_fill` implements the real
+    `NOT ANY(trade_captures.captured_late)` semantics (via a SQL
+    `bool_or` aggregate in `distributions-repository.ts`, not a JS loop)
+    — `null` (operand-missing) when a trade has ZERO `pre_entry` capture
+    rows, never conflated with "captured, none late." `decimal.js`
+    throughout, including `peak_risk_vs_planned`'s division (verified by
+    a test that a native-JS-hostile division — `0.3 / 0.1` — stays
+    exact).
+  - `lib/rules/distributions-repository.ts` — `fetchTradesForDistributions`
+    (confirmed trades, last 12 months AND last 200, whichever is
+    tighter — see this file's own header for the exact windowing
+    judgment call, below), `fetchPreEntryCaptureSummaries`,
+    `buildOperandDistribution`/`computeAllOperandDistributions` (pure,
+    no I/O — numeric bucketed at the operand's own `bounds.step`, bool
+    always exactly two buckets, pick_one/pick_many one bucket per
+    distinct value), `upsertOperandDistributions`,
+    `recomputeOperandDistributionsForUser` (the orchestrating function
+    `sync.ts` now calls). Runs under `withServiceRoleConnection`
+    (`operand_distributions` is service-role-write-only per Slice 1's own
+    RLS reasoning) — every query explicitly scoped to the caller-supplied
+    `userId`, matching ADR 0005's caveat. **Every bind is a parameter,
+    including the window/limit constants** — no string interpolation into
+    SQL anywhere, verified by reading the file, not just by the
+    non-negotiables list.
+  - `lib/rules/preview.ts` — `preview(userId, operandId, op, value) →
+    PreviewResult`. Issues exactly ONE query (`select buckets, n from
+    operand_distributions where user_id = $1 and operand_id = $2`) via
+    `withUserConnection` (real RLS, owner-SELECT-only) — never a `trades`
+    scan. Every bucket is checked through `evaluate.ts`'s own exported
+    `compare()`, weighted by bucket count — §5.3's "one code path" is
+    literal here, not just prose (verified by a `vi.spyOn` test proving
+    the real function is actually called). §5.8's guidance table
+    implemented boundary-for-boundary (`ratio === 0`, `> 0.35`, `< 0.06`,
+    else), each boundary value itself tested to land in the CORRECT
+    band, not just the open intervals. `n < 20` short-circuits to the
+    exact §5.8 "no history yet" copy without ever computing a ratio.
+    **Two distinct, never-conflated "can't produce a ratio" states**
+    (this slice's own explicit requirement, echoing AGENTS.md's "not
+    enough data yet is a correct, intended state"): `operand_not_computable`
+    (a `computableToday: false` operand — a BUILDER-scope gap, no
+    distribution is ever computed for it, regardless of trade count) vs.
+    `insufficient_history` (a computable operand, but `n < 20` — a
+    DATA-volume gap the trader can actually fix by trading more). Tested
+    that the two states can never be produced by the same code path.
+    Calibration coaching (§5.8's worked example) is an optional field,
+    fires only when ratio > 0.35 and a median is computable (see the
+    judgment-call note below). **`preview()` writes nothing, ever** —
+    proven three ways: (1) a unit test scanning every mocked SQL call
+    across all three outcome states for INSERT/UPDATE/DELETE keywords,
+    (2) a fast-check property test fuzzing operand/op/value/bucket shape
+    across 100 runs with the same assertion, (3) the `operand_not_computable`
+    path proven to issue NO database call at all.
+  - `app/(app)/rules/actions.ts`'s new `previewRule` Server Action —
+    session + rate-limit + the SAME `validateOperandOpValue` whitelist
+    `createRule`/`editRule` use (reused, not reinvented), no
+    `revalidatePath` (read-only).
+  - `lib/rate-limit/config.ts`'s new `previewRule` scope — deliberately
+    the loosest, shortest-window budget in that file (240/60s per IP,
+    150/60s per user), reasoned explicitly against the interactive-slider
+    usage pattern rather than copied from `createRule`/`editRule`'s
+    hourly windows.
+  - `lib/ingestion/sync.ts`'s `runSync` now calls
+    `recomputeOperandDistributionsForUser(account.user_id)` immediately
+    after `writeSyncOutcome` commits — the real "on demand after a sync"
+    half of §12. Deliberately non-blocking/best-effort (a recompute
+    failure must never turn an already-committed successful sync into a
+    reported failure) — logged loudly on failure
+    (`console.error`), never swallowed silently. **Nightly recompute is
+    explicitly NOT built** — no cron/scheduler infra exists in this repo
+    yet, and per AGENTS.md's "never fake it" no stub trigger was written
+    for it. Flagged in both `docs/runbook.md` (new "operand_distributions
+    recompute failing after a sync" entry, alerting shape) and
+    PROGRESS.md's "Infra gaps" list (appended to the existing "No Vercel
+    project" bullet rather than creating a duplicate entry — checked
+    first, per this slice's own dispatch instruction).
+  - `lib/supabase/__tests__/service-role-inventory.test.ts`'s allowlist
+    updated for `lib/rules/distributions-repository.ts`'s new
+    `withServiceRoleConnection` call site — a mandatory companion to any
+    new service-role call, per that test's own "no unreviewed addition"
+    rule (Module 01 §7.2). Caught by running the full suite before
+    considering this slice finished, not assumed clean.
+
+  **Judgment calls, made explicitly, not silently:**
+  - **Bucket-windowing** (`operand_distributions`'s own DDL comment: "over
+    the last 200 trades / 12 months" — genuinely ambiguous, joined by a
+    slash, not AND/OR): read as the MORE restrictive of the two combined
+    (`opened_at >= now() - 12 months` AND `order by opened_at desc limit
+    200`), not either alone. Reasoning documented inline in
+    `distributions-repository.ts`'s own header. Not an ADR — this fills a
+    genuine spec ambiguity, not a deliberate departure from a stated
+    00-foundation convention.
+  - **Calibration-message format** (§5.8's worked example: "At 1.0% you'd
+    have flagged 40 of 90. Your median risk is 1.4% ... Try 2.0%?"): this
+    slice's own dispatch explicitly allowed a reasonable format rather
+    than the exact template. Implemented as: numeric/duration/rating
+    operands only (no median for bool/pick_one/pick_many), fires only
+    when the candidate ratio is already in the `> 0.35` "too often" band
+    (echoing the worked example's own framing), suggests one bucket step
+    LOOSER than the trader's own weighted median in the operand's own
+    tighten/loosen direction, bounded to the operand's declared range.
+    Documented inline in `preview.ts`'s own `calibrationCoaching` header.
+    Not an ADR, same reasoning as the windowing call above.
+  - **`recomputeOperandDistributionsForUser` is NOT one atomic
+    transaction** (fetch trades, fetch captures, and each operand's
+    upsert are separate `withServiceRoleConnection` calls, not one big
+    transaction) — a deliberate simplification, documented in that file's
+    own header: unlike `rule_evaluations`, `operand_distributions` is an
+    idempotent, self-overwriting CACHE, not a trust-sensitive record; a
+    partial failure leaves some operands stale until the next recompute,
+    never corrupted or double-counted.
+
+  **Explicitly OUT of scope, per this slice's own dispatch (Slice 4's
+  job):** the full cross-trade `TradeFacts` assembly for the other 30
+  `computableToday: false` operands (day/week-state aggregation, T1
+  position-snapshot data, Module 03/06 dependencies), wiring evaluation
+  into Module 02's confirm/freeze transaction (§5.4/§7.1), nightly
+  recompute (blocked on real cron infra, flagged not faked), any UI
+  (§5.8's slider/preview markup is Slice 6's job).
+
+  **Tests:** 5 new test files (`computable-operand-values.test.ts` — 35
+  tests, one per extractor including the two documented traps;
+  `distributions-repository.test.ts` — 20 tests, bucketing +
+  §8.1's "identical counts to a full scan" proven directly against the
+  REAL `fixtures/golden/*/expected.json` trade arrays, not a synthetic
+  dataset; `preview.test.ts` — 18 tests, every guidance boundary,
+  both "no ratio" states, the `compare()` reuse proof, the "no writes"
+  proof; `preview.property.test.ts` — 2 fast-check property tests, 100
+  runs each; `distributions-repository.live.test.ts` — 4 live-DB tests
+  against the real shared dev Supabase project, including a real
+  `preview()` round trip against a live-recomputed distribution row) plus
+  one new live-DB test appended to `sync.live.test.ts` proving the
+  post-sync wiring fires for real (real `operand_distributions` rows
+  exist after a real `runSync` call). Full repo suite: **1285 passed /
+  13 skipped / 0 failed** (108 test files), `npx tsc --noEmit` /
+  `npx eslint .` / `npm run build` all clean. `lib/rules/` coverage
+  96.1% lines / 88.47% branches / 97.72% funcs (the two new files:
+  `computable-operand-values.ts` 100%/97.43%/100%, `preview.ts`
+  97.29%/79.31%/100%, `distributions-repository.ts` 94.4%/87.75%/100% —
+  remaining gaps are defensive/unreachable-by-design branches, same
+  class as `render-sentence.ts`'s own already-accepted exhaustiveness
+  dead branches from Slice 2).
+
+  **No ADR written this slice** — reviewed both judgment calls above
+  against whether either is a deliberate deviation from a stated
+  00-foundation convention; neither is (both fill genuine spec
+  ambiguities Module 04 itself left open). **Not marked done in this
+  ledger** — per AGENTS.md, that is `retrospeq-qa`'s call, gated on the
+  tester/security-reviewer passes this entry explicitly says have not
+  happened yet.
+
+- 2026-08-24 — **Module 04 Slice 3 (preview engine + `operand_distributions`)
+  — independently `retrospeq-tester`-verified: PASS, no real gaps found,
+  nothing closed (the coder's own suite already hit every required case).**
+  Read Module 04 §5.8, §3.1, §8.1, §12 fresh, then verified each of the
+  8 focus items independently rather than re-trusting the coder's own
+  claims:
+  1. **Both documented traps genuinely covered.** `extractRiskPct`
+     reads `trades.initial_risk_pct` — confirmed with a fixture where
+     `initialRiskPct='1.5'`/`riskPct='4.2'` differ and the extracted
+     value is `1.5`; a reversal to the peak column would fail this test.
+     `extractPreEntryCapturedBeforeFill` has all three distinct cases
+     tested: zero-capture-rows → `null` (both a `null` summary and an
+     explicit `{count:0}` summary), any-late → `false`, none-late →
+     `true`.
+  2. **§8.1's "identical counts to a full scan" bullet is a real test,
+     not a weak one.** `distributions-repository.test.ts` computes
+     `flagged`/`n` two independent ways — via `buildOperandDistribution`'s
+     buckets (the real preview code path) and via a genuine per-trade
+     full scan with no bucketing at all — against the REAL
+     `fixtures/golden/*/expected.json` trade arrays (all 8 fixtures,
+     verified non-empty), across 8 operand/op/value combinations. Ran it
+     myself; passes.
+  3. **`preview()` writes nothing, verified independently, not just
+     trusted.** Beyond the coder's `vi.spyOn` claim on `compare()`
+     reuse, `preview.test.ts` and `preview.property.test.ts` regex-scan
+     the literal SQL text of every mocked `client.query()` call across
+     all three outcome states (and 100 fast-check fuzz runs) asserting
+     no `insert|update|delete` keyword ever appears and every call is
+     `select`-shaped. This is a real assertion on the actual query text,
+     not a behavioral inference.
+  4. **`operand_not_computable` vs `insufficient_history` cannot be
+     confused.** `daily_loss_pct` (computableToday: false) returns
+     `operand_not_computable` and issues zero database calls regardless
+     of op/value (property-tested). A computable operand with no
+     distribution row yet returns `insufficient_history` with `n: 0`,
+     never a crash, never the not-computable state.
+  5. **Guidance boundaries re-derived from §5.8's table independently
+     and checked against the implementation:** `ratio === 0`, `> 0.35`
+     (0.36 crosses, 0.35 itself stays in "else"), `< 0.06` (0.05 crosses,
+     0.06 itself stays in "else"), mid-range "else" (0.20) — all five
+     boundary conditions match the spec table exactly, code and tests
+     agree.
+  6. **Bucket width uses the operand's own `bounds.step`, anchored to
+     `bounds.min`** (verified for `risk_pct`'s 0.1 step, `hold_seconds`'
+     10s step) — not an arbitrary resolution. Bool buckets are always
+     exactly `{true, false}` even with a zero-count side; pick_one/
+     pick_many bucket exactly one entry per distinct observed value, no
+     merging.
+  7. **Post-sync wiring is real.** `runSync` calls
+     `recomputeOperandDistributionsForUser` only after
+     `writeSyncOutcome` (i.e., only on a real, non-`manual`, non-fetch-
+     failed sync attempt — the early-return `catch` block for a failed
+     `adapter.fetchHistory()` never reaches this line), wrapped in its
+     own `try/catch` that logs via `console.error` and does not rethrow
+     — a recompute failure cannot fail the sync. Confirmed live: the
+     coder's `sync.live.test.ts` addition runs a real `runSync` against
+     the shared dev Postgres and asserts real `operand_distributions`
+     rows exist afterward; I re-ran it myself (real DB, not mocked) and
+     it passed.
+  8. **`previewRule`'s rate limit (240/60s IP, 150/60s email) is
+     correctly the loosest, shortest-window scope in `lib/rate-limit/
+     config.ts`** — meaningfully more generous than the mutating
+     `createRule`/`editRule` scopes (30/3600s, 25/3600s), appropriate for
+     an interactive slider. No bug found.
+
+  **Independently re-run, not just re-confirmed from the coder's claim:**
+  `npx tsc --noEmit` clean, `npx eslint .` clean (19 pre-existing
+  unrelated warnings, 0 errors), `npm run build` succeeds (only
+  pre-existing Node-20-deprecation warnings from `@supabase/supabase-js`,
+  unrelated to this slice). Scoped `vitest run lib/rules --coverage`:
+  **14 files, 263 passed, 0 failed**, coverage on this slice's 3 new
+  files — `computable-operand-values.ts` 100% lines/97.43% branches,
+  `distributions-repository.ts` 95.1% lines/89.79% branches,
+  `preview.ts` 97.29% lines/79.31% branches — all clear the 90%-line
+  bar; `lib/rules/` overall 96.16% lines. The uncovered lines in each
+  (distributions-repository.ts:244-247/265-267, preview.ts:94-95/150)
+  are genuinely defensive/type-exhaustiveness branches unreachable
+  through any real `computableToday: true` catalogue entry today (no
+  numeric operand lacks `bounds`, no v1 computable operand is
+  `clock_time`), not functional gaps. Wider scoped run (`lib/rules`,
+  `app/(app)/rules`, `sync.live.test.ts`, `service-role-inventory.test.ts`,
+  17 files) including all live-DB tests against the real shared dev
+  Postgres: **312 passed, 1 skipped (an unrelated nested skip-guard
+  inside `sync.live.test.ts`), 0 failed.**
+
+  **Not independently re-verified this pass (out of this slice's scope,
+  not a gap in it):** `operand_distributions`' own table-level RLS
+  cross-user isolation — that is Slice 1's `rulebook-schema.rls.test.ts`
+  (already existing, not re-run here since Slice 3 adds no new table and
+  no new RLS policy). No E2E/screenshot check was performed because this
+  slice, by its own explicit scope boundary, ships no UI — no `/rules`
+  route exists yet (confirmed by `npm run build`'s route list) and §5.8's
+  slider markup is Slice 6's job; the E2E-plus-screenshot requirement in
+  00-foundation §9 applies once that UI lands, not to this backend-only
+  slice.
+
+  **Verdict: yes, ready for `retrospeq-security-reviewer`.** All 8
+  focus items hold up under independent re-derivation and re-execution,
+  not just re-reading the coder's own tests. No production bug found; no
+  test gap required closing.
+
+- 2026-08-24 — **Closing a ledger gap found while writing the Slice 3
+  entry above: Module 04 Slice 2's security-reviewer re-verification PASS
+  and QA-reviewed PASS were never given their own decision-log entries —
+  they existed only in the "Current task" section's prose, which Slice 3
+  then overwrote.** Recorded here so the history survives, not because
+  either review is new work. `retrospeq-security-reviewer` re-verified
+  the two fixes from the FAIL pass (2026-08-24, entry below) live against
+  the real DB — both closed, no new findings, **PASS**.
+  `retrospeq-qa` then reviewed Slice 2 against all 8 of Module 04's
+  product-fidelity/non-negotiable checks (no compound rules, tighten-only
+  copy matches §5.2's exact rejection message, entitlement messaging,
+  severity always starts soft, `rendered` sentence storage, RLS
+  untouched, decimal.js throughout, no red/green anywhere reachable) —
+  **PASS**, one minor doc-completeness nit: §1.7's "applies to 2 of your
+  4 strategies" coverage-at-creation warning is deliberately deferred
+  (needs Module 03's field registry, which doesn't exist in this repo
+  yet) but that deferral hadn't been explicitly logged anywhere. Closed
+  by confirming no code path fabricates a coverage number
+  (`RuleActionResult` simply has no coverage field) — the same
+  "flagged, not silently skipped" treatment Slice 1 already established
+  for `trigger_evaluations`, to be wired for real once Module 03 ships
+  (Phase 3). This closure is what the Phase-status table's "one minor
+  doc-completeness nit ... closed below" sentence refers to.
 
 - 2026-08-24 — `retrospeq-coder` fixes for `retrospeq-security-reviewer`'s
   blocking FAIL on Module 04 Slice 2 (the rule authoring pipeline). Two

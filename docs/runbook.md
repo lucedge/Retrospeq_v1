@@ -504,3 +504,63 @@ resolution and in-place block extension are both future work) — that is
 a real product gap this entry exists to make visible, not routine noise,
 and should inform whether in-place block extension or gap-resolution
 tooling gets prioritized before Module 02 is considered complete.
+
+---
+
+## `operand_distributions` recompute failing after a sync
+
+**Source:** Module 04 §12 — "`operand_distributions` recompute nightly
+and on demand after a sync — this is what keeps preview interactive."
+Owning code: `lib/rules/distributions-repository.ts`'s
+`recomputeOperandDistributionsForUser`, called from `lib/ingestion/sync.ts`'s
+`runSync` immediately after `writeSyncOutcome` commits.
+
+**What this means operationally:** the "on demand after a sync" recompute
+is wired as a best-effort, non-blocking side effect of a successful sync —
+deliberately: a recompute failure must never turn a genuinely successful
+sync (fills/blocks/trades already committed by the time this runs) into a
+reported sync failure. This means a recompute failure is, by construction,
+INVISIBLE to the trader and to `sync_runs.status` — `runSync` still
+returns its normal `RunSyncResult` either way. The only trace is a
+`console.error` line prefixed `[sync] operand_distributions recompute
+failed after sync for user <id> (account <id>, syncRunId <id>)`. Left
+unaddressed, this trader's `operand_distributions` rows silently go stale:
+`preview()` (`lib/rules/preview.ts`) keeps serving whatever it last
+computed (possibly nothing, if this was their first-ever sync), which
+reads to the trader as "preview isn't updating," not as an error — exactly
+the kind of silent staleness AGENTS.md's "never fake it" instinct exists
+to surface rather than let ride.
+
+**Nightly recompute is NOT built** — no cron/scheduler infra exists in
+this repo yet (PROGRESS.md "Infra gaps," the standing "No Vercel project
+for Retrospeq" entry), and per AGENTS.md a fake/stubbed trigger was not
+written as a placeholder. Until nightly exists, a sync-time failure is the
+ONLY way a trader's distributions get refreshed at all — there is
+currently no independent safety net that would catch up a trade confirmed
+without a following sync (e.g. via the 7-day auto-confirm sweep,
+`confirm.ts`'s `autoConfirmStaleTrades`, which itself never triggers a
+recompute either).
+
+**How to check:** until a dashboard/alerting pipeline exists (same
+standing gap every other entry in this file notes), grep application logs
+for `[sync] operand_distributions recompute failed after sync` — every
+occurrence names the affected `user_id`/`account_id`/`syncRunId`
+directly. A quick live check for a specific trader: compare
+`operand_distributions.computed_at` against that account's most recent
+`sync_runs.finished_at` — a `computed_at` meaningfully older than the
+latest successful sync means either this recompute failed, or (for a
+brand-new account) it has simply never run yet.
+
+**Action:** an isolated failure (a transient DB hiccup during the
+recompute's own reads/writes) self-heals on the NEXT successful sync,
+since `recomputeOperandDistributionsForUser` always recomputes the FULL
+current window, not an incremental delta — no backlog to work through, no
+lost data. Investigate if the SAME trader's recompute fails repeatedly
+across multiple syncs (a real, persistent bug, not a blip), or if this
+error appears across many traders at once (likely a `retrospeq.trades`/
+`retrospeq.trade_captures` schema or connectivity issue affecting
+`fetchTradesForDistributions`/`fetchPreEntryCaptureSummaries` broadly,
+worth checking before assuming it's isolated). Building nightly recompute
+(once real scheduler infra exists) would also close the "no independent
+safety net" gap this entry names above — worth prioritizing once a
+Vercel project/cron surface exists, not before.

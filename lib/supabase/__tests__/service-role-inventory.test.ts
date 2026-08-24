@@ -155,6 +155,22 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // interaction this relies on. Every query in both phase-2 bodies is
   // explicitly scoped to already phase-1-validated trade/account ids.
   'lib/ingestion/split-join.ts',
+  // Module 04 Slice 3 (§5.8/§12 preview engine + operand_distributions
+  // recompute): `operand_distributions` is materialised, service-role-
+  // write-only per Slice 1's own RLS reasoning ("owner SELECT only,
+  // materialised, service-role-only writes" — matches `adherence_weekly`'s
+  // identical shape). This file's reads of `trades`/`trade_captures` also
+  // run under the service role rather than `withUserConnection`, for the
+  // same reason `sync.ts`/`confirm.ts` do: it must be callable from a
+  // trusted backend context with no live user session (the "on demand
+  // after a sync" call site, `lib/ingestion/sync.ts`'s own `runSync`, has
+  // no request-scoped session to attach to `withUserConnection` — only an
+  // `account.user_id` resolved from a row it already loaded). Every query
+  // is explicitly scoped to the caller-supplied `userId` (`fetchTradesForDistributions`/
+  // `fetchPreEntryCaptureSummaries`/`upsertOperandDistributions` all bind
+  // `$1 = userId` directly, never trusting RLS to narrow it), matching
+  // ADR 0005's "every query inside `fn` MUST filter explicitly" caveat.
+  'lib/rules/distributions-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

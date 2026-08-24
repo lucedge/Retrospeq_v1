@@ -29,6 +29,7 @@ import {
   insertRuleAndVersion,
   applyRuleEdit,
 } from '@/lib/rules/rules-repository';
+import { preview, type PreviewResult } from '@/lib/rules/preview';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -485,4 +486,63 @@ export async function editRule(ruleId: string, newValue: unknown): Promise<RuleA
       error: { code: 'RULE_EDIT_INTERNAL', user_message: 'Something went wrong saving your change. Please try again.', retryable: true },
     };
   }
+}
+
+// ---------------------------------------------------------------------
+// previewRule — Module 04 §5.8, Slice 3
+// ---------------------------------------------------------------------
+
+/**
+ * Wraps `lib/rules/preview.ts`'s `preview()` for the future rule-editor
+ * screen's live slider (§6.1's reference markup: "Live, read-only. Writes
+ * nothing."). Same shared plumbing (`requireSessionAndRateLimit`,
+ * `.strictObject`, `validateOperandOpValue`) as `createRule`/`editRule`
+ * above, deliberately reused rather than re-invented — the ONE real
+ * difference is the rate-limit scope (`previewRule`, a 60-second window,
+ * see `lib/rate-limit/config.ts`'s own header on that scope for why) and
+ * that this action performs NO write of its own beyond the read-only
+ * `preview()` call — no `revalidatePath`, nothing.
+ *
+ * `operand_id`/`op`/`value` are validated via the SAME
+ * `validateOperandOpValue` whitelist `createRule` uses (this slice's own
+ * dispatch: "reuse validateOperandOpValue/getOperand, don't reinvent") —
+ * an invalid triple never reaches `preview()` at all.
+ */
+export interface PreviewRuleInput {
+  operandId: string;
+  op: string;
+  value: unknown;
+}
+
+export interface PreviewRuleActionState {
+  fieldErrors?: Partial<Record<string, string[]>>;
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  preview?: PreviewResult;
+}
+
+const previewRuleInputSchema = z.strictObject({
+  operandId: z.string().min(1, 'Choose a rule type.'),
+  op: ruleOperatorSchema,
+  value: z.unknown(),
+});
+
+export async function previewRule(input: PreviewRuleInput): Promise<PreviewRuleActionState> {
+  const user = await requireSessionAndRateLimit('previewRule');
+  if (isErrorState(user)) return user;
+
+  const parsed = previewRuleInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { fieldErrors: issuesToFieldErrors(parsed.error.issues) };
+  }
+  const { operandId, op, value } = parsed.data;
+
+  try {
+    validateOperandOpValue(operandId, op, value);
+  } catch (err) {
+    return structuralValidationErrorState(err);
+  }
+
+  const result = await preview(user.id, operandId, op, value);
+  return { success: true, preview: result };
 }

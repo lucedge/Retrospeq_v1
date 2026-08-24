@@ -27,6 +27,7 @@ import { computeTradeFacts, type TradeFactsMember } from './trade-facts';
 import { computeServerDay } from './server-day';
 import { matchArmEvent, type ArmDirection, type CandidateEntryFill } from './arm-matching';
 import { lockPreEntryCaptures } from './trade-captures';
+import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -1153,5 +1154,34 @@ export async function runSync(
     };
   }
 
-  return writeSyncOutcome(account, options.trigger, windowFrom, windowTo, fills, lastWindowTo === null);
+  const result = await writeSyncOutcome(account, options.trigger, windowFrom, windowTo, fills, lastWindowTo === null);
+
+  // Module 04 §12: "operand_distributions recompute nightly and on demand
+  // after a sync — this is what keeps preview interactive." Nightly is
+  // NOT built here (no cron/scheduler infra exists in this repo yet, see
+  // PROGRESS.md "Infra gaps" — AGENTS.md's "never fake it" forbids
+  // stubbing a fake trigger for it); this is the real "on demand after a
+  // sync" half. Deliberately NON-BLOCKING and best-effort, matching this
+  // file's own precedent for a post-write side effect that must never
+  // turn a genuinely successful sync into a reported failure (the sync
+  // itself already committed inside `writeSyncOutcome`'s own transaction
+  // by the time this runs) — logged loudly on failure, never swallowed
+  // silently, per `docs/runbook.md`'s new "operand_distributions recompute
+  // failed after sync" entry. Runs unconditionally for every non-skipped
+  // sync attempt (`writeSyncOutcome` is only ever reached for a real,
+  // non-`manual`-account sync that didn't fail before fetching fills) —
+  // even a zero-new-fills resync is cheap to recompute and keeps this
+  // simple, rather than trying to predict which resyncs could possibly
+  // have moved a trade into the confirmed/last-200/12-month window this
+  // trader's distributions are drawn from.
+  try {
+    await recomputeOperandDistributionsForUser(account.user_id);
+  } catch (err) {
+    console.error(
+      `[sync] operand_distributions recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; the preview engine will read stale distributions until the next successful recompute:`,
+      err,
+    );
+  }
+
+  return result;
 }

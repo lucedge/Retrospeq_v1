@@ -32,6 +32,7 @@ const {
   fetchCurrentRuleForEditMock,
   insertRuleAndVersionMock,
   applyRuleEditMock,
+  previewMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -44,6 +45,7 @@ const {
   fetchCurrentRuleForEditMock: vi.fn(),
   insertRuleAndVersionMock: vi.fn(),
   applyRuleEditMock: vi.fn(),
+  previewMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -72,9 +74,12 @@ vi.mock('@/lib/rules/rules-repository', async (importOriginal) => {
     applyRuleEdit: applyRuleEditMock,
   };
 });
+vi.mock('@/lib/rules/preview', () => ({
+  preview: previewMock,
+}));
 vi.mock('server-only', () => ({}));
 
-const { createRule, editRule } = await import('../actions');
+const { createRule, editRule, previewRule } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleEditConflictError, RuleNotEditableError } = await import('@/lib/rules/rules-repository');
 
@@ -92,6 +97,7 @@ beforeEach(() => {
   fetchCurrentRuleForEditMock.mockReset();
   insertRuleAndVersionMock.mockReset().mockResolvedValue({ ruleId: 'rule-new-1', version: 1 });
   applyRuleEditMock.mockReset();
+  previewMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -408,5 +414,84 @@ describe('editRule', () => {
     applyRuleEditMock.mockResolvedValue({ newVersion: 2 });
     await editRule(RULE_ID, 1);
     expect(canForUserMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// previewRule — Module 04 §5.8, Slice 3
+// ---------------------------------------------------------------------
+describe('previewRule', () => {
+  it('validates operand_id/op/value via the SAME validateOperandOpValue whitelist createRule uses, before calling preview()', async () => {
+    const result = await previewRule({ operandId: 'not_a_real_operand', op: 'lte', value: 1 });
+    expect(result.error?.code).toBe('UNKNOWN_OPERAND');
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed op for the operand type, before calling preview()', async () => {
+    const result = await previewRule({ operandId: 'risk_pct', op: 'is_true', value: true });
+    expect(result.error?.code).toBe('INVALID_OP_FOR_TYPE');
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a value outside declared bounds, before calling preview()', async () => {
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 999 });
+    expect(result.error?.code).toBe('INVALID_VALUE_SHAPE');
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('calls preview() with the authenticated user id and the validated triple, on success', async () => {
+    previewMock.mockResolvedValue({
+      operandId: 'risk_pct',
+      state: 'flagged',
+      flagged: 14,
+      n: 90,
+      ratio: 0.1556,
+      guidance: 'Tight enough to matter, loose enough to keep.',
+    });
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 });
+    expect(previewMock).toHaveBeenCalledWith(FAKE_USER.id, 'risk_pct', 'lte', 1.5);
+    expect(result.success).toBe(true);
+    expect(result.preview).toEqual(
+      expect.objectContaining({ state: 'flagged', flagged: 14, n: 90 }),
+    );
+  });
+
+  it('passes through the insufficient_history state from preview() unchanged', async () => {
+    previewMock.mockResolvedValue({
+      operandId: 'risk_pct',
+      state: 'insufficient_history',
+      n: 4,
+      guidance: "No history yet — we'll refine this once you've logged 20 trades.",
+    });
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 });
+    expect(result.preview?.state).toBe('insufficient_history');
+  });
+
+  it('never calls revalidatePath — preview is read-only', async () => {
+    previewMock.mockResolvedValue({ operandId: 'risk_pct', state: 'insufficient_history', n: 0, guidance: 'x' });
+    await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 });
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+  });
+
+  it('is rate-limited independently of createRule/editRule (RULE_RATE_LIMITED on exceed)', async () => {
+    enforceRateLimitMock.mockRejectedValueOnce(new RateLimitExceededError('previewRule', 'ip:1.2.3.4', 60));
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 });
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unrecognised session the same way createRule/editRule do', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: { message: 'no session' } });
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 });
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it('strips/rejects unknown top-level keys via .strictObject, matching createRule\'s own compound-expression defence', async () => {
+    previewMock.mockResolvedValue({ operandId: 'risk_pct', state: 'insufficient_history', n: 0, guidance: 'x' });
+    // @ts-expect-error deliberately smuggling an extra field
+    const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5, and: [{ operandId: 'risk_pct', op: 'gte', value: 1 }] });
+    expect(result.fieldErrors).toBeDefined();
+    expect(previewMock).not.toHaveBeenCalled();
   });
 });
