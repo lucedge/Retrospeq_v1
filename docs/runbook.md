@@ -507,6 +507,74 @@ tooling gets prioritized before Module 02 is considered complete.
 
 ---
 
+## `RuleEvaluationError` thrown while freezing rule_evaluations at confirm
+
+**Source:** Module 04 (Rulebook & Evaluation) §8.3 ("Unknown operand_id
+rejected... Malformed op for the operand type rejected" — both loud-
+rejection cases, never resolved to a legitimate outcome) read together
+with §1's own framing ("if [adherence] can be gamed, recomputed, or
+silently rewritten, the entire discipline layer is theatre") and Module
+02's own confirm-transaction posture (never trap a trader unable to
+confirm for a reason outside their control). Owning code:
+`lib/rules/freeze-evaluations.ts`'s `evaluateAndFreezeTradeRules`, called
+from both of `lib/ingestion/confirm.ts`'s confirm loops
+(`confirmDay`/`autoConfirmStaleTrades`).
+
+**What this means operationally:** `lib/rules/evaluate.ts`'s `evaluate()`
+only throws `RuleEvaluationError` for a genuinely malformed
+`{operand_id, op, value}` triple read off a real `rule_versions` row — an
+`operand_id` no longer present in the static catalogue, or an `op`
+structurally invalid for the operand's own type. Since Slice 2's
+authoring pipeline validates both at write time, the only realistic way
+this fires in production is the catalogue itself changing later (an
+operand renamed or removed) while an old `rule_versions` row still
+references the retired id — a data/deploy-ordering problem, not a normal
+trading outcome. When it happens: the anomalous rule gets NO
+`rule_evaluations` row for that trade (never a corrupted or partial row),
+a `console.error` line prefixed `[rule-freeze] ANOMALY evaluating rule
+<ruleId> v<version> against trade <tradeId>` names the exact rule id,
+version, trade id, and the error's own `code`, and — this is the
+deliberate part — **confirmation of the trade and every OTHER eligible
+rule's evaluation proceeds completely normally.** `confirmDay`'s
+`ConfirmDaySuccess.ruleEvaluationAnomalies` / `AutoConfirmResult
+.ruleEvaluationAnomalies` surface every anomaly hit during that call, so
+a caller never has to grep logs to know one occurred.
+
+**Why this never blocks confirmation (the deliberate design choice):**
+unlike a coverage gap or an ambiguous grouping (both trader-actionable —
+resync, or resolve the split/join), a corrupted `rule_versions` row has
+no UI anywhere yet for a trader to fix (retiring a rule doesn't touch its
+already-written old versions; editing writes a NEW version, leaving the
+malformed one's history untouched). Aborting the whole day's confirmation
+over a rule the trader cannot see or fix would trap them indefinitely —
+exactly the failure mode `lib/ingestion/confirm.ts`'s own header already
+rejects for every other guard in that transaction. The cost of this
+choice: `adherence_weekly` (Slice 6) will show one fewer applicable
+evaluation for the affected rule/trade than a fully-healthy system would
+— observably identical to `not_applicable`, except reached through a
+loud, logged, investigable path instead of a silent, legitimate one.
+
+**How to check:** grep application logs for `[rule-freeze] ANOMALY
+evaluating rule` — every occurrence names the affected `ruleId`/
+`ruleVersion`/`tradeId` and the error `code` (`UNKNOWN_OPERAND`,
+`INVALID_OP_FOR_TYPE`, or `INVALID_VALUE_SHAPE`) directly. Cross-reference
+the named `rule_versions` row's `operand_id`/`op`/`value` against
+`lib/rules/operand-catalogue.ts` to see exactly which check it fails.
+
+**Action:** a single isolated occurrence usually means a catalogue edit
+retired/renamed an operand still referenced by an old `rule_versions` row
+— decide whether to backfill-migrate those old rows to the new id (if a
+straightforward rename) or accept the gap (if the operand was removed
+outright, e.g. a v1.1 Firm operand rolled back). If the SAME rule
+produces this on every subsequent confirm, its evaluations will never
+recover on their own (nothing in this slice retries or self-heals a
+malformed version) — worth a data-repair pass rather than waiting.
+Investigate immediately if this appears across MANY different
+`rule_id`s at once (a broken catalogue deploy, not an isolated stale
+row).
+
+---
+
 ## `operand_distributions` recompute failing after a sync
 
 **Source:** Module 04 §12 — "`operand_distributions` recompute nightly

@@ -37,7 +37,7 @@ describe('lib/ingestion/confirm.ts — autoConfirmStaleTrades default `now` (moc
     const result = await autoConfirmStaleTrades();
     const afterCall = Date.now();
 
-    expect(result).toEqual({ tradesConfirmed: [], tradesSkippedStaleBlock: [] });
+    expect(result).toEqual({ tradesConfirmed: [], tradesSkippedStaleBlock: [], ruleEvaluationAnomalies: [] });
     expect(capturedCutoff).toBeDefined();
 
     const cutoffMs = new Date(capturedCutoff!).getTime();

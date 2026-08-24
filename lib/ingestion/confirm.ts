@@ -6,6 +6,7 @@ import {
   findUnrecordedFillsForBlock,
   type InstrumentBlockState,
 } from './sync';
+import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/rules/freeze-evaluations';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.6 — "Confirmation and freeze —
@@ -209,6 +210,13 @@ export interface ConfirmDaySuccess {
   tradesConfirmed: string[];
   dayCloseoutInserted: boolean;
   kind: 'traded' | 'deliberate_no_trade';
+  /** One entry per rule that threw `RuleEvaluationError` while this call's
+   *  own `evaluateAndFreezeTradeRules` was freezing evaluations for one of
+   *  `tradesConfirmed` — never silently dropped (Module 04 §8.3), never
+   *  something that blocks confirmation itself (see
+   *  `lib/rules/freeze-evaluations.ts`'s own header). Empty in the
+   *  overwhelmingly common case. */
+  ruleEvaluationAnomalies: RuleEvaluationAnomaly[];
 }
 
 export interface ConfirmDayCoverageGapRefusal {
@@ -415,6 +423,7 @@ export async function confirmDay(
     // `tradesConfirmed` (the loser's own view of "what I actually
     // confirmed" stays accurate; the winner's does too).
     const tradesConfirmed: string[] = [];
+    const ruleEvaluationAnomalies: RuleEvaluationAnomaly[] = [];
     for (const trade of eligibleTrades) {
       const updateRes = await client.query(
         `update retrospeq.trades
@@ -424,10 +433,14 @@ export async function confirmDay(
       );
       if ((updateRes.rowCount ?? 0) > 0) {
         tradesConfirmed.push(trade.id);
-        // emit trade.confirmed -> Module 04 writes frozen rule_evaluations,
-        // Module 05 admits the trade to findings. DOCUMENTED NO-OP: neither
-        // module exists in this repo yet -- same posture as sync.ts's own
-        // step-10 deferral.
+        // trade.confirmed -> Module 04 writes frozen rule_evaluations,
+        // inside this SAME transaction/client, so a trade is never
+        // confirmed without its evaluations or vice versa (Module 04
+        // Slice 5, §5.4/§7.1). Module 05's "admits the trade to findings"
+        // half remains a DOCUMENTED NO-OP -- that module still doesn't
+        // exist in this repo.
+        const freezeResult = await evaluateAndFreezeTradeRules(client, trade.id, { frozenAt: now });
+        ruleEvaluationAnomalies.push(...freezeResult.anomalies);
       }
     }
 
@@ -449,6 +462,7 @@ export async function confirmDay(
       tradesConfirmed,
       dayCloseoutInserted,
       kind,
+      ruleEvaluationAnomalies,
     };
     return success;
   });
@@ -474,6 +488,11 @@ export interface AutoConfirmResult {
    *  auto-confirmed with stale facts; these remain candidates on the next
    *  sweep. */
   tradesSkippedStaleBlock: string[];
+  /** Same meaning as `ConfirmDaySuccess.ruleEvaluationAnomalies` -- one
+   *  entry per rule that threw `RuleEvaluationError` while freezing
+   *  evaluations for one of `tradesConfirmed`. Never silently dropped,
+   *  never blocks the sweep. */
+  ruleEvaluationAnomalies: RuleEvaluationAnomaly[];
 }
 
 interface AutoConfirmCandidateRow {
@@ -512,7 +531,7 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
     );
     const candidates = candidatesRes.rows;
     if (candidates.length === 0) {
-      return { tradesConfirmed: [], tradesSkippedStaleBlock: [] };
+      return { tradesConfirmed: [], tradesSkippedStaleBlock: [], ruleEvaluationAnomalies: [] };
     }
 
     // Reuse one loadInstrumentBlockState call per (account, instrument)
@@ -561,8 +580,23 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
       confirmedIds = toConfirm.filter((id) => actuallyConfirmed.has(id));
     }
 
+    // trade.confirmed -> Module 04 writes frozen rule_evaluations, same as
+    // confirmDay's own per-trade loop, inside this SAME transaction/client
+    // (Module 04 Slice 5, §5.4/§7.1). This bulk path confirms many trades
+    // in one UPDATE (unlike confirmDay's per-trade loop), so the freeze
+    // step runs in its own loop AFTER `confirmedIds` is known to be the
+    // set this call ACTUALLY won -- a trade this call merely intended to
+    // confirm but lost the race on (excluded from `confirmedIds` above)
+    // must never get evaluations frozen against it here; the caller that
+    // actually won it already will (or already has).
+    const ruleEvaluationAnomalies: RuleEvaluationAnomaly[] = [];
+    for (const tradeId of confirmedIds) {
+      const freezeResult = await evaluateAndFreezeTradeRules(client, tradeId, { frozenAt: now });
+      ruleEvaluationAnomalies.push(...freezeResult.anomalies);
+    }
+
     // No day_closeouts row, ever -- see header's own dedicated paragraph.
 
-    return { tradesConfirmed: confirmedIds, tradesSkippedStaleBlock: skipped };
+    return { tradesConfirmed: confirmedIds, tradesSkippedStaleBlock: skipped, ruleEvaluationAnomalies };
   });
 }

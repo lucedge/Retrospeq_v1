@@ -22,45 +22,353 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. Slices 5-8 (freeze-wiring, adherence_weekly, severity lifecycle, UI) not started. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. Slices 6-8 (`adherence_weekly` materialization, severity lifecycle, UI) not started. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Module 04 Slices 1-4 are all DONE (2026-08-24), full coder → tester →
-security-reviewer → qa gate sequence passed on every one.** Slice 3 and
-Slice 4's own full write-ups (files built, judgment calls, test detail)
-are preserved below for reference. Slice 4 additionally closed
-security-reviewer PASS (8/8 checklist items, including proving the
-service-role allowlist test actually catches an unlisted new call site by
-planting one) and QA PASS (5/5 focus checks — the deferral-as-absent-key
-pattern is spec-consistent, the `logged_within_minutes` defer-vs-guess
-judgment call is sound, the ISO-week ADR documents both why and the
-forward-looking hazard for Slice 6/Module 07, no currency P&L or
-red/green leakage, scope honestly logged) — see the matching 2026-08-24
-decision log entries for both reports in full.
+**→ Module 04 Slice 5 (freeze-wiring, §5.4/§5.5/§5.6/§7.1) is CODED
+(2026-08-24) and tester gate PASS, gap-closure complete (2026-08-25) —
+ready for security-reviewer.** This is
+the slice where `rule_evaluations` rows actually start getting written
+and frozen, making the hard-adherence number real instead of theoretical.
+Full write-up in the 2026-08-24 decision log entry below; the 2026-08-25
+gap-closure addendum (a second tester pass finishing what an earlier
+session-limited pass didn't get to) is right after the original write-up,
+before "Next:". Summary here.
 
-**Next: Module 04 Slice 5 — freeze-wiring (§5.4, §7.1).** Wire
-`evaluate()` (Slice 1) + the combined single-trade (Slice 3) and
-cross-trade (Slice 4) fact assembly into Module 02's confirm/freeze
-transaction (`lib/ingestion/confirm.ts`, "owns the freeze trigger" per
-Module 04 §13) so `rule_evaluations` rows actually get written and frozen
-at close-out confirmation — this is where the hard-adherence number
-starts being real. Must also handle: session-rule attachment ("Max 3
-trades per day... attach the break to the fourth trade," §5.4 — a session
-rule is not a property of any single trade, evaluate at entry against the
-day's state and attach the break to whichever trade crossed the line);
-forward-only application (§5.5 — a rule only applies to trades opened
-after `rule.created_at`, using the rule VERSION live at entry, not at
-freeze); the tier gate using each trade's real `trading_accounts.sync_tier`.
-`adherence_weekly` materialization (§5.6) is explicitly Slice 6, not this
-one — Slice 5 only needs to get `rule_evaluations` rows written correctly
-and frozen; aggregating them into the weekly two-fraction report is a
-separate, later concern. This is the single most trust-sensitive slice in
-Module 04 — "rule evaluations freeze at close-out and are never
-recomputed retroactively" (AGENTS.md non-negotiable) is not a suggestion.
+**What was built:** `lib/rules/freeze-evaluations.ts` — one new
+orchestrating function, `evaluateAndFreezeTradeRules(client, tradeId,
+{frozenAt})`, called from BOTH of `lib/ingestion/confirm.ts`'s confirm
+loops (`confirmDay`'s per-trade loop and `autoConfirmStaleTrades`'s bulk
+path, after its own `confirmedIds` are known), always inside the SAME
+`withServiceRoleConnection` transaction the caller already holds open —
+never a second connection, never a second transaction, so a trade can
+never be confirmed without its evaluations or vice versa. Implements
+§5.5's `eligible(rule, trade)` predicate as one SQL query (forward-only
+`rule.created_at <= trade.opened_at`, `state = 'active'`, `scope =
+'global' OR scope_id = trade.strategy_id`, and — the genuinely new piece
+— "the rule VERSION live at trade.opened_at," resolved as a half-open
+`[created_at, superseded_at)` interval, the same convention
+`computeServerDayRange` already established for day boundaries, verified
+live at the exact-instant boundary in both directions). Merges Slice 3's
+single-trade `extractComputableOperandValues` with Slice 4's
+`assembleCrossTradeOperandValuesWithClient(client, tradeId)` (already
+built specifically to be callable inside an open transaction) plus
+`accountSyncTier` into one real `TradeFacts` object, calls `evaluate()`
+per eligible rule, and writes one `rule_evaluations` row per non-thrown
+outcome (severity COPIED from `rules.severity` at this exact moment,
+never re-read later). `confirmDay`'s/`autoConfirmStaleTrades`'s own
+return types gained a `ruleEvaluationAnomalies: RuleEvaluationAnomaly[]`
+field (mirrors the existing `tradesSkippedStaleBlock` pattern) so a
+caller never has to grep logs to know one fired.
+
+**The `RuleEvaluationError`-during-freeze decision (dispatch's own open
+question, point 5):** `evaluate()` throws (never resolves to
+`not_applicable`) only for a genuinely malformed `{operand_id, op,
+value}` — real data corruption or an authoring-layer bug, per §8.3.
+Resolution: caught, logged loudly (`console.error`, prefixed
+`[rule-freeze] ANOMALY evaluating rule...`, naming rule id/version/trade
+id/error code), recorded in the new `ruleEvaluationAnomalies` array,
+**never blocks confirmation of the trade or evaluation of the trade's
+OTHER eligible rules.** Reasoning logged in `freeze-evaluations.ts`'s own
+header and `docs/runbook.md`'s new "`RuleEvaluationError` thrown while
+freezing rule_evaluations at confirm" entry: unlike a coverage gap or an
+ambiguous grouping, a corrupted rule has no UI anywhere yet for a trader
+to fix, so aborting the whole day's confirmation over it would trap them
+indefinitely — exactly what Module 02's own confirm-transaction posture
+already refuses to do for every other guard in that transaction.
+
+**Tests (21 total, all green):** `lib/rules/__tests__/freeze-evaluations.test.ts`
+(9, mocked-client — eligible-rule-query SQL/param shape, zero-eligible
+short-circuit, followed/broken/not_applicable(tier) row shape, the
+`RuleEvaluationError` anomaly path for both `UNKNOWN_OPERAND` and
+`INVALID_OP_FOR_TYPE`) and `lib/rules/__tests__/freeze-evaluations.live.test.ts`
+(12, live DB — the most important test in Module 04 so far, per its own
+header): end-to-end create→confirm→row-exists; forward-only for BOTH
+confirmDay and autoConfirmStaleTrades; the exact-instant `created_at`
+boundary AND the exact-instant `superseded_at` boundary (constructed
+deterministically by capturing the DB's own written timestamp text and
+reusing it, not a timing race); "version live at entry" resolving to the
+OLD version when confirmation happens after a later edit; frozen-
+immutability (edit + severity-promotion after confirm leaves the past
+row byte-for-byte unchanged, and a raw UPDATE attempt is rejected by
+Slice 1's own trigger); a `state != 'active'` rule producing zero
+evaluations; session-rule attachment (4 same-day trades, "trades_today
+lte 3" breaks on the 4th trade's own row with `observed = 4`, self-
+inclusive — matching Slice 4's own already-proven `computeDayWeekCounts`
+semantics, not the dispatch's own imprecise "3, excluding itself"
+paraphrase, see decision log); confirmDay and autoConfirmStaleTrades
+producing byte-identical evaluation rows for equivalent trades; the
+anomaly path live (a real corrupted `rule_versions.operand_id`); and RLS
+cross-user isolation on the new writes. `npx tsc --noEmit`, `npx eslint
+.`, and `npm run build` all clean.
+
+**Explicitly out of scope, not built this slice (unchanged from the
+dispatch):** `adherence_weekly` materialization (§5.6, Slice 6), the
+ambient strip / provisional pre-confirm evaluation / `rule_overrides`
+writing (§5.9, Slice 7), severity promotion/demotion/hard-cap (§5.7,
+Slice 7), any UI, `trigger_evaluations` (still deferred, Module 03
+dependency, unchanged from Slice 1).
+
+**→ Module 04 Slice 5 tester gate: PASS (2026-08-24), independently
+verified, not a rubber stamp.** Full write-up in the matching 2026-08-24
+decision-log entry below; summary here:
+
+- **Re-ran the full existing suite myself** (not just trusted the
+  coder's numbers): `freeze-evaluations.test.ts` (9), `freeze-evaluations
+  .live.test.ts` (12), `confirm.test.ts` + `confirm.live.test.ts` (19) —
+  40/40 passing, matching the coder's reported counts exactly.
+  `git diff --stat` confirms only `confirm.ts`, `confirm.test.ts`,
+  `PROGRESS.md`, `docs/runbook.md` were modified and only the three new
+  `lib/rules/freeze-evaluations*` files were added — no other test file's
+  code changed, so any flake in an unrelated live-DB file under
+  full-parallel load is provably pre-existing contention (ADR 0002), not
+  caused by this slice.
+- **Wrote and ran 5 new, independently-authored adversarial tests**
+  (`lib/rules/__tests__/freeze-evaluations.independent-verification.live.test.ts`,
+  all 5 passing against the real DB, not reusing the coder's fixtures):
+  forward-only with trades opened-then-rule-created-then-confirmed (not
+  the weaker "confirmed before rule existed" shape); a double-edited
+  timeline (v1→v2→v3, all three thresholds individually verified from
+  their own `rule_versions` rows) proving the FROZEN evaluation uses v1,
+  not v3; a direct double-invocation of `evaluateAndFreezeTradeRules` for
+  the same already-frozen trade inside one transaction, proving
+  `unique(trade_id, rule_id)` + `ON CONFLICT DO NOTHING` (not the outer
+  `confirmDay` guard) is what makes re-entry safe — second call writes
+  zero rows and does not overwrite `frozen_at`; a second, independently-
+  constructed corrupted-rule case (`is_true` op against a `number`
+  operand, not the coder's unknown-operand-id case) proving the anomaly
+  path generalizes; a raw SQL `DELETE` against a frozen row, independently
+  re-confirming Slice 1's trigger rejects it (not just trusting the
+  coder's claim).
+- **`trades_today` inclusive/exclusive question: CONFIRMED
+  self-inclusive, coder's correction is correct.** Read
+  `cross-trade-operand-values.ts`'s raw SQL directly:
+  `fetchTradesUpToReferenceInWeek`'s `opened_at <= $4` (not `<`) means
+  the reference trade counts itself, and `computeDayWeekCounts` does no
+  exclusion. Confirmed the arithmetic: trade 1→1, trade 2→2, trade 3→3,
+  trade 4→4, so `trades_today lte 3` correctly breaks starting at the
+  4th trade (`observed = 4`), not the 5th. Verified both by reading the
+  code and by the live tests (coder's own session-attachment test, still
+  passing under my own re-run).
+- **Coverage, measured, not assumed:** `freeze-evaluations.ts` 98.5% line
+  coverage (only the defensive non-`RuleEvaluationError` rethrow branch
+  uncovered) — exceeds the 90% engine bar. `confirm.ts` 100% line
+  coverage across `confirm.test.ts` + `confirm.live.test.ts`, confirming
+  the new freeze-wiring integration lines are fully exercised.
+- **RLS:** re-ran `rulebook-schema.rls.test.ts` (29 passing, 1 skip-guard)
+  independently — `rule_evaluations`' owner-SELECT-only policy, the
+  forbid-update/forbid-delete triggers (including against `service_role`),
+  and cross-user isolation all still hold; unaffected by this slice since
+  no schema changed. Slice 5's own live-DB RLS test (confirming trader
+  sees their own frozen row, a second user sees none) re-run and passing.
+- **`npm run build` / `npx eslint .` / `npx tsc --noEmit`:** all clean,
+  re-run independently (0 errors; eslint's 19 warnings are pre-existing
+  unused-param placeholders unrelated to this slice).
+- **Golden fixtures:** not applicable — this slice touches freeze-wiring
+  and rule evaluation, not the grouping engine, so §9.3 fixture replay
+  isn't triggered.
+- **Gap found, not closed (flagged, not a blocker):** `freeze-evaluations.ts`
+  lines 369-370 (the defensive rethrow of a non-`RuleEvaluationError`
+  exception) are the only uncovered lines — legitimately hard to exercise
+  without injecting a real DB fault, and correctly NOT silently swallowed
+  either way; noted for whoever next touches this file, not required
+  before security review.
+- **Readiness for security review: YES.** No production code was changed
+  during this tester pass (test-only, per role) — freeze-wiring behaves
+  exactly as documented under every adversarial case constructed here,
+  independent of the coder's own framing, with real Postgres, real RLS,
+  and real concurrent/double-invocation conditions, not mocks.
+
+**→ Module 04 Slice 5 tester gate-closure addendum (2026-08-25) — the
+original 2026-08-24 tester pass above was session-interrupted right
+after writing `freeze-evaluations.independent-verification.live.test.ts`
+and running one final full re-run; its verdict was never delivered. This
+addendum is a second, independent tester pass closing the specific gaps
+that were left unverified, then delivering the actual final verdict.**
+
+- **`trades_today` self-inclusive semantics: RE-CONFIRMED from the raw
+  SQL myself** (not re-trusting the prior pass's own claim) —
+  `cross-trade-operand-values.ts`'s `fetchTradesUpToReferenceInWeek` uses
+  `opened_at <= $4` with no self-exclusion, and `computeDayWeekCounts`
+  does no filtering by trade id, so the reference trade counts itself.
+  Cross-checked against `freeze-evaluations.live.test.ts`'s own
+  session-attachment test assertions (trade 1→`observed=1`/followed,
+  trade 2→2/followed, trade 3→3/followed, trade 4→4/broken against
+  `lte 3`) — internally consistent, no off-by-one. No code or test change
+  needed here; the prior pass's claim held up.
+- **Severity promotion under a FROZEN evaluation: gap closed, dedicated
+  test added.** The only existing coverage of §5.6's "promoting soft→hard
+  must not retroactively reclassify last month's breaks" guarantee was
+  bundled into the same test as a threshold edit ("frozen means frozen:
+  editing a rule..."), which muddies attribution — two mutations in one
+  test. Added a new, isolated live test to `freeze-evaluations.live.test.ts`
+  — confirm a trade under a `severity='soft'` rule, freeze it, then
+  **only** `UPDATE retrospeq.rules SET severity = 'hard'` (no threshold
+  edit, no new `rule_version`) — and assert the already-frozen
+  `rule_evaluations` row is byte-for-byte unchanged and still reads
+  `severity = 'soft'`. Passing.
+- **§8.2 property-test list, cross-checked bullet by bullet against this
+  slice's actual scope:**
+  - "Frozen evaluation never changes under edit/promotion/retirement/plan
+    change" — edit ✓ (existing test), promotion ✓ (new test above).
+    Retirement: **judgment call, no dedicated test added, reasoning
+    below.** "No evaluation is EVER written for a retired rule" (the
+    existing `state != 'active'` test) is a different guarantee from "an
+    evaluation frozen BEFORE retirement survives retirement unchanged."
+    Concluded a dedicated test for the latter would be redundant: the
+    mechanism protecting a frozen row is the DB-level immutability
+    trigger, which rejects ANY write to `rule_evaluations` regardless of
+    what changed on the `rules` row that supposedly motivated it — already
+    proven twice, independently, by two different `rules`-column
+    mutations (the edit test's threshold change, and the new test's
+    severity change) plus a direct adversarial raw-SQL `UPDATE`/`DELETE`
+    against `rule_evaluations` itself (both rejected). A `rules.state`
+    change (retirement) is mechanistically identical: it only affects
+    `fetchEligibleRuleVersionsForTrade`'s `WHERE r.state = 'active'`
+    filter for FUTURE freezes, never touches an existing
+    `rule_evaluations` row. Retiring the actual state-transition (soft→
+    hard promotion has the same shape) isn't buildable end-to-end until
+    Slice 7's API exists either way.
+  - "Rule created at T → zero evaluations for trades before T" ✓
+    (existing forward-only tests, both paths).
+  - "No compound expression representable through any API path" —
+    confirmed by reading `freeze-evaluations.ts` itself (this slice adds
+    no new Server Action/API route): `RuleVersionInput = { operandId, op,
+    value }` is the only shape passed to `evaluate()`, called once per
+    eligible rule inside a `for` loop — never combined, never batched into
+    one evaluation record.
+- **Coverage — re-measured myself, scoped, with `--no-file-parallelism`
+  (see flake note below for why that matters for a trustworthy number):**
+  `lib/rules/freeze-evaluations.ts` — 98.5% lines/statements, 90% branch,
+  100% functions (only lines 369-370, the defensive rethrow of a
+  non-`RuleEvaluationError` exception, uncovered — legitimately hard to
+  exercise without injecting a real DB fault). `lib/ingestion/confirm.ts`
+  — 100% lines/statements, 97.91% branch (one branch on line 434
+  uncovered). Both clear the 90%-line engine bar (00-foundation §9.1)
+  with room to spare.
+- **A genuine flake found and root-caused, not hand-waved: the "both
+  confirmDay and autoConfirmStaleTrades share the SAME evaluation logic"
+  live test fails under Vitest's default full file-parallelism when 3+
+  live-DB test files run concurrently against the shared dev Postgres
+  project (reproduced 3/3 times: the 5-file combo including
+  `confirm.live.test.ts` + `freeze-evaluations.live.test.ts` +
+  `freeze-evaluations.independent-verification.live.test.ts`), but passes
+  100% reliably (2/2) either standalone, in a 2-live-file combo, or
+  serialized (`--no-file-parallelism`, 46/46 passing across two separate
+  full runs). The failing assertion is `confirmDay`'s own
+  `tradesConfirmed` coming back empty for a trade that was just seeded
+  and is scoped to a fresh, unique test account (`account_id`-filtered
+  throughout `confirm.ts`) — ruled out a code-level cross-account race
+  (nothing in `confirmDay`/`autoConfirmStaleTrades` touches another
+  account's rows), consistent instead with connection/resource contention
+  against the shared dev-tier Supabase project under artificially high
+  concurrent worker load (this repo's own `pg.Pool` is `max: 3` per
+  process; 3+ parallel Vitest worker processes each opening their own
+  pool against one shared, non-dedicated project). Not a functional
+  regression in the freeze-wiring code — it is exactly the class of
+  pre-existing shared-DB contention ADR 0002 already anticipates.
+  **Recommendation for whoever runs this module's live-DB suite next
+  (security-reviewer included): use `--no-file-parallelism` for a
+  trustworthy full-suite result**, or accept that a solo re-run of just
+  the failing test will pass. Not fixed by re-authoring the test (the
+  same defensive multi-attempt pattern already used for trade B in this
+  same test would mask a resource-exhaustion condition worth knowing
+  about, not something to silently paper over) — flagged here instead,
+  matching AGENTS.md's "never fake it" posture applied to test reliability,
+  not just product code.
+- **Final verdict: PASS.** 46/46 tests passing (`freeze-evaluations.test.ts`
+  9, `freeze-evaluations.live.test.ts` 13 — up from 12, the new promotion
+  test — `freeze-evaluations.independent-verification.live.test.ts` 5,
+  `confirm.test.ts` 1, `confirm.live.test.ts` 18), confirmed via two full
+  serialized re-runs after the promotion test was added. `npx tsc
+  --noEmit`, `npx eslint .` (0 errors, 19 pre-existing unrelated
+  warnings), and `npm run build` all clean, re-run independently.
+  Coverage clears the 90%-line engine bar on both touched files. Every
+  §8.2 property bullet in this slice's scope has a real, independently-
+  verified test or a documented reason one specific sub-case is
+  redundant. RLS cross-user isolation re-confirmed live. Golden fixtures:
+  not applicable (no grouping-engine code touched). **Ready for security
+  review — no gaps left open that would make a security pass premature.**
+
+**→ Module 04 Slice 5 security-reviewer gate: PASS (2026-08-25).** 8/8
+checklist items independently re-verified, not taken on the tester's word
+— genuine transaction atomicity (`evaluateAndFreezeTradeRules` never
+opens its own connection, runs entirely inside `confirmDay`'s/
+`autoConfirmStaleTrades`'s existing `withServiceRoleConnection`
+transaction, traced at the exact call sites); §5.5's `eligible()`
+predicate re-derived from spec text and matched clause-by-clause against
+the actual SQL, including the half-open `[created_at, superseded_at)`
+version-boundary interval; zero SQL injection surface (every value is a
+`$n` bind, including values that trace back to trader-authored rule
+data); `rule_evaluations` RLS confirmed still owner-SELECT-only with no
+client insert policy, writes exclusively via service role; `severity` is
+a true snapshot read once at freeze and stored as a plain value, no live
+join back to `rules.severity` found anywhere in the codebase;
+`RuleEvaluationError`-during-freeze anomaly handling confirmed scoped
+per-rule (a corrupted rule can't swallow a sibling rule's legitimate
+evaluation) with no sensitive-data leak in the anomaly log;
+`autoConfirmStaleTrades`'s bulk (all-accounts) path confirmed correctly
+scoped per-trade internally, no cross-trade/cross-account fact leakage
+possible; the self-inclusive `trades_today` semantics re-verified from
+raw SQL independently (not trusting the tester's re-derivation) with no
+double-count/under-count vector found (backed by `fills`'
+`unique(account_id, provider_ref)` and `trade_fills`' unique-fill-id
+constraint, which make resync-driven duplication structurally
+impossible). 46/46 tests re-run live against the real shared dev
+Supabase project by the reviewer directly. No blocking findings.
+
+**→ Module 04 Slice 5 QA gate: FAIL (2026-08-25, first pass).** Two
+blocking issues: (1) a real process gap on the orchestrator's part — the
+security-reviewer PASS above had genuinely happened but had not yet been
+written into this ledger before QA was dispatched, so QA correctly
+refused to treat an unlogged claim as verified (exactly the ledger
+discipline AGENTS.md requires — "no agent's message is your user's
+approval," extended here to "no agent's message substitutes for the
+ledger"). Resolved by the entry immediately above, written before this
+QA gate is re-run. (2) A real, legitimate finding: `docs/adr/0014-no-
+compound-rules.md` (Slice 1) explicitly named this exact slice as the
+owner of a "freeze at confirmation, not broker close" ADR, and it was
+never written. Dispatched back to `retrospeq-coder` to close — see the
+matching decision-log entry once done. Everything else QA checked (§10
+"never an error to the user" spirit, severity-per-row supporting Slice
+6's two-fraction split, session-rule attachment as an ordinary
+undifferentiated row, no compound rules at this integration layer,
+`docs/runbook.md`'s new entry being a real actionable alerting entry, no
+obvious N+1/perf problem, honest scope logging) passed clean. One
+non-blocking optimization note: per-rule `rule_evaluations` INSERTs run
+sequentially in a loop rather than batched — fine at this repo's realistic
+volumes, flagged for a future pass, not a blocker.
+
+**→ Module 04 Slice 5 QA re-verification: PASS (2026-08-25).** The
+missing ADR (`docs/adr/0016-freeze-at-confirmation-not-broker-close.md`)
+is written — substantive, not a placeholder, spot-checked against the
+actual `confirm.ts` call sites and the 7-day auto-confirm threshold —
+and `docs/adr/0014-no-compound-rules.md`'s cross-reference now points at
+it. The security-reviewer decision-log entry above was independently
+re-checked against the real code (the atomicity claim, the §5.5
+predicate SQL, the RLS policy) and confirmed genuine, not fabricated.
+**Module 04 Slice 5 (freeze-wiring) is DONE.**
+
+**Next: Module 04 Slice 6 — `adherence_weekly` materialization (§5.6).**
+Read frozen `rule_evaluations` rows and aggregate them into the weekly
+two-fraction report (`hard_followed/hard_total`, `soft_followed/
+soft_total`, never blended, never a bare percentage — AGENTS.md
+non-negotiable, "adherence earns no XP, ever" also applies: this table
+must never feed Module 07's XP economy). Must use the SAME ISO-week
+(Monday-start) boundary Slice 4's `lib/rules/week-boundary.ts`
+established (`docs/adr/0015-iso-week-boundary-monday-start.md`'s own
+forward-looking warning names this table by name) — do not invent a
+second week-bucketing convention. `top_break_rule_id`/`top_break_count`
+per §3.1's schema also need populating ("drops attributed to a single
+named rule," §5.6). Materialized on a schedule, never computed from raw
+evaluations at read time (§3.1's own table comment) — same "no real cron
+yet" constraint Slice 3 hit for `operand_distributions`; build the
+on-demand/post-freeze recompute for real, flag nightly-cron as the same
+already-tracked infra gap, don't fake it.
 
 **Historical detail below, preserved for reference —**
 
@@ -4148,6 +4456,131 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-24 — **Module 04 Slice 5 (freeze-wiring) coded — `rule_evaluations`
+  now actually gets written and frozen at confirm, from both `confirmDay`
+  and `autoConfirmStaleTrades`.** Full report in "Current task" above; key
+  points logged here per 00-foundation §12:
+  - **"Version live at trade.opened_at" resolved as a half-open
+    `[created_at, superseded_at)` interval**, not literal spec prose (§5.5
+    only gives the eligibility predicate's shape, not a boundary rule) —
+    same convention `lib/ingestion/server-day.ts`'s `computeServerDayRange`
+    already established for day boundaries. Concretely: a trade opened at
+    the EXACT instant a rule edit's supersede-UPDATE and new-version-INSERT
+    both commit (byte-identical timestamps, since Postgres `now()` is
+    transaction-start-time-stable) resolves to the NEW version, not the
+    old one. Verified live at that exact boundary (deterministically
+    constructed by reading back the DB's own written timestamp text and
+    reusing it — no timing race), not just asserted from reading the code.
+  - **The dispatch's own worked example for session-rule attachment
+    ("trades_today = 3, three PRIOR trades, excluding itself") was
+    imprecise against Slice 4's own already-built, already-documented
+    code** (`computeDayWeekCounts`'s own comment: "counts INCLUDE the
+    reference trade itself... the trade that crosses the line must see
+    itself counted, or the count it's evaluated against would always read
+    one short"). Trusted the already-reviewed Slice 4 code over the
+    dispatch's paraphrase (self-inclusive counting is also the only
+    reading under which "lte 3" can ever actually BREAK on a 4th trade —
+    3 <= 3 is followed, not broken) and verified it live: the 4th same-day
+    trade's own row shows `observed = 4`, `result = broken`. The
+    OBSERVABLE outcome the dispatch describes (break attaches to the 4th
+    trade's own row, no separate session-violation object) holds exactly
+    as stated; only the specific observed count differed from the
+    dispatch's own parenthetical.
+  - **`RuleEvaluationError` during freeze: caught, logged loudly
+    (`console.error` + a new `ruleEvaluationAnomalies` field on both
+    `confirmDay`'s and `autoConfirmStaleTrades`' return types), never
+    blocks confirmation.** Full reasoning in `lib/rules/freeze-evaluations.ts`'s
+    own header and the new `docs/runbook.md` entry — the short version:
+    unlike a coverage gap or ambiguous grouping, a corrupted rule has no
+    UI anywhere yet for a trader to fix, so trapping them in an
+    unconfirmable day over it would violate Module 02's own established
+    "never trap the trader" posture worse than the alternative (one
+    fewer applicable evaluation for that rule/trade, observably identical
+    to `not_applicable`, reached through a loud path instead of silent).
+  - `confirmDay`/`autoConfirmStaleTrades`'s return types gained a new
+    `ruleEvaluationAnomalies` field — additive only, verified non-breaking
+    against every existing test in `confirm.test.ts`/`confirm.live.test.ts`
+    (all 19 still pass unmodified except one mocked whole-object `toEqual`
+    updated to include the new empty-array field on the zero-candidates
+    early-return path, which that path's own logic doesn't touch).
+- 2026-08-24 — **Module 04 Slice 5 tester gate: PASS, independently
+  verified against the real DB, not a rubber stamp on the coder's own
+  report.** Re-ran all 40 pre-existing tests (`freeze-evaluations.test.ts`
+  9, `freeze-evaluations.live.test.ts` 12, `confirm.test.ts` +
+  `confirm.live.test.ts` 19) — all green, matching the coder's counts.
+  `git diff --stat` confirms only `confirm.ts`/`confirm.test.ts`/
+  `PROGRESS.md`/`docs/runbook.md` were touched (plus the 3 new
+  `freeze-evaluations*` files) — no other test file changed, so any flake
+  in an unrelated live-DB file under parallel load is pre-existing
+  contention (ADR 0002), not caused by this slice. Added 5 new,
+  independently-authored adversarial tests
+  (`freeze-evaluations.independent-verification.live.test.ts`), all
+  passing: (1) forward-only with trades opened THEN rule created THEN
+  confirmed (a stronger shape than "confirmed before the rule existed at
+  all"); (2) a double-edited rule timeline (v1→v2→v3) proving the frozen
+  row uses v1; (3) a direct double-invocation of
+  `evaluateAndFreezeTradeRules` inside one transaction, bypassing
+  `confirmDay`'s own outer guard entirely, proving
+  `unique(trade_id, rule_id)` + `ON CONFLICT DO NOTHING` is what actually
+  makes re-entry safe (zero duplicate rows, `frozen_at` from the FIRST
+  call only); (4) a second, independently-constructed malformed-rule case
+  (`is_true` against a `number` operand, not the coder's own
+  unknown-operand-id case); (5) a raw SQL `DELETE` against a frozen row,
+  independently re-confirming Slice 1's trigger rejects it. **Re-verified
+  the `trades_today` self-inclusive claim directly from
+  `cross-trade-operand-values.ts`'s raw SQL** (`opened_at <= $4`, no
+  self-exclusion in `computeDayWeekCounts`) — confirmed correct: trade
+  1→1, 2→2, 3→3, 4→4, so "`trades_today` lte 3" genuinely breaks starting
+  at the 4th trade, matching the coder's correction of the dispatch's own
+  imprecise paraphrase. Coverage measured directly: `freeze-evaluations.ts`
+  98.5% line coverage (only the defensive non-`RuleEvaluationError`
+  rethrow branch, lines 369-370, uncovered — flagged, not a blocker);
+  `confirm.ts` 100% line coverage including the new freeze-wiring
+  integration lines. RLS: re-ran `rulebook-schema.rls.test.ts` (29
+  passing) independently — unaffected by this slice, no schema changed.
+  `npm run build`/`npx eslint .`/`npx tsc --noEmit` all clean, re-run
+  independently. Golden fixtures: not applicable (this slice doesn't
+  touch the grouping engine). No production code changed by this tester
+  pass, per role. **Verdict: ready for security review.**
+- 2026-08-25 — **Module 04 Slice 5 tester gate-closure addendum: the
+  2026-08-24 pass above was session-interrupted before delivering its
+  verdict; a second tester pass closed the remaining gaps and delivered
+  the actual final verdict (PASS).** Full write-up in "Current task"
+  above; key points here per 00-foundation §12: (1) added a dedicated
+  live test isolating §5.6's severity-promotion-doesn't-retroactively-
+  reclassify guarantee from the pre-existing threshold-edit test, which
+  had bundled both mutations into one test and muddied attribution — new
+  test mutates ONLY `rules.severity` via direct UPDATE (Slice 7's
+  promotion API doesn't exist yet) and confirms the already-frozen row is
+  untouched; (2) cross-checked §8.2's full property-test list against
+  this slice's actual scope and made an explicit judgment call that a
+  dedicated "retirement survives" test is redundant — the DB-level
+  immutability trigger that protects a frozen row is proven twice already
+  by two independent `rules`-column mutations (threshold edit, severity
+  promotion) plus a direct adversarial raw-SQL UPDATE/DELETE, and
+  `rules.state` only gates FUTURE freezes via
+  `fetchEligibleRuleVersionsForTrade`'s WHERE clause, never touches an
+  existing `rule_evaluations` row; (3) re-measured coverage with
+  `--no-file-parallelism` for a trustworthy number: `freeze-evaluations.ts`
+  98.5% lines/90% branch, `confirm.ts` 100% lines/97.91% branch, both
+  clear the 90%-line bar; (4) **found and root-caused a genuine
+  concurrency flake**, not a functional regression: the "both confirmDay
+  and autoConfirmStaleTrades share the SAME evaluation logic" live test
+  fails reproducibly (3/3) when 3+ live-DB test files run under Vitest's
+  default full file-parallelism against the shared dev Postgres project,
+  but passes reliably (2/2 full serialized re-runs, 46/46 each time)
+  under `--no-file-parallelism` or in smaller file combinations —
+  consistent with connection/resource contention on the shared dev-tier
+  project under artificially high concurrent worker count (ADR 0002's own
+  anticipated risk category), not a code defect (ruled out a cross-account
+  race: every query in `confirm.ts` is `account_id`-scoped, and the test's
+  trade lives on a fresh, unique account). Deliberately did NOT paper over
+  this by adding a retry loop to the test (would mask a resource-condition
+  worth knowing about) — documented instead, with a concrete
+  recommendation (`--no-file-parallelism`) for whoever runs this module's
+  live-DB suite next. **Final verdict: PASS, 46/46 tests, ready for
+  security review**, `npx tsc --noEmit`/`npx eslint .`/`npm run build` all
+  clean.
 - 2026-08-24 — **Module 04 "Slice 4" rescoped from "freeze-wiring" (per the
   Phase 2 ledger's own prior "Current task" text) into two slices: Slice 4
   (cross-trade `TradeFacts` assembly only, pure/read-only) and a new Slice 5

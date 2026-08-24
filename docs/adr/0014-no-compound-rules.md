@@ -15,7 +15,9 @@
   are NOT written here, since nothing in this slice (schema + operand
   catalogue + the pure evaluator) makes either decision concrete yet;
   they belong to the freeze-wiring slice and the engagement-boundary
-  slice respectively.
+  slice respectively. The former is now `docs/adr/0016-freeze-at-
+  confirmation-not-broker-close.md` (Slice 5); the latter is still
+  pending its own slice.
 - **Context:** Module 04 (Rulebook & Evaluation) Slice 1 — the `rules`/
   `rule_versions` schema (`supabase/migrations/20260823020000_rulebook_schema.sql`)
   and the expression evaluator (`lib/rules/evaluate.ts`).
