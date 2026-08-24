@@ -171,6 +171,27 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // `$1 = userId` directly, never trusting RLS to narrow it), matching
   // ADR 0005's "every query inside `fn` MUST filter explicitly" caveat.
   'lib/rules/distributions-repository.ts',
+  // Module 04 Slice 4 (§5.3/§5.4/§5.6 cross-trade TradeFacts assembly):
+  // same trusted-backend-process posture as `sync.ts`/`confirm.ts`/
+  // `distributions-repository.ts` above -- `assembleCrossTradeOperandValues`
+  // is written to be called from Module 02's confirm/freeze transaction (a
+  // future slice, per this file's own header -- NOT wired in yet), which
+  // has no live user session to attach to `withUserConnection`, only an
+  // `account.user_id`/`account_id` resolved from the reference trade row it
+  // loads first. Every query in every function is explicitly scoped to
+  // that trade's own `account_id` (never a caller-supplied value beyond
+  // the initial `tradeId` -- see this file's own header, "scoping judgment
+  // call"), matching ADR 0005's "every query inside `fn` MUST filter
+  // explicitly" caveat. `assembleCrossTradeOperandValuesWithClient` (the
+  // lower-level entry point every fetch function ultimately composes into)
+  // takes an already-open `PoolClient`, the same
+  // `loadInstrumentBlockState`/`findUnrecordedFillsForBlock` pattern
+  // `sync.ts`/`confirm.ts` already established, so a future caller already
+  // inside a `withServiceRoleConnection` transaction (Slice 5's freeze
+  // wiring) can reuse it without opening a second connection -- only the
+  // standalone `assembleCrossTradeOperandValues(tradeId)` wrapper opens its
+  // own `withServiceRoleConnection` (this file's own literal call site).
+  'lib/rules/cross-trade-operand-values.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

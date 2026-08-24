@@ -22,14 +22,49 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Module 04 Slice 1 (schema + operand catalogue + pure evaluator) **DONE** — coded 2026-08-23, tester-verified (100% coverage on `lib/rules/`, 2 real test gaps found and closed), `docs/adr/0014-no-compound-rules.md` written to close the tester-flagged doc gap, security-reviewed **PASS** (all 8 checklist items independently re-verified against the live DB, no findings), QA-reviewed **PASS** (all 7 product/spec-fidelity checks, no findings). Slice 2 (the authoring pipeline — rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation) **DONE (2026-08-24)** — coded, independently tester-verified (PASS, 3 real gaps found and closed), security-reviewed (initial pass **FAILED** on 2 real findings — both fixed and **re-verified PASS live**), QA-reviewed **PASS** (one minor doc-completeness nit closed). `lib/rules/` ~97% line coverage. Slice 3 (the preview engine, §5.8, + `operand_distributions` computation, scoped to the 8 `computableToday: true` operands) **DONE (2026-08-24)** — coded, independently tester-verified **PASS** (312 tests, 95-100% coverage on the 3 new files, confirmed the `risk_pct`→`initial_risk_pct` trap and the 3-way `pre_entry_captured_before_fill` NOT-ANY distinction, confirmed §8.1's "identical counts to a full scan" test exists and passes), security-reviewed **PASS** (7/7 checklist items — confirmed genuine `compare()` reuse with no second comparison implementation, confirmed service-role query scoping and RLS backstop, confirmed rate-limit sanity; one non-blocking note: no unit test mocking the post-sync recompute failure path, code verified correct by direct read), QA-reviewed **PASS** (all 7 focus checks — exact §5.8 guidance copy verbatim, "not enough data yet"/`operand_not_computable` states correctly distinct and never rendered as errors, no red/green anywhere, preview writes nothing, calibration coaching built and product-sane, scope honestly logged). Slices 4-6 (freeze-wiring, severity lifecycle, UI) not started. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. Slices 5-8 (freeze-wiring, adherence_weekly, severity lifecycle, UI) not started. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Module 04 (Rulebook & Evaluation) Slice 3 is DONE (2026-08-24).**
+**→ Module 04 Slices 1-4 are all DONE (2026-08-24), full coder → tester →
+security-reviewer → qa gate sequence passed on every one.** Slice 3 and
+Slice 4's own full write-ups (files built, judgment calls, test detail)
+are preserved below for reference. Slice 4 additionally closed
+security-reviewer PASS (8/8 checklist items, including proving the
+service-role allowlist test actually catches an unlisted new call site by
+planting one) and QA PASS (5/5 focus checks — the deferral-as-absent-key
+pattern is spec-consistent, the `logged_within_minutes` defer-vs-guess
+judgment call is sound, the ISO-week ADR documents both why and the
+forward-looking hazard for Slice 6/Module 07, no currency P&L or
+red/green leakage, scope honestly logged) — see the matching 2026-08-24
+decision log entries for both reports in full.
+
+**Next: Module 04 Slice 5 — freeze-wiring (§5.4, §7.1).** Wire
+`evaluate()` (Slice 1) + the combined single-trade (Slice 3) and
+cross-trade (Slice 4) fact assembly into Module 02's confirm/freeze
+transaction (`lib/ingestion/confirm.ts`, "owns the freeze trigger" per
+Module 04 §13) so `rule_evaluations` rows actually get written and frozen
+at close-out confirmation — this is where the hard-adherence number
+starts being real. Must also handle: session-rule attachment ("Max 3
+trades per day... attach the break to the fourth trade," §5.4 — a session
+rule is not a property of any single trade, evaluate at entry against the
+day's state and attach the break to whichever trade crossed the line);
+forward-only application (§5.5 — a rule only applies to trades opened
+after `rule.created_at`, using the rule VERSION live at entry, not at
+freeze); the tier gate using each trade's real `trading_accounts.sync_tier`.
+`adherence_weekly` materialization (§5.6) is explicitly Slice 6, not this
+one — Slice 5 only needs to get `rule_evaluations` rows written correctly
+and frozen; aggregating them into the weekly two-fraction report is a
+separate, later concern. This is the single most trust-sensitive slice in
+Module 04 — "rule evaluations freeze at close-out and are never
+recomputed retroactively" (AGENTS.md non-negotiable) is not a suggestion.
+
+**Historical detail below, preserved for reference —**
+
+**→ Module 04 Slice 3 full report (DONE, 2026-08-24).**
 Full gate sequence: coded → independently tester-verified PASS →
 security-reviewed PASS → QA-reviewed PASS. Files built:
 `lib/rules/computable-operand-values.ts` (single-trade extraction for the
@@ -43,18 +78,292 @@ new entry. Full report, judgment calls, and test list are in the matching
 2026-08-24 decision log entries below (coder → tester → security-reviewer
 → qa).
 
-**Next: Module 04 Slice 4 — freeze-wiring (§5.4, §7.1).** The full
-cross-trade `TradeFacts` assembly for the other 30 `computableToday: false`
-operands (day/week aggregation, streak counts, T1 position-snapshot data
-where available), wired into Module 02's confirm/freeze transaction
-(`lib/ingestion/confirm.ts` "owns the freeze trigger" per Module 04 §13) so
-`rule_evaluations` rows actually get written and frozen at close-out —
-this is where the hard-adherence number starts being real instead of
-theoretical. Also needs `adherence_weekly` materialization (§5.6) and
-session-rule attachment ("Max 3 trades per day... attach the break to the
-fourth trade," §5.4). This is the single most trust-sensitive slice in
-Module 04 — "rule evaluations freeze at close-out and are never
-recomputed retroactively" is a non-negotiable, not a suggestion.
+**→ Module 04 Slice 4 full report (DONE, 2026-08-24, coder+tester detail
+preserved; security-reviewer PASS and qa PASS summarized above).**
+
+This slice split the originally-planned "Slice 4 — freeze-wiring" into two:
+this slice built the pure, read-only cross-trade query/aggregation layer
+only; the actual wiring into Module 02's confirm/freeze transaction
+(`lib/ingestion/confirm.ts`, so `rule_evaluations` rows actually get
+written and frozen), `adherence_weekly` materialization, and session-rule
+attachment ("Max 3 trades per day... attach the break to the fourth
+trade," §5.4) are now **Slice 5**, not this one — a deliberate, explicit
+rescoping (logged in the decision log below), not scope creep discovered
+mid-slice. **Confirmed: nothing in this slice writes to `rule_evaluations`,
+and nothing in this slice is called from `lib/ingestion/confirm.ts`.**
+
+**Files built:**
+- `lib/rules/week-boundary.ts` — `weekStartForServerDay`/`weekEndForServerDay`/
+  `addDaysToServerDay`. **The first week-boundary definition anywhere in
+  this repo** — ISO week (Monday start), applied to `server_day`, per
+  AGENTS.md's "streak counts weeks, not days" and
+  `retrospeq-design-decisions.md`'s "the weekly review boundary should
+  follow the forex week for mixed accounts" note. Recorded as
+  `docs/adr/0015-iso-week-boundary-monday-start.md` since Slice 6
+  (`adherence_weekly`) and Module 07 (`streaks`/`weekly_snapshots`) both
+  need to match this exactly. 14 unit tests, 100% coverage.
+- `lib/rules/cross-trade-operand-values.ts` — the cross-trade assembly
+  itself. **20 operands built** (grouped by shared query, not one function
+  per operand): `daily_loss_pct`, `weekly_loss_pct`, `size_vs_avg`,
+  `total_open_risk`, `consecutive_losses`, `trades_today`,
+  `trades_this_week`, `daily_pnl_pct`, `giveback_from_peak`,
+  `time_since_last_trade`, `time_since_last_loss`, `instruments_today`,
+  `first_time_instrument`, `target_set_at_entry`, `planned_rr`,
+  `exit_vs_target`, `exit_reason`, `added_after_entry`, `scale_out_count`,
+  `time_to_full_size`. `assembleCrossTradeOperandValues(tradeId)` is the
+  orchestrating entry point (opens its own `withServiceRoleConnection`);
+  `assembleCrossTradeOperandValuesWithClient(client, tradeId)` is the
+  lower-level version taking an already-open `PoolClient` — mirrors
+  `sync.ts`'s `loadInstrumentBlockState` pattern deliberately, so Slice 5
+  can call it inside `confirmDay`'s own transaction without opening a
+  second connection. Every query parameterized, scoped to `trade.account_id`
+  (a documented judgment call, applied uniformly — see the file's own
+  header: equity/currency/sync-tier are per-account concepts, so
+  cross-account aggregation would be financially meaningless).
+  `lib/supabase/__tests__/service-role-inventory.test.ts`'s allowlist
+  updated for this file's new `withServiceRoleConnection` call site (the
+  test's own mandatory companion rule).
+
+**10 operands deliberately deferred, matching this slice's own dispatch
+list with zero disagreements found on independent re-verification**
+(re-checked each against its own `factNote` and the actual schema, not
+taken on faith): `correlated_exposure` (no correlation grouping exists),
+`order_type` (no column exists anywhere in Module 02's schema), `trigger_conditions_met`
+(depends on Module 03), `added_to_a_loser` (no per-add-event unrealized-P&L
+snapshot stored), `stop_moved_against`/`stop_move_count` (need T1
+`position_snapshots`, zero rows/writers exist), `minutes_into_session`/
+`entry_clock_time` (no session-open reference time), `weekly_review_completed`
+(depends on Module 06). **`logged_within_minutes` — a genuine judgment
+call, chose DEFER over building an interpretation:** considered "first
+`trade_captures` row's timestamp" as a proxy, but `trade_captures` has no
+`created_at` column at all (only `updated_at`, overwritten on every edit —
+captures are editable post-close per §4.7), so even that proxy would
+silently misrepresent "logged within N minutes" as "most recently EDITED
+within N minutes." Guessing wrong here would silently misclassify real
+evaluations once this operand becomes ruled on — deferred alongside the
+genuinely-blocked operands rather than forced.
+
+**Critical correctness points, each independently proven against a live
+seeded Postgres DB, not just unit-mocked** (`lib/rules/__tests__/cross-trade-operand-values.live.test.ts`,
+7 tests + 1 not-found-error test, all against the real shared dev Supabase
+project): `consecutive_losses` stops at the first non-loss (and treats
+`scratch` the same as a win — a documented judgment call, since a scratch
+is not literally a loss), never includes the trade itself;
+`giveback_from_peak` tracks a real chronological running-max/giveback
+across two trades with a rise-then-partial-giveback-then-new-peak
+sequence; `trades_this_week` correctly buckets a Sunday into the
+PRECEDING week and the following Monday into a NEW week (the ISO-week
+convention above, proven live, not just unit-tested); `first_time_instrument`
+correctly excludes the trade itself and distinguishes a repeat instrument
+from a genuinely new one; plus an explicit account-isolation test (a
+second account's trades never leak into another account's cross-trade
+facts) and a full entry/exit-fill-plan test matching
+`fixtures/golden/scaled_in_out`'s own `scale_out_count: 2` expected value
+byte-for-byte.
+
+**Judgment calls, documented in each function's own header, not silently
+made:** `exit_vs_target`'s fact shape ("progress toward target as a
+percentage," chosen to make the catalogue's own `gte`/`higher_is_tighter`
+pairing internally consistent — the catalogue's "short of target" UI
+phrasing vs. this stored fact's polarity is a rendering-layer translation,
+not a fact-assembly concern); `total_open_risk` and `consecutive_losses`/
+`time_since_last_*`/`size_vs_avg`'s different trade-status filters
+(same-day in-flight aggregation includes any status with the relevant
+timestamp present; backward-looking historical facts require
+`status = 'confirmed'` only — full reasoning in the file's own header);
+`size_vs_avg`'s averaging window reuses `distributions-repository.ts`'s
+established "last 200 trades AND 12 months" convention, for consistency
+rather than inventing a second one; `scale_out_count` is a genuinely new
+SQL `COUNT ... FILTER` query, not a call into `trade-facts.ts`'s own
+(unexported, differently-shaped) `computeTradeFacts` — proven equivalent
+against the real `scaled_in_out` golden fixture's own expected value,
+not merely asserted equivalent by inspection.
+
+**Tests:** `week-boundary.test.ts` (14), `cross-trade-operand-values.test.ts`
+(53 pure-function unit tests covering every "easy to get backwards" case
+named in this slice's own dispatch), `cross-trade-operand-values.live.test.ts`
+(8, against the real live DB). Full repo suite: **111 test files, 1359
+passed / 13 skipped / 0 failed**, `npx tsc --noEmit` / `npx eslint .` /
+`npm run build` all clean. `cross-trade-operand-values.ts` itself: 100%
+lines/funcs, 95.27% branches (live-DB test run); `week-boundary.ts`: 100%
+across the board.
+
+**One pre-existing, unrelated flake found and fixed while running the
+full suite, not introduced by this slice:** `lib/ingestion/__tests__/confirm.live.test.ts`'s
+"7-day threshold" test for `autoConfirmStaleTrades` failed intermittently
+— root-caused to orphaned rows in the shared dev Supabase project
+(`retrospeq.trades` rows left behind by test runs whose own `afterEach`
+cleanup never ran, most concretely because this coder killed several
+still-running `npx vitest` background processes mid-test while
+investigating an unrelated concurrency question earlier in this session).
+`autoConfirmStaleTrades`'s own candidate query is a GLOBAL, account-unscoped
+sweep by design (per its own doc comment) — a real, load-bearing reason
+this class of test is fragile against a shared, accumulating dev database
+(ADR 0002), not a bug in Module 04 Slice 4's own code (which this test
+file has no import-path dependency on at all). Cleaned up 6 orphaned
+`trades` rows (1 from this session's own interrupted run, 5 pre-existing
+from earlier sessions dated 2026-08-22/23) plus their auth users; the
+flaking test then passed cleanly, in isolation and inside the full suite,
+across two separate full-suite runs. **Not a Module 04 Slice 4 finding —
+noted here for the record, and worth `retrospeq-tester`/`retrospeq-security-reviewer`
+flagging as a standing hygiene gap** (live-test cleanup that depends on a
+process running to completion is inherently fragile; a periodic
+orphaned-test-data sweep for the shared dev project would close this
+class of flake for good, tracked as a real but non-blocking follow-up, not
+built here since it's outside this slice's own scope).
+
+**`retrospeq-tester` independent verification (2026-08-24): PASS, 5 real
+gaps found and closed (all closed by adding tests; zero production-code
+changes — none were needed).** Re-read Module 04 §5.3-§5.6, §4.1 and
+AGENTS.md's "streak counts weeks, not days" before verifying. Re-ran
+everything myself rather than trusting the coder's numbers:
+
+- **Full suite, re-run independently, twice:** 111 files / 1365 passed /
+  13 skipped / 0 failed (after the 5 tests I added below; 1360 passed
+  before them, matching the coder's reported 1360 to within one flake —
+  see below). Clean `npx tsc --noEmit`, clean `npx eslint .` (0 errors,
+  19 pre-existing unrelated warnings), clean `npm run build`.
+- **One flake during the full-suite run, root-caused, not a real
+  failure:** `manual-entry.live.test.ts`'s "long, full happy path" test
+  hit vitest's 5000ms default timeout once under full-suite parallel
+  contention against the shared dev Supabase project; re-run in isolation
+  it passed in 4649ms (7/7 tests, that file alone). Unrelated to this
+  slice's own code (no import-path dependency).
+- **Coverage, independently re-measured:** `cross-trade-operand-values.ts`
+  100% lines/funcs, 95.27% branches (the two uncovered branch pairs are
+  defensive `?? '0'`/`?? 0` fallbacks for a SQL row that can't actually be
+  absent, given `coalesce()` on the aggregate query — not a real gap);
+  `week-boundary.ts` 100% across the board. Matches the coder's reported
+  numbers exactly.
+- **`docs/adr/0015-iso-week-boundary-monday-start.md`** read in full —
+  correctly grounded in AGENTS.md's non-negotiable and the design doc's
+  forex-week note, correctly scoped as an approximation (no literal
+  session-open data exists yet), and correctly flags itself as
+  load-bearing for Slice 6/Module 07.
+- **`consecutive_losses`** (dispatch item 1): verified against my OWN
+  fixture, not just the coder's — `computeConsecutiveLosses(['loss',
+  'loss', 'loss', 'win'])` (most-recent-first encoding of the dispatch's
+  literal "win, loss, loss, loss, [ref]" example) → `3`, not `4`.
+  All-losses-since-start (7-length) → `7`, not truncated. Zero-prior-trades
+  → `0`, never an error. All pass. No gap.
+- **`giveback_from_peak`** (dispatch item 2) — **a real gap, closed.** The
+  coder's own tests covered a 2-event and a 3-event sequence (rise,
+  partial-giveback, new-peak) but never a 4-event up/down/up/down sequence
+  that would catch a "peak = day's eventual max" bug distinct from
+  "peak = genuine running max." Added
+  `lib/rules/__tests__/cross-trade-operand-values.test.ts`'s new
+  `'tester fixture: up, down, up again, down again...'` test: four
+  realized-P&L events (+500, -200, +400, -100), asserting giveback at
+  EACH intermediate point (`0%` after event 1, `40%` after event 2 — using
+  the 500 peak, not a future 700 — `0%` at the new 700 peak after event 3,
+  `~14.29%` after event 4). All pass, confirming the peak is tracked
+  chronologically and giveback is always measured from whichever peak was
+  highest as of the LATEST row in the window, never a peak that hasn't
+  happened yet from that vantage point (structurally guaranteed anyway by
+  `fetchClosedTradesForPnlWindow`'s `closed_at < referenceOpenedAt` filter
+  — this test proves the pure aggregation on top of that filter is also
+  correct).
+- **Week-boundary edges** (dispatch item 3): `weekStartForServerDay`
+  operates on `server_day` (a date, not a timestamp) by design — per the
+  ADR, this makes it structurally insensitive to a Sunday-23:59-vs-Monday-
+  00:00 timestamp distinction; what matters is which calendar date lands
+  in `trades.server_day`, already tested exhaustively (all 7 weekdays +
+  month/year boundaries in `week-boundary.test.ts`, and a live-DB test
+  bucketing a real Sunday trade into the preceding week and a real Monday
+  trade into a fresh one). Confirmed `assembleCrossTradeOperandValuesWithClient`
+  uses `ctx.serverDay` (from the `trades` row), never a raw
+  `opened_at`/`closed_at` timestamp, for the week-window computation — no
+  gap.
+- **`first_time_instrument`** (dispatch item 4): confirmed the query
+  excludes the reference trade both by `opened_at < $referenceOpenedAt`
+  AND `id != $excludeTradeId` (belt-and-suspenders against the exact
+  "naive `count(*) where instrument = X`" bug shape named in the
+  dispatch) — no gap, already live-tested for both the repeat- and
+  new-instrument cases.
+- **`time_since_last_trade`/`time_since_last_loss`** (dispatch item 5):
+  confirmed the reference point is consistently the PRIOR trade's
+  `closed_at` compared against THIS trade's own `opened_at`
+  (`minutesSince(ctx.openedAt, lastTradeTimings.lastTradeClosedAt)`),
+  consistent across both operands; `null` (not `0`, not a throw) when no
+  qualifying prior trade exists — no gap.
+- **`decimal.js` spot check** (dispatch item 6): every money/percentage
+  computation (`daily_loss_pct`, `weekly_loss_pct`, `giveback_from_peak`,
+  `size_vs_avg`, `planned_rr`, `exit_vs_target`) stays in `Decimal` until
+  a single `.toNumber()` at the function's return boundary — matching the
+  exact precedent already established (and already security-reviewed) in
+  `lib/rules/computable-operand-values.ts`/`evaluate.ts` (which re-wraps
+  the value in `new Decimal()` on the read side). The only plain
+  `Number()` calls are on SQL `COUNT(...)` integer results
+  (`add_count`/`trim_exit_count`), never money — no drift risk. No gap.
+- **Account isolation** (dispatch item 7): re-ran the coder's live
+  `'account isolation'` test myself against the real shared dev Supabase
+  project — passes. Confirmed every fetch function's SQL is parameterized
+  and scoped to `account_id` (never a caller-supplied value beyond the
+  trade's own resolved `account_id`).
+- **`scale_out_count` reuse** (dispatch item 8): confirmed
+  **reimplemented, not reused** — `trade-facts.ts`'s `computeTradeFacts`
+  requires a full `TradeFactsMember[]` this query layer doesn't build;
+  the new SQL query (`count(*) filter (where role in ('trim','exit'))`)
+  uses the identical counting rule, verbatim, to `trade-facts.ts`'s own
+  `const scaleOutCount = members.filter((m) => m.role === 'trim' || m.role
+  === 'exit').length` (confirmed by direct read of both files). Proven
+  equivalent, not just asserted: the live test seeds a real
+  entry/add/trim/exit fill sequence and asserts `scale_out_count === 2`,
+  matching `fixtures/golden/scaled_in_out/expected.json`'s own
+  `scale_out_count: 2` byte-for-byte. No gap.
+- **The 10 deferred operands** (dispatch item 9) — **a real gap, closed.**
+  No existing test asserted the deferred operand ids are absent KEYS (as
+  opposed to present-but-null) in the orchestrator's output. Added a new
+  live test, `'the 10 deferred operands are genuinely absent keys in the
+  output...'`, asserting `Object.keys(values)` equals
+  `CROSS_TRADE_OPERAND_IDS` exactly (20, no more/fewer) and that none of
+  the 10 deferred ids satisfy `in`/`hasOwnProperty` — closes a real "looks
+  fine by eye, unverified in CI" gap; a regression here (e.g. someone
+  later adds `order_type: null` thinking they're being helpful) would
+  now fail loudly.
+- **Orphaned-rows cleanup** (dispatch item 10): re-ran
+  `confirm.live.test.ts` directly and in isolation — 18/18 passed
+  including the "7-day threshold, both sides" test cleanly. `git status`/
+  `git diff --stat` confirm zero production-table-affecting file changes
+  beyond the two test-allowlist/test files already accounted for above —
+  the cleanup was pure live-DB row deletion (auth users + their `trades`
+  rows this coder's own session orphaned), not a code change, consistent
+  with the PROGRESS.md entry's own description.
+
+**Files touched by this verification pass** (tests only, zero production
+code changed): `lib/rules/__tests__/cross-trade-operand-values.test.ts`
+(+3 `consecutive_losses` fixtures, +1 four-event `giveback_from_peak`
+fixture), `lib/rules/__tests__/cross-trade-operand-values.live.test.ts`
+(+1 deferred-operands-absent test).
+
+**Readiness for security review: YES.** No production-code gaps found;
+the two real gaps were test-coverage gaps (both closed), not correctness
+bugs. `retrospeq-security-reviewer` should still independently re-verify
+account-scoping, the service-role-inventory allowlist addition, and
+(per the module's own §5.3 "security-critical" framing for the sibling
+evaluator, which this slice's output eventually feeds) that no operand
+value here can be used to smuggle anything beyond a plain
+number/string/boolean into `evaluate()`'s `compare()` — this slice's own
+data never leaves parameterized queries or `Decimal`/plain-value
+arithmetic, but that's exactly the kind of claim security review exists
+to re-check rather than take on my word.
+
+**Not marked done in this ledger** — per AGENTS.md, that is
+`retrospeq-qa`'s call, gated on the security-reviewer pass, which has not
+happened yet.
+
+**Next: Module 04 Slice 5 — freeze-wiring (§5.4, §7.1).** Wire
+`assembleCrossTradeOperandValuesWithClient` (this slice) plus Slice 3's
+`extractComputableOperandValues` (single-trade) into a real `TradeFacts`
+object (plus `accountSyncTier`, from `trading_accounts.sync_tier`) inside
+`lib/ingestion/confirm.ts`'s `confirmDay` transaction, so `rule_evaluations`
+rows actually get written and frozen at close-out. Also needs
+`adherence_weekly` materialization (§5.6, using this slice's
+`weekStartForServerDay` for the week bucket) and session-rule attachment
+("Max 3 trades per day... attach the break to the fourth trade," §5.4).
+This is the single most trust-sensitive slice in Module 04 — "rule
+evaluations freeze at close-out and are never recomputed retroactively"
+is a non-negotiable, not a suggestion.
 
 **What was built (Slice 1):**
 
@@ -3838,6 +4147,44 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-08-24 — **Module 04 "Slice 4" rescoped from "freeze-wiring" (per the
+  Phase 2 ledger's own prior "Current task" text) into two slices: Slice 4
+  (cross-trade `TradeFacts` assembly only, pure/read-only) and a new Slice 5
+  (the actual freeze-transaction wiring).** Why: the two are separable
+  work with very different risk profiles — assembling 20 cross-trade
+  queries correctly is substantial, testable-in-isolation work with no
+  trust-sensitive side effects; wiring into `confirm.ts`'s freeze
+  transaction is Module 04's single most trust-sensitive change ("rule
+  evaluations freeze at close-out and are never recomputed retroactively"
+  is a non-negotiable). Splitting them means the freeze-wiring slice can
+  be reviewed against a SMALLER diff (just the wiring, not also 20 new
+  queries at the same time), and this slice's own cross-trade logic gets
+  its own dedicated tester/security/QA pass before anything trust-sensitive
+  depends on it. Not a spec/design-doc reconciliation (Module 04's own text
+  doesn't mandate one slice boundary over another) — a build-order/risk
+  judgment call, recorded here per 00-foundation §12's "log every such
+  reconciliation" instruction since it changes what "Slice 4" vs "Slice 5"
+  means going forward in this ledger.
+- 2026-08-24 — **`docs/adr/0015-iso-week-boundary-monday-start.md`: ISO
+  week (Monday start), applied to `trades.server_day`, is this repo's one
+  canonical week-boundary convention** (`lib/rules/week-boundary.ts`).
+  The FIRST place a week boundary is defined anywhere in this repo — no
+  prior code (Module 02's `server_day`, Module 04 Slices 1-3) ever needed
+  to bucket a date into a week, only a day. Chosen for two independent,
+  stated reasons: AGENTS.md's own "streak counts weeks, not days"
+  non-negotiable is the entire reason a week boundary matters in this
+  product, and `retrospeq-design-decisions.md`'s own weekend note ("the
+  weekly review boundary should follow the forex week for mixed
+  accounts") reads as favouring Monday-start (keeps the forex week's five
+  active trading days, Mon-Fri, inside one bucket) over Sunday-start.
+  **Load-bearing for whoever builds Module 04 Slice 6 (`adherence_weekly`)
+  and Module 07 (`streaks`/`weekly_snapshots`, both of which carry their
+  own `week_start date` column per their own specs)** — both MUST produce
+  byte-identical `week_start` values for the same calendar date as this
+  function, or adherence reporting and streak reporting will silently
+  misalign near a week boundary. Full reasoning, alternatives considered,
+  and consequences in the ADR itself.
 
 - 2026-08-24 — **Module 04 Slice 3 (the preview engine, §5.8, +
   `operand_distributions` computation) — coded by `retrospeq-coder`, NOT
