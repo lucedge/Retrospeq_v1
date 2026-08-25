@@ -7,6 +7,7 @@ import {
   type InstrumentBlockState,
 } from './sync';
 import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/rules/freeze-evaluations';
+import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.6 — "Confirmation and freeze —
@@ -197,6 +198,23 @@ import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/r
  *   decision Module 07 is better positioned to make once it actually
  *   exists. The chosen reading needs no new column and is trivially
  *   correct today: no `day_closeouts` row from this path, ever.
+ *
+ * ## `adherence_weekly` recompute (Module 04 §5.6, Slice 6) — best-effort,
+ * AFTER commit, never inside this transaction
+ *
+ * Both `confirmDay` and `autoConfirmStaleTrades` call
+ * `recomputeAdherenceWeeklyForConfirmations` (`lib/rules/adherence-
+ * repository.ts`) AFTER their own `withServiceRoleConnection` transaction
+ * has already committed — never inside it. Full reasoning lives in that
+ * file's own header (mirrors `distributions-repository.ts`'s established
+ * post-sync pattern); the short version: `adherence_weekly` is a
+ * materialised CACHE over the already-frozen `rule_evaluations` rows this
+ * same transaction just wrote, not itself the trust-sensitive record, so a
+ * recompute failure must never roll back or block a confirmation that
+ * already genuinely happened. `recomputeAdherenceWeeklyForConfirmations`
+ * never throws (each `(user_id, week)` pair is individually try/caught and
+ * logged); this file never wraps its call in its own additional try/catch
+ * for that reason.
  */
 
 // ---------------------------------------------------------------------
@@ -301,8 +319,12 @@ export async function confirmDay(
   options: ConfirmDayOptions = {},
 ): Promise<ConfirmDayResult> {
   const now = options.now ? options.now() : new Date();
+  // Set only on the success path, inside the transaction below -- the
+  // post-commit adherence recompute (see this file's header) needs
+  // `account.user_id`, which lives only inside that closure.
+  let confirmedUserId: string | undefined;
 
-  return withServiceRoleConnection(async (client) => {
+  const result = await withServiceRoleConnection(async (client) => {
     const accountRes = await client.query<{ id: string; user_id: string; day_rollover: string }>(
       `select id, user_id, day_rollover from retrospeq.trading_accounts where id = $1`,
       [accountId],
@@ -464,8 +486,21 @@ export async function confirmDay(
       kind,
       ruleEvaluationAnomalies,
     };
+    confirmedUserId = account.user_id;
     return success;
   });
+
+  // Post-commit, best-effort adherence_weekly recompute -- see this file's
+  // header. Only when this call actually confirmed at least one trade
+  // (nothing new for adherence to reflect otherwise, e.g. an idempotent
+  // re-confirm of an already-closed-out day, header judgment call #5).
+  // confirmDay always operates on exactly one server_day, so this is
+  // always exactly one (user, week) pair.
+  if (result.confirmed && result.tradesConfirmed.length > 0 && confirmedUserId) {
+    await recomputeAdherenceWeeklyForConfirmations([{ userId: confirmedUserId, serverDay }]);
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------
@@ -497,10 +532,16 @@ export interface AutoConfirmResult {
 
 interface AutoConfirmCandidateRow {
   id: string;
+  user_id: string;
   account_id: string;
   instrument: string;
   block_id: string;
   day_rollover: string;
+  // Only needed for the post-commit adherence_weekly recompute (this
+  // file's header) -- not used by any grouping/freeze logic in this
+  // function, which already reads server_day off `trades` elsewhere via
+  // `evaluateAndFreezeTradeRules`'s own fetch.
+  server_day: string;
 }
 
 /**
@@ -517,10 +558,16 @@ interface AutoConfirmCandidateRow {
 export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): Promise<AutoConfirmResult> {
   const now = options.now ? options.now() : new Date();
   const cutoff = new Date(now.getTime() - AUTO_CONFIRM_THRESHOLD_MS);
+  // Populated on the success path below with one (user, server_day) entry
+  // per trade this call ACTUALLY confirmed -- used for the post-commit
+  // adherence_weekly recompute (this file's header), which dedupes these
+  // down to distinct (user, week) pairs itself.
+  let confirmedForRecompute: { userId: string; serverDay: string }[] = [];
 
-  return withServiceRoleConnection(async (client) => {
+  const result = await withServiceRoleConnection(async (client) => {
     const candidatesRes = await client.query<AutoConfirmCandidateRow>(
-      `select t.id, t.account_id, t.instrument, t.block_id, a.day_rollover
+      `select t.id, t.user_id, t.account_id, t.instrument, t.block_id, a.day_rollover,
+              t.server_day::text as server_day
          from retrospeq.trades t
          join retrospeq.trading_accounts a on a.id = t.account_id
         where t.status = 'closed'
@@ -597,6 +644,27 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
 
     // No day_closeouts row, ever -- see header's own dedicated paragraph.
 
+    // Only the trades this call ACTUALLY confirmed (never the ones it
+    // merely intended to but lost the race on) contribute a recompute
+    // target -- same "confirmedIds, not toConfirm" distinction the freeze
+    // loop directly above already makes.
+    const candidateById = new Map(candidates.map((c) => [c.id, c] as const));
+    confirmedForRecompute = confirmedIds.map((id) => {
+      const candidate = candidateById.get(id)!;
+      return { userId: candidate.user_id, serverDay: candidate.server_day };
+    });
+
     return { tradesConfirmed: confirmedIds, tradesSkippedStaleBlock: skipped, ruleEvaluationAnomalies };
   });
+
+  // Post-commit, best-effort adherence_weekly recompute -- see this file's
+  // header. This sweep can span many accounts/users/days in one call, so
+  // recomputeAdherenceWeeklyForConfirmations's own deduping (never the
+  // same (user, week) pair recomputed twice in one call) matters here in a
+  // way it never does for confirmDay's always-single pair.
+  if (confirmedForRecompute.length > 0) {
+    await recomputeAdherenceWeeklyForConfirmations(confirmedForRecompute);
+  }
+
+  return result;
 }

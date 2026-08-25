@@ -632,3 +632,60 @@ worth checking before assuming it's isolated). Building nightly recompute
 (once real scheduler infra exists) would also close the "no independent
 safety net" gap this entry names above — worth prioritizing once a
 Vercel project/cron surface exists, not before.
+
+## `adherence_weekly` recompute failing after a confirmation
+
+**Source:** Module 04 §5.6 / §3.1 — "Materialised weekly. Never computed
+from raw evaluations at read time." Owning code:
+`lib/rules/adherence-repository.ts`'s `recomputeAdherenceWeeklyForConfirmations`,
+called from `lib/ingestion/confirm.ts`'s `confirmDay` and
+`autoConfirmStaleTrades`, both AFTER their own transaction has already
+committed (see `adherence-repository.ts`'s own header for the full
+reasoning — the same "best-effort, non-blocking, materialised cache"
+posture `operand_distributions` already established, see the entry
+directly above).
+
+**What this means operationally:** identical shape to the
+`operand_distributions` entry above, applied to `adherence_weekly`
+instead. A recompute failure must never turn a genuinely successful trade
+confirmation into a reported failure — `confirmDay`/`autoConfirmStaleTrades`
+still return their normal success result either way, and
+`recomputeAdherenceWeeklyForConfirmations` itself never throws (each
+`(user_id, week_start)` pair is individually try/caught). The only trace
+is a `console.error` line prefixed `[adherence] recompute failed for user
+<id>, week <week_start>`. Left unaddressed, that trader's
+`adherence_weekly` row for that week silently goes stale (or, for a
+week's first-ever confirmation, is simply never created) — `fetchAdherenceWeekly`
+keeps returning whatever was last materialised (possibly `null`, read
+correctly as "not enough data yet," not as an error) until the next
+confirmation in that same week succeeds.
+
+**Nightly recompute is NOT built**, same standing gap as the
+`operand_distributions` entry above (PROGRESS.md "Infra gaps," no cron/
+scheduler infra exists yet). Until it does, a confirm/auto-confirm call is
+the ONLY way a trader's `adherence_weekly` row gets refreshed — a week
+with zero further confirmations after a prior recompute simply keeps its
+last-computed numbers (not wrong, just not re-touched).
+
+**How to check:** grep application logs for `[adherence] recompute failed
+for user` — every occurrence names the affected `user_id`/`week_start`
+directly. A quick live check for a specific trader/week: compare
+`adherence_weekly.computed_at` against that week's most recent
+`rule_evaluations.frozen_at` for the same user — a `computed_at`
+meaningfully older than the latest frozen evaluation in that week means
+either this recompute failed, or (for a week with no confirmations yet)
+it has simply never run.
+
+**Action:** an isolated failure (a transient DB hiccup during the
+recompute's own reads/writes) self-heals on the NEXT successful
+confirmation in that same week, since `recomputeAdherenceWeekly` always
+recomputes the FULL week from `rule_evaluations`, not an incremental
+delta — no backlog to work through, no lost data. Investigate if the SAME
+trader/week fails repeatedly across multiple confirmations, or if this
+error appears across many traders at once (likely a
+`retrospeq.rule_evaluations`/`retrospeq.adherence_weekly` schema or
+connectivity issue affecting the underlying query broadly, worth checking
+before assuming it's isolated). Building nightly recompute (once real
+scheduler infra exists) would also close the same "no independent safety
+net" gap the `operand_distributions` entry names — worth prioritizing
+once a Vercel project/cron surface exists, not before.

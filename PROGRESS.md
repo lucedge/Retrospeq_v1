@@ -22,22 +22,38 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. Slices 6-8 (`adherence_weekly` materialization, severity lifecycle, UI) not started. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. Slices 7-8 (severity lifecycle, UI) not started. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**→ Module 04 Slice 5 (freeze-wiring, §5.4/§5.5/§5.6/§7.1) is CODED
-(2026-08-24) and tester gate PASS, gap-closure complete (2026-08-25) —
-ready for security-reviewer.** This is
-the slice where `rule_evaluations` rows actually start getting written
-and frozen, making the hard-adherence number real instead of theoretical.
-Full write-up in the 2026-08-24 decision log entry below; the 2026-08-25
-gap-closure addendum (a second tester pass finishing what an earlier
-session-limited pass didn't get to) is right after the original write-up,
-before "Next:". Summary here.
+**→ Module 04 Slices 1-6 are all DONE (2026-08-25).** Full coder →
+tester → security-reviewer → qa gate sequence passed on every one. Slice
+6 (`adherence_weekly` materialization) is the most recent: QA's first
+pass FAILED on a real `retrospeq-design-decisions.md` §6 violation (the
+original `top_break_rule_id` selection combined hard+soft broken
+evaluations into one pool, risking a rare hard breach getting buried
+under more common soft violations) — fixed to hard-priority selection
+(hard pool wins whenever non-empty, soft-only fallback otherwise),
+re-verified PASS. See the 2026-08-25 decision-log entries below (search
+"Slice 6") for the full coder/tester/security/qa write-ups, including
+the fix and its re-verification.
+
+**Next: Module 04 Slice 7 — severity lifecycle (§5.7) + `rule_overrides`
++ ambient strip (§5.9).** Promote (soft→hard, offered not automatic: 6
+weeks active · ≥20 applicable evaluations · ≥95% compliance · zero
+breaks in the last 3 weeks), demote (hard→soft, freely), retire
+(timestamped, no pause anywhere in the UI or API — story 2.4), the
+6-active-hard-rules cap (a 7th requires demoting one, presented as a
+trade-off not an error, `RULE_HARD_CAP`). `rule_overrides`: a row
+written when the ambient strip showed a breach and the trader proceeded
+anyway (§5.9 — facts ambient, judgments silent; account state always
+visible, tinted by state, never a modal/confirm/block). No UI in this
+slice yet (Slice 8) — build the Server Actions/repository layer: promote
+eligibility needs to read `rule_evaluations`/`adherence_weekly` (Slice
+5/6's own tables) to check the 6wk/20-eval/95%/zero-breaks-in-3wk gate.
 
 **What was built:** `lib/rules/freeze-evaluations.ts` — one new
 orchestrating function, `evaluateAndFreezeTradeRules(client, tradeId,
@@ -353,22 +369,246 @@ re-checked against the real code (the atomicity claim, the §5.5
 predicate SQL, the RLS policy) and confirmed genuine, not fabricated.
 **Module 04 Slice 5 (freeze-wiring) is DONE.**
 
-**Next: Module 04 Slice 6 — `adherence_weekly` materialization (§5.6).**
-Read frozen `rule_evaluations` rows and aggregate them into the weekly
-two-fraction report (`hard_followed/hard_total`, `soft_followed/
-soft_total`, never blended, never a bare percentage — AGENTS.md
-non-negotiable, "adherence earns no XP, ever" also applies: this table
-must never feed Module 07's XP economy). Must use the SAME ISO-week
-(Monday-start) boundary Slice 4's `lib/rules/week-boundary.ts`
-established (`docs/adr/0015-iso-week-boundary-monday-start.md`'s own
-forward-looking warning names this table by name) — do not invent a
-second week-bucketing convention. `top_break_rule_id`/`top_break_count`
-per §3.1's schema also need populating ("drops attributed to a single
-named rule," §5.6). Materialized on a schedule, never computed from raw
-evaluations at read time (§3.1's own table comment) — same "no real cron
-yet" constraint Slice 3 hit for `operand_distributions`; build the
-on-demand/post-freeze recompute for real, flag nightly-cron as the same
-already-tracked infra gap, don't fake it.
+**→ Module 04 Slice 6 (`adherence_weekly` materialization, §5.6) —
+CODED (2026-08-25), ready for tester.**
+
+**What was built:** `lib/rules/adherence-repository.ts` (new file).
+
+- `computeAdherenceWeekCounts(rows)` — pure, no I/O. §5.6's core
+  computation verbatim: `hard_total`/`hard_followed` and
+  `soft_total`/`soft_followed` computed separately, `not_applicable`
+  dropped from BOTH numerator and denominator for each severity (not
+  counted as followed, not counted as broken). Also computes
+  `top_break_rule_id`/`top_break_count`.
+- **`top_break_rule_id` scope decision (§5.6 doesn't say hard-only or
+  soft-only): COMBINED across both severities.** §5.6's own presentation
+  example — *"31 of 34 rules followed this week... with drops attributed
+  to a single named rule"* — reads as one integrated weekly narrative
+  ("31 of 34 RULES," not "31 of 34 HARD rules"), so the single named rule
+  is drawn from the same combined pool. Among every `result = 'broken'`
+  evaluation in the week (both severities), group by `rule_id`, highest
+  broken count wins.
+- **Tie-break (deterministic, documented, not left to iteration order):**
+  equal broken counts → earliest `frozen_at` among the tied rules' own
+  breaks wins (the rule that started breaking first reads as more
+  informative to name); a further tie (identical earliest-break instant)
+  → lowest `rule_id`, for total determinism. Verified by dedicated unit
+  tests, including one proving the earliest-`frozen_at` tracking is
+  correctly PER-RULE (a rule's later break never overwrites its own
+  earlier one, regardless of input array order).
+- `fetchAdherenceEvaluationRowsForWeek(client, userId, weekStart)` — the
+  ONE query per `(user_id, week)` pair (§12's <500ms budget): `server_day
+  between weekStartForServerDay(weekStart) and weekEndForServerDay(weekStart)`,
+  reusing `lib/rules/week-boundary.ts` directly (ADR 0015), never
+  re-deriving. `assertCanonicalWeekStart` throws `InvalidWeekStartError`
+  (loud, named) if a caller ever passes a non-Monday `weekStart`.
+- `recomputeAdherenceWeekly(client, userId, weekStart)` — fetch + pure
+  compute + upsert (`on conflict (user_id, week_start) do update`), and
+  `recomputeAdherenceWeeklyForUser` — the standalone service-role wrapper.
+- `recomputeAdherenceWeeklyForConfirmations(targets)` — the best-effort
+  batch entry point `confirm.ts` calls. Dedupes `(userId, weekStart)`
+  pairs (a `confirmDay` call always contributes exactly one;
+  `autoConfirmStaleTrades` can contribute many across many users/weeks in
+  one sweep). **Never throws** — each pair individually try/caught,
+  logged loudly (`console.error`, matching `distributions-repository.ts`'s
+  own sync-time precedent), a failure for one pair never blocks the
+  others or the caller's already-committed confirmation.
+- `fetchAdherenceWeekly(userId, weekStart)` — the read side for whoever
+  wires Module 06's weekly review next. Runs under `withUserConnection`
+  (real RLS, matching `rules-repository.ts`'s convention for reads a real
+  trader session drives), issues exactly ONE `SELECT` against
+  `adherence_weekly` and nothing else (proven directly by a unit test
+  inspecting the query text), returns `null` when nothing's materialized
+  yet (a correct "not enough data yet" state, not an error). Returns the
+  two fractions as FOUR SEPARATE integers (`hardFollowed`/`hardTotal`,
+  `softFollowed`/`softTotal`) — deliberately no pre-computed ratio, no
+  blended number spanning both severities, so a future UI slice can't
+  accidentally reach for an already-blended shape.
+
+**Recompute timing decision: best-effort, AFTER commit — not inside the
+confirm transaction.** `adherence_weekly` is a materialized CACHE derived
+from `rule_evaluations` (already frozen atomically by Slice 5 inside
+`confirm.ts`'s own transaction), not itself the trust-sensitive record —
+the same shape `operand_distributions` already established. Recomputing
+inside `confirmDay`/`autoConfirmStaleTrades`'s own transaction was
+considered and rejected: those are Module 02's most safety-critical
+transactions, and `autoConfirmStaleTrades` in particular can span many
+accounts/users/days in one sweep — growing that transaction's lock
+duration in proportion to sweep size for a value the table's own comment
+already says is allowed to be "materialised on a schedule." Both
+`confirmDay` and `autoConfirmStaleTrades` in `lib/ingestion/confirm.ts`
+now capture the `(user, server_day)` pair(s) they actually confirmed
+inside their transaction closure, then call
+`recomputeAdherenceWeeklyForConfirmations` AFTER `withServiceRoleConnection`
+resolves (i.e., genuinely after commit) — awaited, but never wrapped in
+an additional try/catch at the call site since the repository function
+itself never throws.
+
+**Known, already-tracked gap, not built here:** no real cron/scheduler
+infra exists (PROGRESS.md "Infra gaps"), so there's no independent
+nightly "recompute every trader's current week regardless of
+confirmation activity" job — same gap `operand_distributions` already has,
+not a new one. `docs/runbook.md` gets a new matching entry, "`adherence_weekly`
+recompute failing after a confirmation," mirroring the existing
+`operand_distributions` entry's shape.
+
+**Non-negotiables actively verified:** grepped the new file for
+`xp|streak|points|gamif` (case-insensitive) — zero hits (a unit test
+asserts this directly against the file's own source, so it can't regress
+silently). The read function returns four separate integers, never a
+blended/pre-divided ratio. `rule_evaluations` stays the only input — no
+`evaluate()` call, no `rule_versions`/`rules` join beyond storing the bare
+`top_break_rule_id` (deliberately name-agnostic; resolving it to display
+text is a later read-side join, Module 06's concern).
+
+**Tests:** `lib/rules/__tests__/adherence-repository.test.ts` (21 unit
+tests, mocked `@/lib/supabase/direct`, matching
+`subscription-repository.test.ts`'s established mock pattern) —
+hard/soft separation and `not_applicable` exclusion, empty-week and
+not-applicable-only-week shapes, top-break scope/tie-break (3 dedicated
+cases), canonical-week-start validation, the week-boundary join's exact
+query bounds, `recomputeAdherenceWeekly`'s upsert params, the batch
+helper's dedup + non-throwing-on-partial-failure behavior, and the
+read side's "one query, `adherence_weekly` only" + four-separate-integers
++ null-when-absent + RLS-connection-mode assertions.
+`lib/rules/__tests__/adherence-repository.live.test.ts` (4 live-DB tests)
+— the full pipeline (2 rules, one hard one soft, plus a third soft rule
+on a t1-tiered operand against a t0 account to generate deterministic
+`not_applicable` rows; 5 trades across 5 days of one ISO week, confirmed
+via 5 separate `confirmDay` calls, each one's own post-commit recompute
+converging the SAME row to the full week's cumulative truth) with numbers
+hand-verified against the fixture; a week-boundary exclusion test (a
+Sunday trade and a following-Monday trade both land in their OWN week,
+never the target week); an `autoConfirmStaleTrades` dedup test; and an
+RLS test (owner SELECT works, a second user sees nothing, and a direct
+authenticated-role `INSERT` attempt is rejected — no client write path
+exists, matching Slice 1's own migration comment).
+
+**Build/lint:** `tsc --noEmit`, `eslint`, and `npm run build` all clean.
+Full `lib/rules` + `lib/ingestion` suite re-run (684 tests): 681 passed, 2
+skipped (env-gated), 1 failed — `trades-repository.live.test.ts`'s
+`listTradesForAccountDay` ordering assertion, confirmed to pass cleanly
+when run in isolation (39s, 11/11 green); this is shared-dev-DB
+parallel-test contention between live test files running concurrently
+against the one shared Supabase project, pre-existing and unrelated to
+this slice's changes (nothing in this slice touches `trades-repository.ts`
+or its test file).
+
+**Not yet done:** tester/security-reviewer/qa gates. Module 06's weekly
+review UI (the actual consumer of `fetchAdherenceWeekly`) is a later
+phase (build order step 4) and out of scope here, per this slice's own
+dispatch ("no Server Action/UI needed yet").
+
+**→ Module 04 Slice 6 tester gate: PASS (2026-08-25), independently
+re-derived, not a rubber stamp.** Re-verified against
+`04-rulebook-and-evaluation.md` §5.6/§3.1/§12 and AGENTS.md's
+non-negotiables, with fixtures I built myself, not the coder's:
+
+- **§5.6 core computation, independently re-derived.** Own fixture (4
+  hard/followed, 2 hard/broken, 3 hard/not_applicable, 1 soft/followed, 5
+  soft/broken, 2 soft/not_applicable) confirms `hardTotal=6` (not 9) and
+  `softTotal=6` (not 8) — `not_applicable` rows are excluded from the
+  denominator entirely, not merely from the numerator. The exact "easy to
+  get subtly wrong" case the module spec calls out is correct.
+- **Week-boundary correctness.** Grepped `adherence-repository.ts` for any
+  `new Date`/`getDay`/manual date arithmetic outside calls into
+  `week-boundary.ts` — zero hits; every boundary computation goes through
+  `weekStartForServerDay`/`weekEndForServerDay` exclusively. Confirmed via
+  the coder's own live test (Sunday trade vs. following-Monday trade land
+  in distinct weeks) plus my own reading of the SQL (`server_day between
+  $2 and $3` using those two functions' output directly).
+- **`top_break_rule_id` tie-break, own 3-rule fixture.** Built a genuine
+  three-way scenario (three rules each broken twice, with distinct
+  earliest-break instants, deliberately ordered in the input array so the
+  correct winner is NOT first or last) — level 1 (count) narrows to the
+  earliest three, level 2 (earliest `frozen_at`) picks the actual winner
+  despite array-order red herrings. A separate fixture forces a genuine
+  level-3 tie (identical count AND identical earliest `frozen_at` across
+  three rule ids) — lowest `rule_id` wins, confirmed.
+- **Materialized-only read, structurally proven.** `fetchAdherenceWeekly`'s
+  SQL string contains `retrospeq.adherence_weekly` and does not contain
+  `rule_evaluations` — confirmed both by reading the source and by an
+  independent test asserting on the query text directly (not trusting the
+  coder's own equivalent test).
+- **No blended percentage anywhere in this data layer.** `AdherenceWeeklyRecord`
+  has `hardFollowed`/`hardTotal`/`softFollowed`/`softTotal` as four
+  separate fields; grepped the file for `ratio`/`percent`/division — the
+  only hits are doc-comments explicitly describing what this file
+  deliberately does NOT do.
+- **No XP/gamification coupling, re-verified independently.** Fresh grep
+  (not reusing the coder's own test) across `adherence-repository.ts` and
+  the added lines of the `confirm.ts` diff for `xp|streak|points|gamif|
+  engagement` — zero real hits.
+- **Best-effort recompute doesn't corrupt — proven against a REAL row, not
+  a mock.** Wrote a new live-DB test: establish a real baseline
+  `adherence_weekly` row via a genuine `confirmDay` call, then force the
+  UPSERT statement specifically to reject (via a client wrapper that lets
+  the SELECT pass through to real Postgres and only fails the write), then
+  re-read the row over a separate connection. Row is byte-identical to the
+  pre-failure baseline (same counts, same `computed_at`) — never null,
+  never half-written, and the underlying trade confirmation (already
+  committed before the forced failure) stays `confirmed`. This also
+  organically reproduced itself during the full-suite run: a real
+  cross-test race (a concurrently-running live test file's user got
+  deleted mid-sweep) hit this exact FK-violation path in
+  `recomputeAdherenceWeeklyForConfirmations`, was caught, logged per
+  `docs/runbook.md`'s new entry, and did not fail the calling test or
+  corrupt any row — real-world confirmation the best-effort design works
+  as documented, not just in a constructed test.
+- **`autoConfirmStaleTrades` batching/dedup, own multi-user/multi-week
+  fixture.** Beyond the coder's same-user/same-week dedup test, built one
+  covering 2 users × mixed weeks in a single call (one user with two
+  server_days in the same week, one server_day in a different week; a
+  second user sharing a calendar week with the first) — confirms exactly
+  3 distinct `(user, week)` pairs recomputed, each independently correct,
+  never fewer, never duplicated.
+- **The flaky-test claim, re-verified.** `git diff --stat` confirms
+  `trades-repository.live.test.ts` is genuinely untouched by this slice.
+  Ran it in isolation myself: 11/11 passed, ~18s. Also re-ran the full
+  scoped `lib/rules` + `lib/ingestion` suite myself: 682/684 passed, 2
+  skipped, 0 failed (the flake didn't even reproduce this run) — confirms
+  intermittent shared-dev-DB contention, not a real regression.
+- **Coverage:** `lib/rules/adherence-repository.ts` — **100% lines,
+  100% branches, 100% functions** (v8 coverage, own isolated run). Clears
+  00-foundation §9's 90%-line engine bar with room to spare.
+- **Build/lint/tsc:** re-ran independently — `npm run build`, `npx eslint
+  .`, `npx tsc --noEmit` all clean (0 errors; only pre-existing warnings
+  in unrelated files).
+- **New tests added (10, all passing), closing genuine independent-
+  verification gaps rather than duplicating the coder's own suite:**
+  `lib/rules/__tests__/adherence-repository.independent-verify.test.ts`
+  (8 mocked/pure tests — fresh §5.6 fixture, 4-scenario tie-break chain,
+  multi-user/multi-week dedup, independent XP/gamification greps) and
+  `lib/rules/__tests__/adherence-repository.independent-verify.live.test.ts`
+  (1 live-DB test — the forced-write-failure-never-corrupts proof above).
+- **One minor gap noted, not blocking:** the `confirm.ts →
+  recomputeAdherenceWeeklyForConfirmations` wiring itself (call-after-
+  commit, correct args, skip-when-nothing-confirmed) is proven only by
+  the coder's live-DB test, not at the mock/unit level (unlike Slice 5's
+  freeze-wiring, which has both). Investigated whether this matters in
+  practice: `recomputeAdherenceWeeklyForConfirmations`'s own dedup loop
+  calls `weekStartForServerDay` OUTSIDE its per-pair try/catch, so a
+  malformed `serverDay` would throw synchronously and propagate past
+  `confirm.ts` (which has no defensive try/catch of its own, by design —
+  it relies on the batch helper's "never throws" contract). Traced both
+  real call sites: `confirmDay`'s `serverDay` is already validated by
+  `computeServerDayRange`'s strict `YYYY-MM-DD` regex earlier in the same
+  transaction (throws before the recompute call is ever reached), and
+  `autoConfirmStaleTrades`'s `server_day` comes from a Postgres
+  `date::text` cast (always well-formed). Gap is real but unreachable via
+  either production call site today — flagging for whoever next touches
+  `confirm.ts`'s call site, not blocking this slice. Did not add a mock
+  test for the wiring itself: reproducing `confirmDay`'s full real query
+  sequence (account lookup, coverage-gap check, ambiguous-grouping check,
+  anomaly check, freeze, closeout insert) in a mock risks being more
+  fragile than informative, and the live-DB test already exercises the
+  real code path — arguably stronger evidence than a mock would give.
+
+**Readiness for security review: YES.** No RLS gap (owner-SELECT-only, no
+client write path, both verified live), no credential handling in this
+slice, no expression-evaluator surface, no currency mixing, no XP
+coupling, no compound-rule surface. Nothing here should block
+security-reviewer, but they own the final call.
 
 **Historical detail below, preserved for reference —**
 
@@ -4456,6 +4696,40 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-25 — **Module 04 Slice 6 (`adherence_weekly`) — `top_break_rule_id`
+  selection changed from a COMBINED hard+soft pool to HARD-PRIORITY, per
+  retrospeq-qa review.** §5.6's own worked example ("31 of 34 rules
+  followed this week, up from 27 of 34" — with drops attributed to a
+  single named rule) is what the original implementation built against,
+  and read in isolation it supports a combined pool: "31 of 34 RULES,"
+  not "31 of 34 HARD rules." QA found this contradicts
+  `retrospeq-design-decisions.md` §6 ("Two numbers, never one"): *"Hard
+  rules should be few enough that '34 of 34' is the normal reading and
+  any deviation is loud"* — soft rules are broken far more often than
+  hard ones by design, so a combined ranked pool lets a rare, important
+  hard-rule breach get numerically buried under a much more common
+  soft-rule violation, exactly the failure story 3.3 names ("a risk
+  breach doesn't read like a skipped checkbox"). Per AGENTS.md's "spec
+  vs design-decisions doc → design doc wins" convention, the design doc
+  won: `computeAdherenceWeekCounts` now groups broken evaluations into
+  separate hard/soft pools and selects the top break from the hard pool
+  whenever it's non-empty, falling back to the soft pool (not a
+  re-combined one) only when zero hard breaks occurred that week. The
+  soft-scoped fallback (rather than a combined fallback) is itself read
+  from §6.1's own worked attribution example — *"Your risk cap accounts
+  for 6 of the 14 soft breaks"* — where 14 matches a soft-only broken
+  count, showing soft-scoped attribution is the design doc's own
+  standalone pattern, not a last resort; falling back to a combined pool
+  would just reintroduce the blending §6 rejects, conditionally instead
+  of always. Existing tie-break chain (highest count → earliest
+  `frozen_at` → lowest `rule_id`) unchanged, now applied within whichever
+  pool is selected. Added a disambiguating unit test (one hard rule
+  broken twice vs. one soft rule broken five times → hard rule wins) that
+  the prior test suite lacked — QA noted the existing "combined" test
+  happened to pass under either interpretation because its hard rule had
+  the higher count anyway. Full reasoning in `lib/rules/adherence-repository.ts`'s
+  own header comment ("`top_break_rule_id` scope: HARD-PRIORITY, never a
+  blended pool").
 - 2026-08-24 — **Module 04 Slice 5 (freeze-wiring) coded — `rule_evaluations`
   now actually gets written and frozen at confirm, from both `confirmDay`
   and `autoConfirmStaleTrades`.** Full report in "Current task" above; key
