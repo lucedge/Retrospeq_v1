@@ -23,6 +23,7 @@ import { RenderSentenceError, renderSentence } from '@/lib/rules/render-sentence
 import {
   RuleEditConflictError,
   RuleNotEditableError,
+  RuleNotFoundError,
   fetchAccountSyncTiers,
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
@@ -30,6 +31,19 @@ import {
   applyRuleEdit,
 } from '@/lib/rules/rules-repository';
 import { preview, type PreviewResult } from '@/lib/rules/preview';
+import {
+  checkPromotionEligibilityForUser,
+  type PromotionEligibilityDetail,
+  type PromotionIneligibilityReason,
+} from '@/lib/rules/promotion-eligibility';
+import {
+  RuleLifecycleConflictError,
+  fetchActiveHardRules,
+  fetchRuleForLifecycle,
+  promoteRuleSeverity,
+  demoteRuleSeverity,
+  retireRuleState,
+} from '@/lib/rules/severity-lifecycle-repository';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -545,4 +559,229 @@ export async function previewRule(input: PreviewRuleInput): Promise<PreviewRuleA
 
   const result = await preview(user.id, operandId, op, value);
   return { success: true, preview: result };
+}
+
+// ---------------------------------------------------------------------
+// Severity lifecycle — Module 04 §5.7, Slice 7
+//
+// promoteRule/demoteRule/retireRule. No UI in this slice (Slice 9, per
+// this slice's own dispatch scope note) — these are typed Server Actions
+// ready for that future screen, matching createRule/editRule's own
+// "backend function first" precedent above. NOT built in this slice
+// (explicitly out of scope, per dispatch): the ambient live-state
+// evaluation engine and `rule_overrides` writing (§5.9) — that is Slice 8.
+// ---------------------------------------------------------------------
+
+export interface SeverityLifecycleActionState {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  ruleId?: string;
+  severity?: 'soft' | 'hard';
+  state?: 'active' | 'retired';
+  promotedAt?: string;
+  retiredAt?: string;
+  /** Populated only on a `RULE_PROMOTION_NOT_ELIGIBLE` rejection — every
+   *  gate the rule is currently failing, per this slice's own dispatch
+   *  ("the trader needs to understand what's missing"), not just the
+   *  first one found. */
+  eligibility?: { reasons: PromotionIneligibilityReason[]; detail: PromotionEligibilityDetail };
+  /** Populated only on a `RULE_HARD_CAP` rejection — the caller's own
+   *  currently active hard rules, for a future UI's demote-chooser
+   *  (§6.1's reference markup: "choose one to move back to soft"). */
+  hardCapChooser?: { ruleId: string; rendered: string }[];
+}
+
+/**
+ * §5.7's soft -> hard transition. Validation order, per this slice's own
+ * dispatch: ownership + current state/severity (via
+ * `checkPromotionEligibilityForUser`'s own `currentSeverity`/`currentState`,
+ * reusing the SAME query pass that computes eligibility rather than a
+ * second redundant fetch) -> eligibility (6wk/20-eval/95%/zero-recent-
+ * breaks) -> `rules.hard` entitlement (free tier: 0, blocked outright) ->
+ * the 6-active-hard-rule cap specifically (`RULE_HARD_CAP`, a trade-off
+ * chooser, not a bare denial) -> the atomic guarded UPDATE.
+ *
+ * The `rules.hard` entitlement check and the "6-active-hard-rule cap"
+ * are NOT two independently-invented numbers: `lib/entitlements/
+ * capability-table.ts`'s own `rules.hard: { pro: 6 }` IS §5.7's "cap 6" —
+ * one number, read from ONE place (`entitlement.limit`), not duplicated as
+ * a second hardcoded `6` anywhere in this file or in
+ * `severity-lifecycle-repository.ts`. `entitlement.reason === 'quota'`
+ * (Pro, at the real cap) is what triggers the `RULE_HARD_CAP` trade-off
+ * response instead of a bare `ENTITLEMENT_LIMIT` denial — the friendlier
+ * §5.7/§10 UX ("presented as a trade-off, not an error") layered on top
+ * of the same entitlement fact Module 01's generic quota-exceeded case
+ * already represents.
+ */
+export async function promoteRule(ruleId: string): Promise<SeverityLifecycleActionState> {
+  const user = await requireSessionAndRateLimit('promoteRule');
+  if (isErrorState(user)) return user;
+
+  const parsedRuleId = z.uuid().safeParse(ruleId);
+  if (!parsedRuleId.success) {
+    return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  let eligibility;
+  try {
+    eligibility = await checkPromotionEligibilityForUser(user.id, parsedRuleId.data);
+  } catch (err) {
+    if (err instanceof RuleNotFoundError) {
+      return { error: { code: 'RULE_NOT_FOUND', user_message: "We couldn't find that rule.", retryable: false } };
+    }
+    throw err;
+  }
+
+  if (eligibility.currentState !== 'active') {
+    const notEditable = new RuleNotEditableError(parsedRuleId.data, eligibility.currentState);
+    return {
+      error: { code: notEditable.code, user_message: 'This rule has been retired and can no longer be promoted.', retryable: false },
+    };
+  }
+  if (eligibility.currentSeverity !== 'soft') {
+    return { error: { code: 'RULE_ALREADY_HARD', user_message: 'This rule is already hard.', retryable: false } };
+  }
+  if (!eligibility.eligible) {
+    return {
+      error: {
+        code: 'RULE_PROMOTION_NOT_ELIGIBLE',
+        user_message: eligibility.reasons[0]?.message ?? 'This rule is not yet eligible for promotion.',
+        retryable: false,
+      },
+      eligibility: { reasons: eligibility.reasons, detail: eligibility.detail },
+    };
+  }
+
+  const entitlement = await canForUser(user.id, 'rules.hard');
+  if (entitlement.reason === 'plan') {
+    return {
+      error: { code: 'ENTITLEMENT_LIMIT', user_message: 'Hard rules are a Pro feature. Upgrade to promote a rule.', retryable: false },
+    };
+  }
+  if (entitlement.reason === 'not_yet_checkable' || entitlement.limit === null) {
+    // Should not happen for `rules.hard` (capability-table.ts always sets
+    // a finite Pro cap, and this slice wires a real counter into
+    // defaultCanDeps) -- fail closed rather than assume "under the cap"
+    // if it somehow does, matching resolve.ts's own posture.
+    return {
+      error: { code: 'ENTITLEMENT_LIMIT', user_message: "You've reached your hard-rule limit.", retryable: false },
+    };
+  }
+  if (entitlement.reason === 'quota') {
+    const activeHardRules = await fetchActiveHardRules(user.id);
+    return {
+      error: {
+        code: 'RULE_HARD_CAP',
+        user_message: `You already have ${activeHardRules.length} hard rules. Choose one to move back to soft before promoting this one.`,
+        retryable: false,
+      },
+      hardCapChooser: activeHardRules.map((r) => ({ ruleId: r.ruleId, rendered: r.rendered })),
+    };
+  }
+
+  try {
+    const result = await promoteRuleSeverity(user.id, parsedRuleId.data, entitlement.limit);
+    revalidatePath('/rules');
+    return { success: true, ruleId: parsedRuleId.data, severity: 'hard', promotedAt: result.promotedAt };
+  } catch (err) {
+    if (err instanceof RuleLifecycleConflictError) {
+      return {
+        error: { code: err.code, user_message: 'This rule changed elsewhere. Please refresh and try again.', retryable: true },
+      };
+    }
+    console.error('[rules/actions:promoteRule] update failed:', err);
+    return {
+      error: { code: 'RULE_PROMOTE_INTERNAL', user_message: 'Something went wrong promoting this rule. Please try again.', retryable: true },
+    };
+  }
+}
+
+/**
+ * §5.7's hard -> soft transition. "User demotes, freely" — no eligibility
+ * gate and no entitlement check (freeing a hard-rule slot never needs
+ * MORE of anything), just the ownership + prior-state guard every write in
+ * this module carries.
+ */
+export async function demoteRule(ruleId: string): Promise<SeverityLifecycleActionState> {
+  const user = await requireSessionAndRateLimit('demoteRule');
+  if (isErrorState(user)) return user;
+
+  const parsedRuleId = z.uuid().safeParse(ruleId);
+  if (!parsedRuleId.success) {
+    return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const current = await fetchRuleForLifecycle(user.id, parsedRuleId.data);
+  if (!current) {
+    return { error: { code: 'RULE_NOT_FOUND', user_message: "We couldn't find that rule.", retryable: false } };
+  }
+  if (current.state !== 'active') {
+    const notEditable = new RuleNotEditableError(parsedRuleId.data, current.state);
+    return {
+      error: { code: notEditable.code, user_message: 'This rule has been retired.', retryable: false },
+    };
+  }
+  if (current.severity !== 'hard') {
+    return { error: { code: 'RULE_ALREADY_SOFT', user_message: 'This rule is already soft.', retryable: false } };
+  }
+
+  try {
+    await demoteRuleSeverity(user.id, parsedRuleId.data);
+    revalidatePath('/rules');
+    return { success: true, ruleId: parsedRuleId.data, severity: 'soft' };
+  } catch (err) {
+    if (err instanceof RuleLifecycleConflictError) {
+      return {
+        error: { code: err.code, user_message: 'This rule changed elsewhere. Please refresh and try again.', retryable: true },
+      };
+    }
+    console.error('[rules/actions:demoteRule] update failed:', err);
+    return {
+      error: { code: 'RULE_DEMOTE_INTERNAL', user_message: 'Something went wrong. Please try again.', retryable: true },
+    };
+  }
+}
+
+/**
+ * Story 2.4's "retire only, timestamped" transition. ONE-WAY: there is no
+ * `reactivateRule`/`unretireRule` anywhere in this file, in
+ * `severity-lifecycle-repository.ts`, or implied by the schema — "No pause
+ * anywhere in the UI or API," verbatim. A rule already in a non-`active`
+ * state (already retired, or plan-deactivated) is rejected outright, not
+ * silently no-op'd, so a caller always gets an honest answer about why
+ * nothing changed.
+ */
+export async function retireRule(ruleId: string): Promise<SeverityLifecycleActionState> {
+  const user = await requireSessionAndRateLimit('retireRule');
+  if (isErrorState(user)) return user;
+
+  const parsedRuleId = z.uuid().safeParse(ruleId);
+  if (!parsedRuleId.success) {
+    return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const current = await fetchRuleForLifecycle(user.id, parsedRuleId.data);
+  if (!current) {
+    return { error: { code: 'RULE_NOT_FOUND', user_message: "We couldn't find that rule.", retryable: false } };
+  }
+  if (current.state !== 'active') {
+    const message = current.state === 'retired' ? 'This rule has already been retired.' : 'This rule cannot be retired in its current state.';
+    return { error: { code: 'RULE_ALREADY_RETIRED', user_message: message, retryable: false } };
+  }
+
+  try {
+    const result = await retireRuleState(user.id, parsedRuleId.data);
+    revalidatePath('/rules');
+    return { success: true, ruleId: parsedRuleId.data, state: 'retired', retiredAt: result.retiredAt };
+  } catch (err) {
+    if (err instanceof RuleLifecycleConflictError) {
+      return {
+        error: { code: err.code, user_message: 'This rule changed elsewhere. Please refresh and try again.', retryable: true },
+      };
+    }
+    console.error('[rules/actions:retireRule] update failed:', err);
+    return {
+      error: { code: 'RULE_RETIRE_INTERNAL', user_message: 'Something went wrong. Please try again.', retryable: true },
+    };
+  }
 }

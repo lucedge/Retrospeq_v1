@@ -1,7 +1,7 @@
 import 'server-only';
 import { can, type CanDeps } from './can';
 import { countActiveTradingAccounts } from './account-usage';
-import { countActiveRules } from './rules-usage';
+import { countActiveHardRules, countActiveRules } from './rules-usage';
 import { getUserPlan } from './subscription-repository';
 import type { Capability, EntitlementResult } from './types';
 
@@ -24,6 +24,12 @@ export const defaultCanDeps: CanDeps = {
     // Module 04 (Rulebook & Evaluation) authoring pipeline — see
     // rules-usage.ts's own header for why 'active' is the right filter.
     'rules.create': countActiveRules,
+    // Module 04 Slice 7 (severity lifecycle, §5.7) — see
+    // rules-usage.ts's own header on `countActiveHardRules` for why this
+    // is needed for real, not just for completeness (a missing counter
+    // here would fail-closed-block every Pro-plan promotion, not just
+    // ones genuinely at the 6-rule cap).
+    'rules.hard': countActiveHardRules,
   },
 };
 

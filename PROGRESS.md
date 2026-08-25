@@ -22,7 +22,7 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. Slices 7-8 (severity lifecycle, UI) not started. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
@@ -41,21 +41,107 @@ re-verified PASS. See the 2026-08-25 decision-log entries below (search
 "Slice 6") for the full coder/tester/security/qa write-ups, including
 the fix and its re-verification.
 
-**Next: Module 04 Slice 7 — severity lifecycle (§5.7) + `rule_overrides`
-+ ambient strip (§5.9).** Promote (soft→hard, offered not automatic: 6
-weeks active · ≥20 applicable evaluations · ≥95% compliance · zero
-breaks in the last 3 weeks), demote (hard→soft, freely), retire
-(timestamped, no pause anywhere in the UI or API — story 2.4), the
-6-active-hard-rules cap (a 7th requires demoting one, presented as a
-trade-off not an error, `RULE_HARD_CAP`). `rule_overrides`: a row
-written when the ambient strip showed a breach and the trader proceeded
-anyway (§5.9 — facts ambient, judgments silent; account state always
-visible, tinted by state, never a modal/confirm/block). No UI in this
-slice yet (Slice 8) — build the Server Actions/repository layer: promote
-eligibility needs to read `rule_evaluations`/`adherence_weekly` (Slice
-5/6's own tables) to check the 6wk/20-eval/95%/zero-breaks-in-3wk gate.
+**→ Module 04 Slice 7 — severity lifecycle (§5.7) — CODED (2026-08-25),
+coder pass only, NOT yet independently tested/security-reviewed/QA'd.**
+Scope for this pass, per its own dispatch, was narrower than the "Next"
+paragraph below (written before this dispatch) anticipated:
+promote/demote/retire + the hard-cap + the eligibility check ONLY.
+`rule_overrides` writing and the ambient strip (§5.9) were EXPLICITLY
+carved out of this slice's own dispatch as belonging to a future Slice 8
+alongside the UI (§6) — reconciling the "Next" paragraph's original
+"Slice 7 = §5.7 + rule_overrides + ambient strip" framing against the
+actual dispatch received. Full build write-up is in the Phase-status table
+row above (search "Slice 7 (severity lifecycle") and the matching
+2026-08-25 decision-log entry below. Summary: `lib/rules/promotion-
+eligibility.ts` (read-only eligibility check, documented all-time vs.
+windowed gate reasoning), `lib/rules/severity-lifecycle-repository.ts`
+(atomic guarded-UPDATE promote/demote/retire, hard cap enforced inside the
+UPDATE's own WHERE clause via a correlated subquery, not a separate
+check-then-write step), `app/(app)/rules/actions.ts`'s new `promoteRule`/
+`demoteRule`/`retireRule` Server Actions, `rules.hard` wired into
+`defaultCanDeps` for real (`countActiveHardRules`). 90 new tests, all
+green (unit + live-DB, including a real §8.4 full-sequence live test and a
+real atomic-hard-cap-at-Postgres proof). Full repo suite (610 tests, 43
+files) + build/tsc/eslint all clean, re-run after the change.
 
-**What was built:** `lib/rules/freeze-evaluations.ts` — one new
+**→ Module 04 Slice 7 tester pass: DONE (2026-08-25), and it did its job —
+found a real, reproducible concurrency bug, not a rubber stamp.** Full
+write-up is in the Phase-status table row above (search "TESTER PASS
+DONE") and is not repeated here in full; the one-line version: the
+6-active-hard-rule cap's "atomic" enforcement is NOT actually race-safe —
+two concurrent promotions of two DIFFERENT soft rules can both succeed
+and push the count to 7, because `promoteRuleSeverity`'s correlated
+subquery only locks the row it writes, never the rows it counts. Proven
+twice independently (a standalone repro script and a formal live-DB
+vitest test, both using genuine two-connection control, not timing luck).
+Everything else in the slice — windowing (tester independently concurs
+with the coder's reading), demote/retire concurrency (genuinely safe),
+the free-tier block (re-verified through the real Server Action, not
+mocked), one-way retirement (re-verified through the real `retireRule`
+action too), no `rule_evaluations`/`rule_versions` writes, zero
+XP/gamification coupling, and coverage (93.8%/100%, matches the coder's
+own numbers) — held up under independent re-verification.
+
+**→ Module 04 Slice 7 hard-cap race: CODER FIX DONE (2026-08-25).**
+`promoteRuleSeverity` now takes `pg_advisory_xact_lock(hashtext(user_id))`
+as the first statement in its own transaction (`withUserConnection`,
+confirmed to genuinely wrap one transaction per call before relying on
+this), forcing a second concurrent promotion for the same user to block
+until the first commits. The tester's own `it.fails` trip-wire test
+(`lib/rules/__tests__/severity-lifecycle.independent-verification.live.test.ts`)
+was converted to a normal `it(...)`, restructured to deterministically
+prove genuine blocking (via `waitForBlockedQuery`, not timing luck), and
+passes reliably (re-run twice in isolation, once as part of the full
+suite). `demoteRuleSeverity`/`retireRuleState` confirmed NOT to need the
+same fix (single-row guarded UPDATEs, no cross-row subquery, already
+safe). Full detail + exact re-verification numbers: 2026-08-25 decision
+log entry "Module 04 Slice 7 — CODER FIX for the tester-found hard-cap
+concurrency bug." Full `lib/rules` suite (28 files, 447 tests) green,
+`npx tsc --noEmit`/`npx eslint .`/`npm run build` all clean.
+
+**→ Module 04 Slice 7 security-reviewer gate: PASS (2026-08-25), 9/9
+checklist items.** Independently re-ran the advisory-lock fix live 3
+times, then built and ran an independent 3-way adversarial concurrency
+scenario directly against the dev DB (4/6 hard rules, 3 soft rules
+contending for 2 slots — invariant held exactly, 2 successes, final
+count 6, never 7). Confirmed lock scoping, server-resolved hard-cap
+limit, ownership/RLS on all three actions, one-way retirement (plus
+found the DB itself also blocks `rules` row deletion via a
+`rules_forbid_delete` trigger), parameterized queries throughout, real
+pre-write rate limiting, no compound-rule surface. No blocking findings.
+
+**→ Module 04 Slice 7 QA gate: FAILED once (2026-08-25) on a
+ledger-currency gap only** — the security-reviewer PASS above had
+genuinely happened but wasn't yet written into this ledger when QA was
+dispatched (same pattern as Slice 5's own first QA FAIL). Resolved by
+the paragraph immediately above. Every code-level QA check (windowing
+re-scrutiny, never-automatic promotion, retire-only-no-pause,
+`RULE_HARD_CAP`'s real demote-chooser payload, free-tier message tone,
+fresh XP/gamification grep, scope honesty, analytics/rules import
+boundary, no notification triggers) passed on the first QA pass and
+does not need re-litigating. **Module 04 Slice 7 (severity lifecycle)
+is DONE.**
+
+**Separately, already fixed (2026-08-25, standalone commit):** the
+`lib/supabase/__tests__/service-role-inventory.test.ts` allowlist gap
+from Slice 6 (missing `lib/rules/adherence-repository.ts`) has been
+closed directly — see the "Fix: add lib/rules/adherence-repository.ts
+to the service-role allowlist" commit, pushed ahead of Slice 7's own
+commit.
+
+**Next: Module 04 Slice 8 — the ambient live-state evaluation engine +
+`rule_overrides` (§5.9).** "Facts ambient, judgments silent" — account
+state (trades today, day P&L, risk vs cap) always visible, tinted by
+state, never a modal/confirm/block. Needs a live (not frozen) evaluation
+of pre_entry/session rules against TODAY's in-progress state (§7.1:
+"provisional," writes nothing to `rule_evaluations`). When the trader
+proceeds past a visible breach, write a `rule_overrides` row (owner
+SELECT+INSERT RLS already exists from Slice 1) — not a penalty, the data
+behind "You've exceeded your risk cap 12 times. Those trades averaged
+−0.4R against +0.3R for the rest." Then Slice 9: Module 04's UI (§6,
+§5.10's guided three-rule front door).
+
+**What was built [Slice 5, historical]:** `lib/rules/freeze-evaluations.ts` — one new
 orchestrating function, `evaluateAndFreezeTradeRules(client, tradeId,
 {frozenAt})`, called from BOTH of `lib/ingestion/confirm.ts`'s confirm
 loops (`confirmDay`'s per-trade loop and `autoConfirmStaleTrades`'s bulk
@@ -4696,6 +4782,190 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-25 — **Module 04 Slice 7 (severity lifecycle, §5.7) — the
+  "6 weeks / ≥20 evals / ≥95% compliance / zero breaks in 3 weeks" gate
+  read as ALL-TIME for the first three, ROLLING-21-DAYS for the fourth —
+  a real product-behaviour decision, not cosmetic, documented per this
+  slice's own dispatch requirement.** §5.7's table lists all four
+  conditions in one cell joined by "·," and only the last one names an
+  explicit window ("in the last 3 weeks"). Read literally, the first
+  three are one-time thresholds a rule must have accumulated BY NOW, not
+  a sliding quota that could regress after being met — the alternative
+  (all four windowed identically) would mean a rule followed diligently
+  for two years but with a quiet recent month reads as "not yet eligible,"
+  directly contradicting story 2.2's own frame ("a rule I've genuinely
+  kept"). "6 weeks active" is calendar duration from `rules.created_at`
+  (`now - created_at >= 42 days`), not a distinct-ISO-week count. "The
+  last 3 weeks" is, for internal consistency with that duration reading,
+  ALSO a rolling 21-calendar-day window — deliberately NOT
+  `week-boundary.ts`'s Monday-aligned ISO week (ADR 0015), which exists
+  for a different concern (aligning `adherence_weekly`'s reporting buckets
+  with Module 07's streak weeks) than this one gate-check function's own
+  elapsed-time arithmetic. Full reasoning lives in
+  `lib/rules/promotion-eligibility.ts`'s own header, not just here.
+- 2026-08-25 — **Module 04 Slice 7 — the `rules.hard` entitlement check and
+  the "6-active-hard-rule cap" are ONE number, read from ONE place, not two
+  independently-invented `6`s.** `lib/entitlements/capability-table.ts`'s
+  existing `rules.hard: { pro: 6 }` (Module 01 §4.3) already IS §5.7's
+  "cap 6" — `promoteRule` reads it via `canForUser(userId,'rules.hard')`
+  and passes `entitlement.limit` into `promoteRuleSeverity`'s own guarded
+  UPDATE, rather than hardcoding `6` a second time anywhere in Module 04's
+  own code. `entitlement.reason === 'quota'` (a Pro caller genuinely at the
+  cap) is what triggers the friendlier `RULE_HARD_CAP` demote-chooser
+  response instead of a bare `ENTITLEMENT_LIMIT` denial — layering §5.7's
+  "presented as a trade-off, not an error" UX on top of the same
+  entitlement fact Module 01's generic quota-exceeded case already
+  represents, not a parallel/duplicate check.
+- 2026-08-25 — **Module 04 Slice 7 — `countActiveHardRules` wired into
+  `defaultCanDeps.usageCounters['rules.hard']` for real, not left
+  unwired.** Without this, `resolve.ts`'s `resolveQuantityCapability`
+  would resolve every Pro-plan `rules.hard` check to
+  `reason: 'not_yet_checkable'` (`allowed: false`, fail-closed) since a
+  finite nonzero cap (6) with no injected counter always fails closed —
+  this would have silently blocked EVERY Pro-plan promotion, not just ones
+  genuinely at the cap. Free tier's own block is unaffected either way
+  (`QUANTITY_CAPS['rules.hard'].free === 0` short-circuits to
+  `reason: 'plan'` in `resolve.ts` before any counter is ever consulted) —
+  but Pro-plan correctness genuinely depended on this wiring being real.
+- 2026-08-25 — **Module 04 Slice 7 — INDEPENDENT TESTER VERIFICATION PASS.
+  Found a real, reproducible production bug in the hard-cap concurrency
+  guard; everything else independently confirmed.** Dispatched specifically
+  to re-derive the coder's own claims rather than trust them (windowing
+  reasoning, "atomic hard-cap proven live," free-tier block, one-way
+  retirement). Full detail in the Phase-status table row above (search
+  "TESTER PASS DONE") and the "Current task" section; short version below,
+  by dispatch item:
+  1. **Windowing**: independently re-derived from §5.7's own text, landed
+     on the SAME conclusion as the coder (all-time for the first three
+     gates, rolling 21 days for the fourth) — with an additional structural
+     argument the coder's own write-up didn't make: the explicit
+     "zero breaks in the last 3 weeks" gate is exactly what prevents a long
+     good history from diluting a genuinely recent bad patch below the
+     all-time 95% compliance threshold, so the two gate types are
+     complementary by design, not redundant restatements of each other.
+  2. **Hard-cap race — REAL BUG, confirmed twice independently** (a
+     standalone Node reproduction script, then a formal vitest live-DB
+     test with genuine two-connection control, not timing luck): two
+     concurrent `promoteRuleSeverity` calls for two DIFFERENT soft rules,
+     user at exactly 5 active hard rules, land at 7. The correlated
+     `count(*) < $3` subquery inside the guarded UPDATE only locks the row
+     being WRITTEN, never the rows the subquery SCANS — under READ
+     COMMITTED, neither of two concurrent transactions sees the other's
+     still-uncommitted promotion, so both read "5, room for one" and both
+     succeed. The coder's own "proven live, atomically" claim used only a
+     SEQUENTIAL deterministic-replay technique (promote once for real, then
+     promote again against the SAME now-stale row) — that proves the guard
+     rejects a second call against the same row, never the actual cross-row
+     race §8.2 names ("Hard rule count never exceeds 6"). Kept in the suite
+     as `it.fails` (a deliberate trip wire, not `it.skip`) at
+     `lib/rules/__tests__/severity-lifecycle.independent-verification.live.test.ts`
+     — reporting this precisely rather than fixing it, per the tester
+     role's own boundary; needs a coder pass (candidates: `select ... for
+     update` on the counted rows, a `pg_advisory_xact_lock` keyed on
+     `user_id`, `SERIALIZABLE` isolation for this write, or a DB-level
+     constraint/trigger) before security review.
+  3. **demote/retire concurrency** — independently re-verified SAFE with
+     genuine two-connection tests (the `waitForBlockedQuery` technique
+     `rules-repository.live.test.ts` established): these are single-row
+     guarded UPDATEs with no cross-row subquery, so Postgres's own row lock
+     genuinely serializes two real concurrent callers — exactly one wins,
+     the other gets a clean `RuleLifecycleConflictError`, never both, never
+     a crash.
+  4. **Free-tier block, end-to-end** — re-verified through the REAL
+     `promoteRule` Server Action (not `resolve.ts`'s capability resolution
+     mocked in isolation, which is all the coder's own `actions.test.ts`
+     exercises). A genuine free-tier test user (real `subscriptions` row,
+     `plan='free'`, never upgraded), with a rule made FULLY eligible on
+     every §5.7 gate via 25 real confirmed trades, is still rejected with
+     `ENTITLEMENT_LIMIT` before any DB write — severity/`promoted_at`
+     confirmed unchanged after.
+  5. **One-way retirement** — fresh grep re-confirms zero
+     reactivate/unretire path anywhere. Additionally closed the one gap in
+     the coder's own live suite: the coder's "zero evaluations after
+     retirement" proof went through the repository's `retireRuleState`
+     directly, not the Server Action; this pass adds a test through the
+     REAL `retireRule` action specifically, confirming a trade confirmed
+     afterward produces zero new evaluations.
+  6. **No `rule_evaluations`/`rule_versions` writes** — fresh grep confirms
+     `promoteRuleSeverity`/`demoteRuleSeverity` touch only `rules` columns.
+  7. **No XP/gamification coupling** — fresh word-boundary grep
+     (`\b(xp|streak|points|gamif\w*|engagement)\b`, avoiding the
+     plain-substring false positives a naive `xp` search hits inside words
+     like "expired"/"export") across every new file: zero real hits.
+  8. **Coverage** — independently re-run, matches the coder's own numbers
+     exactly: `promotion-eligibility.ts` 93.8%, `severity-lifecycle-
+     repository.ts` 100%, both clear the 90% engine bar.
+  Full repo suite re-run: 1497 passed, 13 skipped, one FAILURE —
+  `lib/supabase/__tests__/service-role-inventory.test.ts` (its
+  `withServiceRoleConnection` allowlist is missing Slice 6's
+  `lib/rules/adherence-repository.ts`) — confirmed via `git stash` to
+  already exist at HEAD, unrelated to and not introduced by this slice or
+  this tester pass, flagged as a separate follow-up rather than fixed here
+  (out of this pass's scope). `npx tsc --noEmit`/`npx eslint .`/`npm run
+  build` all independently re-run clean.
+- 2026-08-25 — **Module 04 Slice 7 — CODER FIX for the tester-found
+  hard-cap concurrency bug (`promoteRuleSeverity`), verified against the
+  tester's own live trip-wire test.** Full bug description is in the
+  tester-verification entry immediately above; this entry is the fix and
+  its re-verification. **Mechanism chosen**: `pg_advisory_xact_lock
+  (hashtext($1::text))`, keyed on `user_id`, acquired as the FIRST
+  statement inside `promoteRuleSeverity`'s own `withUserConnection`
+  transaction, before the guarded UPDATE runs. `withUserConnection`
+  (`lib/supabase/direct.ts`) was read first to confirm it genuinely wraps
+  exactly one `begin`/`commit`-or-`rollback` per call (its own header says
+  so explicitly) — the advisory lock is therefore transaction-scoped,
+  released automatically at COMMIT/ROLLBACK, no separate unlock call
+  needed or safe to add manually. A second concurrent `promoteRuleSeverity`
+  call for the SAME user now genuinely blocks on this lock until the first
+  transaction commits or rolls back; its own correlated `count(*) < $3`
+  subquery then runs against the already-committed post-promotion state
+  and correctly fails once the cap is reached. Two concurrent promotions
+  for two DIFFERENT users hash to different lock keys (a collision would
+  only cost harmless extra serialization, never correctness, since the
+  UPDATE's own WHERE clause still scopes strictly to `user_id = $2`) and
+  never contend with each other, so this adds no cross-user cost.
+  `demoteRuleSeverity`/`retireRuleState` were deliberately NOT given the
+  same lock — both are single-row guarded UPDATEs with no cross-row
+  correlated subquery, so Postgres's own row lock on the one target row
+  already serializes two concurrent callers correctly, independently
+  proven live by the tester's own `waitForBlockedQuery`-based tests, which
+  are unchanged by this fix. **Re-verification**: the tester's own
+  trip-wire test (`lib/rules/__tests__/severity-lifecycle.independent-
+  verification.live.test.ts`) was read in full before touching it, not
+  assumed. Its `it.fails` case was rewritten to a normal `it(...)` — not a
+  bare flag flip, but restructured to deterministically prove the fix:
+  instead of the original two-uncontrolled-connection interleaving (which
+  relied on both racing transactions issuing their UPDATE before either
+  committed), the rewritten version has one real connection hold the SAME
+  advisory lock the fix now takes plus an uncommitted promotion, then
+  calls the REAL (fixed) `promoteRuleSeverity` for a second, different
+  soft rule and uses `waitForBlockedQuery` to confirm it is genuinely
+  blocked on `pg_advisory_xact_lock` before releasing the first connection
+  — proving actual blocking behavior, not merely a lucky non-overlap. Ran
+  green twice in a row in isolation (`-t "FIXED"`, 5-6s each run,
+  deterministic — the wait-for-block step removes any timing dependency)
+  and again as part of the full suite. Final asserted state: exactly 6
+  active hard rules (not merely "≤ 6"), the second rule's `severity`/
+  `promoted_at` provably untouched. Two pre-existing MOCKED unit tests in
+  `lib/rules/__tests__/severity-lifecycle-repository.test.ts` asserted
+  `queryMock` was called exactly once with the UPDATE as `calls[0]` — both
+  updated to account for the new advisory-lock call as `calls[0]` and the
+  UPDATE as `calls[1]` (2 calls total), not weakened or deleted. **Full
+  re-verification, independently re-run after the fix**: `npx tsc
+  --noEmit` clean, `npx eslint .` clean (0 errors, only the same
+  pre-existing unrelated warnings), `npm run build` clean, full `lib/rules`
+  suite (28 files, 447 tests, includes every live-DB test in the module)
+  100% green. **`demoteRuleSeverity`/`retireRuleState` confirmed to NOT
+  need this fix** — re-read both, neither performs a cross-row correlated
+  subquery, only a single-row guarded UPDATE; their existing live
+  concurrency tests (unchanged by this pass) continue to pass, confirming
+  the row lock already serializes them correctly. No new migration, no new
+  ADR (this is a bug fix restoring a documented invariant, not a
+  deliberate deviation from a 00-foundation convention), no new runbook
+  entry (not a new alerting-worthy failure mode — the fix makes an
+  existing invariant hold, it doesn't introduce a new background-process
+  risk). **Ready for security-reviewer now** — this was the sole blocker
+  the tester pass named.
 - 2026-08-25 — **Module 04 Slice 6 (`adherence_weekly`) — `top_break_rule_id`
   selection changed from a COMBINED hard+soft pool to HARD-PRIORITY, per
   retrospeq-qa review.** §5.6's own worked example ("31 of 34 rules

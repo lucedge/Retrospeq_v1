@@ -2,15 +2,21 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { canMock, countActiveTradingAccountsMock, getUserPlanMock } = vi.hoisted(() => ({
+const { canMock, countActiveTradingAccountsMock, getUserPlanMock, countActiveRulesMock, countActiveHardRulesMock } = vi.hoisted(() => ({
   canMock: vi.fn(),
   countActiveTradingAccountsMock: vi.fn(),
   getUserPlanMock: vi.fn(),
+  countActiveRulesMock: vi.fn(),
+  countActiveHardRulesMock: vi.fn(),
 }));
 
 vi.mock('../can', () => ({ can: canMock }));
 vi.mock('../account-usage', () => ({ countActiveTradingAccounts: countActiveTradingAccountsMock }));
 vi.mock('../subscription-repository', () => ({ getUserPlan: getUserPlanMock }));
+vi.mock('../rules-usage', () => ({
+  countActiveRules: countActiveRulesMock,
+  countActiveHardRules: countActiveHardRulesMock,
+}));
 
 /**
  * `service.ts` is thin wiring — `defaultCanDeps` + `canForUser` — but per
@@ -24,6 +30,11 @@ describe('lib/entitlements/service.ts', () => {
     const { defaultCanDeps } = await import('../service');
     expect(defaultCanDeps.getPlan).toBe(getUserPlanMock);
     expect(defaultCanDeps.usageCounters?.['account.connect']).toBe(countActiveTradingAccountsMock);
+  });
+
+  it('defaultCanDeps.usageCounters["rules.hard"] is countActiveHardRules (Module 04 Slice 7 -- real, not a placeholder, see rules-usage.ts\'s own header on why this matters for Pro-plan promotion)', async () => {
+    const { defaultCanDeps } = await import('../service');
+    expect(defaultCanDeps.usageCounters?.['rules.hard']).toBe(countActiveHardRulesMock);
   });
 
   it('canForUser(userId, capability) delegates to can() with defaultCanDeps', async () => {

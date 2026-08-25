@@ -33,6 +33,12 @@ const {
   insertRuleAndVersionMock,
   applyRuleEditMock,
   previewMock,
+  checkPromotionEligibilityForUserMock,
+  fetchActiveHardRulesMock,
+  fetchRuleForLifecycleMock,
+  promoteRuleSeverityMock,
+  demoteRuleSeverityMock,
+  retireRuleStateMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -46,6 +52,12 @@ const {
   insertRuleAndVersionMock: vi.fn(),
   applyRuleEditMock: vi.fn(),
   previewMock: vi.fn(),
+  checkPromotionEligibilityForUserMock: vi.fn(),
+  fetchActiveHardRulesMock: vi.fn(),
+  fetchRuleForLifecycleMock: vi.fn(),
+  promoteRuleSeverityMock: vi.fn(),
+  demoteRuleSeverityMock: vi.fn(),
+  retireRuleStateMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -77,11 +89,26 @@ vi.mock('@/lib/rules/rules-repository', async (importOriginal) => {
 vi.mock('@/lib/rules/preview', () => ({
   preview: previewMock,
 }));
+vi.mock('@/lib/rules/promotion-eligibility', () => ({
+  checkPromotionEligibilityForUser: checkPromotionEligibilityForUserMock,
+}));
+vi.mock('@/lib/rules/severity-lifecycle-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/rules/severity-lifecycle-repository')>();
+  return {
+    ...actual,
+    fetchActiveHardRules: fetchActiveHardRulesMock,
+    fetchRuleForLifecycle: fetchRuleForLifecycleMock,
+    promoteRuleSeverity: promoteRuleSeverityMock,
+    demoteRuleSeverity: demoteRuleSeverityMock,
+    retireRuleState: retireRuleStateMock,
+  };
+});
 vi.mock('server-only', () => ({}));
 
-const { createRule, editRule, previewRule } = await import('../actions');
+const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
-const { RuleEditConflictError, RuleNotEditableError } = await import('@/lib/rules/rules-repository');
+const { RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import('@/lib/rules/rules-repository');
+const { RuleLifecycleConflictError } = await import('@/lib/rules/severity-lifecycle-repository');
 
 const FAKE_USER = { id: 'user-aaaa-1111', email: 'trader@example.com' };
 
@@ -98,6 +125,12 @@ beforeEach(() => {
   insertRuleAndVersionMock.mockReset().mockResolvedValue({ ruleId: 'rule-new-1', version: 1 });
   applyRuleEditMock.mockReset();
   previewMock.mockReset();
+  checkPromotionEligibilityForUserMock.mockReset();
+  fetchActiveHardRulesMock.mockReset().mockResolvedValue([]);
+  fetchRuleForLifecycleMock.mockReset();
+  promoteRuleSeverityMock.mockReset();
+  demoteRuleSeverityMock.mockReset();
+  retireRuleStateMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -493,5 +526,230 @@ describe('previewRule', () => {
     const result = await previewRule({ operandId: 'risk_pct', op: 'lte', value: 1.5, and: [{ operandId: 'risk_pct', op: 'gte', value: 1 }] });
     expect(result.fieldErrors).toBeDefined();
     expect(previewMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// promoteRule / demoteRule / retireRule — Module 04 §5.7, Slice 7
+// ---------------------------------------------------------------------
+
+const RULE_ID = '01927e00-0000-7000-8000-000000000099';
+
+function eligibleResult(overrides: Partial<{ eligible: boolean; currentSeverity: 'soft' | 'hard'; currentState: string }> = {}) {
+  return {
+    eligible: overrides.eligible ?? true,
+    reasons: overrides.eligible === false ? [{ code: 'RULE_NOT_OLD_ENOUGH', message: 'not old enough yet' }] : [],
+    currentSeverity: overrides.currentSeverity ?? 'soft',
+    currentState: overrides.currentState ?? 'active',
+    detail: { ageDays: 50, applicableEvaluations: 25, followedEvaluations: 25, complianceRatio: 1, breaksInLastThreeWeeks: 0 },
+  };
+}
+
+describe('promoteRule', () => {
+  beforeEach(() => {
+    checkPromotionEligibilityForUserMock.mockResolvedValue(eligibleResult());
+    canForUserMock.mockResolvedValue({ allowed: true, reason: 'ok', limit: 6, used: 2 });
+    promoteRuleSeverityMock.mockResolvedValue({ promotedAt: '2026-09-15T12:00:00.000+00:00' });
+  });
+
+  it('succeeds for an eligible soft/active rule under the Pro cap', async () => {
+    const result = await promoteRule(RULE_ID);
+    expect(result.success).toBe(true);
+    expect(result.severity).toBe('hard');
+    expect(result.promotedAt).toBe('2026-09-15T12:00:00.000+00:00');
+    expect(promoteRuleSeverityMock).toHaveBeenCalledWith(FAKE_USER.id, RULE_ID, 6);
+    expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
+  });
+
+  it('returns RULE_NOT_FOUND when the rule does not exist or is not owned by the caller', async () => {
+    checkPromotionEligibilityForUserMock.mockRejectedValue(new RuleNotFoundError(RULE_ID));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_FOUND');
+    expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects promoting a retired rule with RULE_NOT_EDITABLE, never reaching the entitlement check', async () => {
+    checkPromotionEligibilityForUserMock.mockResolvedValue(eligibleResult({ currentState: 'retired' }));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_EDITABLE');
+    expect(canForUserMock).not.toHaveBeenCalled();
+    expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rule that is already hard with RULE_ALREADY_HARD', async () => {
+    checkPromotionEligibilityForUserMock.mockResolvedValue(eligibleResult({ currentSeverity: 'hard' }));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_ALREADY_HARD');
+    expect(canForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ineligible rule with RULE_PROMOTION_NOT_ELIGIBLE and attaches every failing reason', async () => {
+    checkPromotionEligibilityForUserMock.mockResolvedValue(eligibleResult({ eligible: false }));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_PROMOTION_NOT_ELIGIBLE');
+    expect(result.eligibility?.reasons).toEqual([{ code: 'RULE_NOT_OLD_ENOUGH', message: 'not old enough yet' }]);
+    expect(canForUserMock).not.toHaveBeenCalled();
+    expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks the FREE tier entirely (reason: plan) with ENTITLEMENT_LIMIT, never reaching promoteRuleSeverity', async () => {
+    canForUserMock.mockResolvedValue({ allowed: false, reason: 'plan', limit: 0 });
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('ENTITLEMENT_LIMIT');
+    expect(result.error?.user_message).toMatch(/pro/i);
+    expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+    expect(fetchActiveHardRulesMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects with RULE_HARD_CAP (not a bare ENTITLEMENT_LIMIT) when the Pro caller is already at the 6-hard-rule cap, and attaches the demote-chooser list', async () => {
+    canForUserMock.mockResolvedValue({ allowed: false, reason: 'quota', limit: 6, used: 6 });
+    fetchActiveHardRulesMock.mockResolvedValue([
+      { ruleId: 'hard-a', rendered: 'Never risk more than 1% per trade.', promotedAt: '2026-06-01T00:00:00.000+00:00' },
+      { ruleId: 'hard-b', rendered: 'Stop trading after 3 losses in a row.', promotedAt: '2026-07-01T00:00:00.000+00:00' },
+    ]);
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_HARD_CAP');
+    expect(result.hardCapChooser).toEqual([
+      { ruleId: 'hard-a', rendered: 'Never risk more than 1% per trade.' },
+      { ruleId: 'hard-b', rendered: 'Stop trading after 3 losses in a row.' },
+    ]);
+    expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('a Pro caller under the cap (reason: ok) proceeds to the guarded UPDATE with the real limit from the entitlement, not a hardcoded 6', async () => {
+    canForUserMock.mockResolvedValue({ allowed: true, reason: 'ok', limit: 6, used: 4 });
+    await promoteRule(RULE_ID);
+    expect(promoteRuleSeverityMock).toHaveBeenCalledWith(FAKE_USER.id, RULE_ID, 6);
+  });
+
+  it('maps a lost concurrency race (RuleLifecycleConflictError) to a retryable error carrying the repository\'s own code', async () => {
+    promoteRuleSeverityMock.mockRejectedValue(new RuleLifecycleConflictError(RULE_ID, 'promote'));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_PROMOTION_CONFLICT');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('rejects a malformed ruleId before ever calling checkPromotionEligibilityForUser', async () => {
+    const result = await promoteRule('not-a-uuid');
+    expect(result.error?.code).toBe('RULE_INVALID_INPUT');
+    expect(checkPromotionEligibilityForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a rate-limit rejection independently of createRule/editRule', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('promoteRule', 'ip:1.2.3.4', 3600));
+    const result = await promoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(checkPromotionEligibilityForUserMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('demoteRule', () => {
+  it('succeeds for a hard/active rule -- no eligibility gate, no entitlement check', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    demoteRuleSeverityMock.mockResolvedValue(undefined);
+
+    const result = await demoteRule(RULE_ID);
+
+    expect(result.success).toBe(true);
+    expect(result.severity).toBe('soft');
+    expect(canForUserMock).not.toHaveBeenCalled();
+    expect(checkPromotionEligibilityForUserMock).not.toHaveBeenCalled();
+    expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
+  });
+
+  it('returns RULE_NOT_FOUND when the rule does not exist or is not owned by the caller', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue(null);
+    const result = await demoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_FOUND');
+    expect(demoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects demoting a retired rule with RULE_NOT_EDITABLE', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'retired', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    const result = await demoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_EDITABLE');
+    expect(demoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rule that is already soft with RULE_ALREADY_SOFT', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'soft', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    const result = await demoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_ALREADY_SOFT');
+    expect(demoteRuleSeverityMock).not.toHaveBeenCalled();
+  });
+
+  it('maps a lost concurrency race to RULE_DEMOTE_CONFLICT, retryable', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    demoteRuleSeverityMock.mockRejectedValue(new RuleLifecycleConflictError(RULE_ID, 'demote'));
+    const result = await demoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_DEMOTE_CONFLICT');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('rejects a malformed ruleId before ever calling fetchRuleForLifecycle', async () => {
+    const result = await demoteRule('not-a-uuid');
+    expect(result.error?.code).toBe('RULE_INVALID_INPUT');
+    expect(fetchRuleForLifecycleMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a rate-limit rejection independently of promoteRule', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('demoteRule', 'ip:1.2.3.4', 3600));
+    const result = await demoteRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+  });
+});
+
+describe('retireRule', () => {
+  it('succeeds for an active rule regardless of severity, and is one-way (no reactivate path exists)', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    retireRuleStateMock.mockResolvedValue({ retiredAt: '2026-09-15T12:00:00.000+00:00' });
+
+    const result = await retireRule(RULE_ID);
+
+    expect(result.success).toBe(true);
+    expect(result.state).toBe('retired');
+    expect(result.retiredAt).toBe('2026-09-15T12:00:00.000+00:00');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
+  });
+
+  it('succeeds for a soft/active rule too -- retirement is independent of severity', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'soft', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    retireRuleStateMock.mockResolvedValue({ retiredAt: '2026-09-15T12:00:00.000+00:00' });
+    const result = await retireRule(RULE_ID);
+    expect(result.success).toBe(true);
+  });
+
+  it('returns RULE_NOT_FOUND when the rule does not exist or is not owned by the caller', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue(null);
+    const result = await retireRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_FOUND');
+    expect(retireRuleStateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an already-retired rule with RULE_ALREADY_RETIRED rather than silently no-op\'ing', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'retired', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    const result = await retireRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_ALREADY_RETIRED');
+    expect(retireRuleStateMock).not.toHaveBeenCalled();
+  });
+
+  it('maps a lost concurrency race to RULE_RETIRE_CONFLICT, retryable', async () => {
+    fetchRuleForLifecycleMock.mockResolvedValue({ ruleId: RULE_ID, severity: 'hard', state: 'active', createdAt: '2026-01-01T00:00:00.000+00:00' });
+    retireRuleStateMock.mockRejectedValue(new RuleLifecycleConflictError(RULE_ID, 'retire'));
+    const result = await retireRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_RETIRE_CONFLICT');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('rejects a malformed ruleId before ever calling fetchRuleForLifecycle', async () => {
+    const result = await retireRule('not-a-uuid');
+    expect(result.error?.code).toBe('RULE_INVALID_INPUT');
+    expect(fetchRuleForLifecycleMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a rate-limit rejection independently of promoteRule/demoteRule', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('retireRule', 'ip:1.2.3.4', 3600));
+    const result = await retireRule(RULE_ID);
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
   });
 });

@@ -334,6 +334,30 @@ export const RATE_LIMITS = {
     ip: { limit: 240, windowSeconds: 60 },
     email: { limit: 150, windowSeconds: 60 },
   },
+  /**
+   * Module 04 §5.7 — Slice 7's severity lifecycle. `promoteRule`/
+   * `demoteRule`/`retireRule` all mutate an EXISTING `rules` row's own
+   * lifecycle columns (never create a new financial record, never author
+   * a new rule) — structurally the same class as `editRule` above
+   * ("restructures/versions an existing record"), so all three get
+   * `editRule`'s identical moderate budget rather than `createRule`'s or
+   * a destructive-action one. `retireRule` is one-way and `demoteRule` is
+   * "freely" per §5.7 (no eligibility gate) — neither is more dangerous
+   * than a threshold edit, so there is no reason to tighten either
+   * relative to `editRule`.
+   */
+  promoteRule: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  demoteRule: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  retireRule: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

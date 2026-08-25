@@ -59,3 +59,44 @@ describe('lib/entitlements/rules-usage.ts countActiveRules', () => {
     expect(typeof count).toBe('number');
   });
 });
+
+/**
+ * Module 04 Slice 7's real `rules.hard` usage counter -- see this file's
+ * own header doc comment on `countActiveHardRules` for why wiring this in
+ * for real (not just `rules.create`) matters: a Pro-plan promotion
+ * attempt would otherwise fail-closed-block via `not_yet_checkable`.
+ */
+describe('lib/entitlements/rules-usage.ts countActiveHardRules', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    withUserConnectionMock.mockReset();
+    withUserConnectionMock.mockImplementation(async (_userId: string, fn: (client: { query: typeof queryMock }) => unknown) =>
+      fn({ query: queryMock }),
+    );
+  });
+
+  it("counts only state='active' AND severity='hard' rules", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ count: '2' }] });
+    const { countActiveHardRules } = await import('../rules-usage');
+    const count = await countActiveHardRules('user-1');
+    expect(count).toBe(2);
+    expect(withUserConnectionMock).toHaveBeenCalledWith('user-1', expect.any(Function));
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/state = 'active'/i);
+    expect(sql).toMatch(/severity = 'hard'/i);
+    expect(sql).toMatch(/where user_id = \$1/i);
+    expect(params).toEqual(['user-1']);
+  });
+
+  it('returns 0 when the user has no active hard rules', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ count: '0' }] });
+    const { countActiveHardRules } = await import('../rules-usage');
+    await expect(countActiveHardRules('user-1')).resolves.toBe(0);
+  });
+
+  it('returns 0 defensively even if the query somehow returns no row at all', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const { countActiveHardRules } = await import('../rules-usage');
+    await expect(countActiveHardRules('user-1')).resolves.toBe(0);
+  });
+});
