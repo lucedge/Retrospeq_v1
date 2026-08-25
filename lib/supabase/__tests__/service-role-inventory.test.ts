@@ -192,6 +192,37 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // standalone `assembleCrossTradeOperandValues(tradeId)` wrapper opens its
   // own `withServiceRoleConnection` (this file's own literal call site).
   'lib/rules/cross-trade-operand-values.ts',
+  // Module 04 Slice 6 (§5.6/§3.1 adherence_weekly materialisation):
+  // `adherence_weekly` is materialised, service-role-write-only per Slice
+  // 1's own RLS reasoning ("owner SELECT only, no client write path" —
+  // the identical shape `operand_distributions` already established
+  // above). The write side (`recomputeAdherenceWeekly`/
+  // `recomputeAdherenceWeeklyForUser`/`recomputeAdherenceWeeklyForConfirmations`)
+  // runs as the "on demand after a confirm" call site — `lib/ingestion/
+  // confirm.ts`'s own `confirmDay`/`autoConfirmStaleTrades`, which have no
+  // request-scoped session to attach to `withUserConnection`, only a
+  // `user_id` already resolved from a row they loaded under the service
+  // role in the same call. Every query binds `$1 = userId` explicitly
+  // (never trusting RLS to narrow it), matching ADR 0005's "every query
+  // inside `fn` MUST filter explicitly" caveat — same posture as
+  // `distributions-repository.ts`/`cross-trade-operand-values.ts` above.
+  // The READ side (`fetchAdherenceWeekly`) is deliberately NOT on this
+  // list — it runs under `withUserConnection`, genuine session-scoped
+  // RLS, per that function's own doc comment, since a real trader session
+  // exists at read time.
+  //
+  // NOTE: this entry was missing from the initial Slice 6 commit —
+  // `retrospeq-security-reviewer`'s Slice 6 review checklist did not
+  // include this specific allowlist-parity check (an oversight in that
+  // review's own dispatch, not a finding the reviewer missed while
+  // looking), so this test was left red on `main` until Slice 7's
+  // `retrospeq-tester` caught it. Added here as a direct, mechanical
+  // correction rather than a full coder/tester/security/qa cycle, since
+  // the reasoning above is identical in kind to every other entry in this
+  // list and was already independently verified live during Slice 6's
+  // actual security review (RLS/scoping/parameterization all confirmed
+  // PASS then) — only the allowlist bookkeeping itself was missed.
+  'lib/rules/adherence-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
