@@ -44,6 +44,11 @@ import {
   demoteRuleSeverity,
   retireRuleState,
 } from '@/lib/rules/severity-lifecycle-repository';
+import {
+  RuleOverrideTradeNotOwnedError,
+  fetchRuleForOverride,
+  insertRuleOverride,
+} from '@/lib/rules/rule-overrides-repository';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -567,9 +572,7 @@ export async function previewRule(input: PreviewRuleInput): Promise<PreviewRuleA
 // promoteRule/demoteRule/retireRule. No UI in this slice (Slice 9, per
 // this slice's own dispatch scope note) — these are typed Server Actions
 // ready for that future screen, matching createRule/editRule's own
-// "backend function first" precedent above. NOT built in this slice
-// (explicitly out of scope, per dispatch): the ambient live-state
-// evaluation engine and `rule_overrides` writing (§5.9) — that is Slice 8.
+// "backend function first" precedent above.
 // ---------------------------------------------------------------------
 
 export interface SeverityLifecycleActionState {
@@ -782,6 +785,123 @@ export async function retireRule(ruleId: string): Promise<SeverityLifecycleActio
     console.error('[rules/actions:retireRule] update failed:', err);
     return {
       error: { code: 'RULE_RETIRE_INTERNAL', user_message: 'Something went wrong. Please try again.', retryable: true },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// recordOverride — Module 04 §5.9, Slice 8
+//
+// Called by a FUTURE UI (Slice 9's ambient strip, `lib/rules/ambient-
+// state.ts`'s `getAmbientAccountState`) the moment a trader proceeds past
+// a visible breach. No UI exists yet — same "backend function first,
+// ready for that future screen to call" precedent as every other action
+// in this file. Never blocks anything itself (there is nothing here to
+// block — this a plain append-only write, no confirm step, no gate on
+// whether the caller "should" be allowed to proceed, per §5.9: "Never
+// blocks").
+// ---------------------------------------------------------------------
+
+export interface RecordOverrideActionState {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  id?: string;
+  occurredAt?: string;
+}
+
+// `.strict()` per this file's own Slice 2 security-review finding — see
+// `createRuleInputSchema`'s own comment above for why an unrecognised key
+// must fail the parse, not be silently stripped.
+const recordOverrideInputSchema = z.strictObject({
+  ruleId: z.uuid(),
+  tradeId: z.uuid().nullable(),
+  observed: z.unknown(),
+});
+
+export interface RecordOverrideInput {
+  ruleId: string;
+  tradeId: string | null;
+  observed: unknown;
+}
+
+/**
+ * §5.9's "when the trader proceeds past a visible breach, write a
+ * `rule_overrides` row." `observed` is the live fact the ambient strip
+ * showed at that moment (e.g. the current `daily_loss_pct`) — REQUIRED
+ * (not optional/undefined), matching the column's own `not null`
+ * constraint; validated here to be genuinely JSON-serialisable (mirrors
+ * `rule_evaluations`' own `observed` handling in
+ * `freeze-evaluations.ts`) rather than letting a non-serialisable value
+ * (e.g. a `Map`, a function) reach the INSERT and fail there instead.
+ *
+ * Validation order: session/rate-limit -> Zod shape -> rule ownership +
+ * lifecycle (`fetchRuleForOverride`) -> evaluation-timing gate
+ * (`pre_entry`/`session` only — an override is a specifically ambient-
+ * strip concept, §5.4's own evaluation-timing table has no ambient
+ * reading for `at_close`, which is only ever evaluated and frozen at
+ * close-out, never shown pre-emptively) -> insert (ownership of a
+ * non-null `tradeId` is re-verified inside `insertRuleOverride` itself,
+ * see that file's own header for why that check lives at the repository
+ * layer rather than here).
+ */
+export async function recordOverride(input: RecordOverrideInput): Promise<RecordOverrideActionState> {
+  const user = await requireSessionAndRateLimit('recordOverride');
+  if (isErrorState(user)) return user;
+
+  const parsed = recordOverrideInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: { code: 'RULE_OVERRIDE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+  const { ruleId, tradeId, observed } = parsed.data;
+
+  if (observed === undefined) {
+    return {
+      error: { code: 'RULE_OVERRIDE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false },
+    };
+  }
+  try {
+    JSON.stringify(observed);
+  } catch {
+    return {
+      error: { code: 'RULE_OVERRIDE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false },
+    };
+  }
+
+  const rule = await fetchRuleForOverride(user.id, ruleId);
+  if (!rule) {
+    return { error: { code: 'RULE_NOT_FOUND', user_message: "We couldn't find that rule.", retryable: false } };
+  }
+  if (rule.state !== 'active') {
+    return { error: { code: 'RULE_NOT_EDITABLE', user_message: 'This rule is no longer active.', retryable: false } };
+  }
+  if (rule.evaluation !== 'pre_entry' && rule.evaluation !== 'session') {
+    return {
+      error: {
+        code: 'RULE_OVERRIDE_INVALID_EVALUATION',
+        user_message: 'This rule is not shown on the ambient strip, so there is nothing to override.',
+        retryable: false,
+      },
+    };
+  }
+
+  try {
+    const result = await insertRuleOverride({
+      userId: user.id,
+      ruleId,
+      ruleVersion: rule.currentVersion,
+      tradeId,
+      observed,
+    });
+    return { success: true, id: result.id, occurredAt: result.occurredAt };
+  } catch (err) {
+    if (err instanceof RuleOverrideTradeNotOwnedError) {
+      return {
+        error: { code: 'RULE_OVERRIDE_TRADE_NOT_OWNED', user_message: "We couldn't find that trade.", retryable: false },
+      };
+    }
+    console.error('[rules/actions:recordOverride] insert failed:', err);
+    return {
+      error: { code: 'RULE_OVERRIDE_INTERNAL', user_message: 'Something went wrong. Please try again.', retryable: true },
     };
   }
 }

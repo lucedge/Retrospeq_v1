@@ -39,6 +39,8 @@ const {
   promoteRuleSeverityMock,
   demoteRuleSeverityMock,
   retireRuleStateMock,
+  fetchRuleForOverrideMock,
+  insertRuleOverrideMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -58,6 +60,8 @@ const {
   promoteRuleSeverityMock: vi.fn(),
   demoteRuleSeverityMock: vi.fn(),
   retireRuleStateMock: vi.fn(),
+  fetchRuleForOverrideMock: vi.fn(),
+  insertRuleOverrideMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -103,12 +107,21 @@ vi.mock('@/lib/rules/severity-lifecycle-repository', async (importOriginal) => {
     retireRuleState: retireRuleStateMock,
   };
 });
+vi.mock('@/lib/rules/rule-overrides-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/rules/rule-overrides-repository')>();
+  return {
+    ...actual,
+    fetchRuleForOverride: fetchRuleForOverrideMock,
+    insertRuleOverride: insertRuleOverrideMock,
+  };
+});
 vi.mock('server-only', () => ({}));
 
-const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule } = await import('../actions');
+const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule, recordOverride } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import('@/lib/rules/rules-repository');
 const { RuleLifecycleConflictError } = await import('@/lib/rules/severity-lifecycle-repository');
+const { RuleOverrideTradeNotOwnedError } = await import('@/lib/rules/rule-overrides-repository');
 
 const FAKE_USER = { id: 'user-aaaa-1111', email: 'trader@example.com' };
 
@@ -131,6 +144,8 @@ beforeEach(() => {
   promoteRuleSeverityMock.mockReset();
   demoteRuleSeverityMock.mockReset();
   retireRuleStateMock.mockReset();
+  fetchRuleForOverrideMock.mockReset();
+  insertRuleOverrideMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -751,5 +766,133 @@ describe('retireRule', () => {
     enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('retireRule', 'ip:1.2.3.4', 3600));
     const result = await retireRule(RULE_ID);
     expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+  });
+});
+
+// ---------------------------------------------------------------------
+// recordOverride — Module 04 §5.9, Slice 8
+// ---------------------------------------------------------------------
+
+describe('recordOverride', () => {
+  const TRADE_ID = '01927e00-0000-7000-8000-0000000000aa';
+
+  function overridableRule(
+    overrides: Partial<{ state: string; evaluation: 'pre_entry' | 'at_close' | 'session'; currentVersion: number }> = {},
+  ) {
+    return {
+      ruleId: RULE_ID,
+      state: overrides.state ?? 'active',
+      currentVersion: overrides.currentVersion ?? 3,
+      evaluation: overrides.evaluation ?? 'pre_entry',
+    };
+  }
+
+  it('succeeds with a non-null tradeId, sourcing ruleVersion from fetchRuleForOverride -- never a client-supplied value', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(overridableRule({ currentVersion: 5 }));
+    insertRuleOverrideMock.mockResolvedValue({ id: 'override-1', occurredAt: '2026-09-01T00:00:00.000+00:00' });
+
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: TRADE_ID, observed: { total_open_risk: 1.4 } });
+
+    expect(result.success).toBe(true);
+    expect(result.id).toBe('override-1');
+    expect(result.occurredAt).toBe('2026-09-01T00:00:00.000+00:00');
+    expect(enforceRateLimitMock).toHaveBeenCalledWith('recordOverride', expect.anything(), FAKE_USER.id);
+    expect(insertRuleOverrideMock).toHaveBeenCalledWith({
+      userId: FAKE_USER.id,
+      ruleId: RULE_ID,
+      ruleVersion: 5,
+      tradeId: TRADE_ID,
+      observed: { total_open_risk: 1.4 },
+    });
+  });
+
+  it('succeeds with tradeId: null (pre-entry, before any trade exists)', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(overridableRule());
+    insertRuleOverrideMock.mockResolvedValue({ id: 'override-2', occurredAt: '2026-09-01T00:00:00.000+00:00' });
+
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: { daily_loss_pct: 3.2 } });
+
+    expect(result.success).toBe(true);
+    expect(insertRuleOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({ tradeId: null, observed: { daily_loss_pct: 3.2 } }),
+    );
+  });
+
+  it('rejects unknown top-level keys via .strictObject, matching createRule\'s own compound-expression defence', async () => {
+    const result = await recordOverride({
+      ruleId: RULE_ID,
+      tradeId: null,
+      observed: 1,
+      // @ts-expect-error deliberately smuggled extra field
+      extra: 'nope',
+    });
+    expect(result.error?.code).toBe('RULE_OVERRIDE_INVALID_INPUT');
+    expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-JSON-serialisable observed value with RULE_OVERRIDE_INVALID_INPUT, before any DB call', async () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: circular });
+    expect(result.error?.code).toBe('RULE_OVERRIDE_INVALID_INPUT');
+    expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('returns RULE_NOT_FOUND for a nonexistent/not-owned rule', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(null);
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
+    expect(result.error?.code).toBe('RULE_NOT_FOUND');
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('returns RULE_NOT_EDITABLE for a retired/inactive rule', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(overridableRule({ state: 'retired' }));
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
+    expect(result.error?.code).toBe('RULE_NOT_EDITABLE');
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('returns RULE_OVERRIDE_INVALID_EVALUATION for an at_close rule -- never shown on the ambient strip, nothing to override', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(overridableRule({ evaluation: 'at_close' }));
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
+    expect(result.error?.code).toBe('RULE_OVERRIDE_INVALID_EVALUATION');
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('maps RuleOverrideTradeNotOwnedError to RULE_OVERRIDE_TRADE_NOT_OWNED', async () => {
+    fetchRuleForOverrideMock.mockResolvedValue(overridableRule());
+    insertRuleOverrideMock.mockRejectedValue(new RuleOverrideTradeNotOwnedError(TRADE_ID));
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: TRADE_ID, observed: 1 });
+    expect(result.error?.code).toBe('RULE_OVERRIDE_TRADE_NOT_OWNED');
+  });
+
+  it('enforces rate limiting via requireSessionAndRateLimit("recordOverride") BEFORE any DB work', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('recordOverride', 'ip:1.2.3.4', 3600));
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('there is no ruleVersion field in the input schema at all -- a caller-supplied ruleVersion cannot be smuggled in, structurally (the .strictObject rejects it outright)', async () => {
+    const result = await recordOverride({
+      ruleId: RULE_ID,
+      tradeId: null,
+      observed: 1,
+      // @ts-expect-error deliberately smuggling a ruleVersion field the schema does not declare
+      ruleVersion: 1,
+    });
+    expect(result.error?.code).toBe('RULE_OVERRIDE_INVALID_INPUT');
+    expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
+    expect(insertRuleOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing session the same way createRule/editRule/promoteRule do', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: new Error('no session') });
+    const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
   });
 });

@@ -22,7 +22,7 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). **Slice 8 (ambient live-state engine + `rule_overrides`, §5.9) DONE (2026-08-27)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/ambient-state.ts`'s `getAmbientAccountState` (read-only, reuses Slice 4's cross-trade fetch/compute functions via a structurally-impossible-to-collide `NO_REFERENCE_TRADE_ID` sentinel and the real `evaluate()`, always returns a fully-defined `facts`/`rules` shape — the "always visible, never appear-on-threshold" guarantee independently re-verified against fresh fixtures by BOTH tester and QA) + `lib/rules/rule-overrides-repository.ts` (`fetchRuleForOverride`/`insertRuleOverride` with an adversarial-verified trade-ownership re-check/`fetchOverrideOutcomeSummary` with an independently-reconfirmed DISTINCT-trade dedup) + `recordOverride` Server Action (`ruleVersion` structurally un-influenceable by the client). Security-reviewer PASS (10/10 — confirmed the cross-user `trade_id` ownership check is the sole real defense beyond RLS since `rule_overrides`' own RLS never constrains the FK target's ownership, confirmed non-racy same-transaction check-then-insert, confirmed no injection surface; one non-blocking future-hardening note on `observed`'s lack of an explicit size cap, mitigated today by Next.js's framework body-size limit + rate limiting). QA PASS (8/8 — re-derived the "always visible" guarantee adversarially a third time, confirmed the tint vocabulary never leaks a color mapping, confirmed §5.9's worked-example fields are all present, confirmed no punitive language in error strings; two non-blocking documentation notes: this ledger entry itself, and an optional `docs/runbook.md` addition for the uncaught-`RuleEvaluationError` live-read variant, distinct from the freeze-time caught-and-logged one). 109 tests (99 mocked + 10 live), 100% line/function coverage, 94.28%/100% branch. See the 2026-08-27 decision-log entries for the full independent-verification write-ups. |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
@@ -129,17 +129,193 @@ closed directly — see the "Fix: add lib/rules/adherence-repository.ts
 to the service-role allowlist" commit, pushed ahead of Slice 7's own
 commit.
 
-**Next: Module 04 Slice 8 — the ambient live-state evaluation engine +
-`rule_overrides` (§5.9).** "Facts ambient, judgments silent" — account
-state (trades today, day P&L, risk vs cap) always visible, tinted by
-state, never a modal/confirm/block. Needs a live (not frozen) evaluation
-of pre_entry/session rules against TODAY's in-progress state (§7.1:
-"provisional," writes nothing to `rule_evaluations`). When the trader
-proceeds past a visible breach, write a `rule_overrides` row (owner
-SELECT+INSERT RLS already exists from Slice 1) — not a penalty, the data
-behind "You've exceeded your risk cap 12 times. Those trades averaged
-−0.4R against +0.3R for the rest." Then Slice 9: Module 04's UI (§6,
-§5.10's guided three-rule front door).
+**Slice 8 production code (2026-08-25) + its test suite (2026-08-26)
+are both now written; NOT yet marked done — that's tester/security-
+reviewer/qa's call, per this ledger's own rule.** The prior coder
+session that wrote `lib/rules/ambient-state.ts`
+(`getAmbientAccountState`), `lib/rules/rule-overrides-repository.ts`
+(`fetchRuleForOverride`/`insertRuleOverride`/
+`fetchOverrideOutcomeSummary`), and `app/(app)/rules/actions.ts`'s
+`recordOverride` was interrupted by a session limit right as it began
+writing tests — the orchestrator reviewed that production code as sound
+(`tsc --noEmit` already clean) and dispatched a follow-up coder session
+purely to write the missing test suite, no production-code changes.
+That session found no bugs in the reviewed code (none of the four files
+were touched). Delivered: `lib/rules/__tests__/ambient-state.test.ts`
+(15 mocked tests) + `.live.test.ts` (3 live-DB tests),
+`lib/rules/__tests__/rule-overrides-repository.test.ts` (13 mocked
+tests) + `.live.test.ts` (7 live-DB tests), plus 12 new `recordOverride`
+tests folded into the existing
+`app/(app)/rules/__tests__/actions.test.ts`. 100% line/function coverage
+on both `ambient-state.ts` and `rule-overrides-repository.ts` (94.28%/
+100% branch — the one uncovered branch in `ambient-state.ts` is a
+defensive corrupted-data guard in `deriveRiskCapPct` that is not
+independently reachable through the public entry point without
+`evaluate()` throwing first on the same malformed value, documented
+inline in the test file rather than forced). The live-DB tests
+independently proved: a real `total_open_risk` hard-cap breach against
+genuinely live Postgres data, a second call reflecting a newly-opened
+trade (not cached/stale), `scope='strategy'`/`evaluation='at_close'`
+rules correctly excluded from the ambient snapshot, owner-only RLS, the
+real ownership pre-check INSERT path, and — the one that actually
+mattered to prove with a real fixture rather than by reading the SQL —
+the `DISTINCT trade_id` dedup in `fetchOverrideOutcomeSummary`: a trade
+overridden twice for the same rule is averaged once, not twice (proven
+by seeding exactly that case and checking the arithmetic comes out to
+`avg(-1.0, 1.0) = 0`, not `avg(-1.0, -1.0, 1.0) = -1/3`). `tsc --noEmit`
+/ `eslint .` / `npm run build` all clean.
+
+**→ Module 04 Slice 8 tester gate: PASS (2026-08-27), independently
+verified, not a rubber stamp — no production bugs found, no test gaps
+closed (the coder's own test suite already met the bar; independent
+constructions below only add confidence, they don't replace it).**
+
+- **Re-ran the full existing suite myself, not just trusted the coder's
+  numbers:** `ambient-state.test.ts` (15), `ambient-state.live.test.ts`
+  (3), `rule-overrides-repository.test.ts` (13),
+  `rule-overrides-repository.live.test.ts` (7), and the 71-test (12 new)
+  `app/(app)/rules/__tests__/actions.test.ts` — 109/109 green, matching
+  the coder's reported 99 mocked + 10 live exactly. Live-DB tests ran
+  against the real dev Postgres project (not skipped) and took ~42s
+  total, genuinely exercising real RLS/real Postgres filtering, not a
+  skip-guard fallback.
+- **Coverage independently re-measured, not assumed:** 100% line/
+  function on both `ambient-state.ts` and `rule-overrides-repository.ts`,
+  94.28%/100% branch — the one gap (`ambient-state.ts` line 412,
+  `deriveRiskCapPct`'s defensive non-numeric-`value` guard) confirmed
+  genuinely unreachable through the public entry point: the same
+  malformed `rule_versions.value` reaches the real `evaluate()` in the
+  same loop first and throws `RuleEvaluationError` before this branch
+  could matter, so it's a documented belt-and-suspenders guard, not a
+  silently-untested product path.
+- **The "always visible, never appear-on-threshold" invariant — the
+  slice's single most important property — re-derived from a
+  fresh, independently-constructed live-DB scenario** (not the coder's
+  fixture): a fresh account, an active HARD `trades_today lte 5` rule
+  that is currently FOLLOWED (0 trades today, well inside the cap) came
+  back as a real, present entry in `rules` with `tint: 'neutral'` —
+  never omitted for being unremarkable. On the same fresh account with
+  zero prior activity, `facts.tradesToday.value` was `0` (not undefined/
+  absent), `facts.dayPnlPct.value` was `null` with the field itself
+  genuinely present (`Object.hasOwn` true), and `facts.riskVsCap.capPct`
+  was `null` ("no cap configured" is a real, defined state) while
+  `currentPct` was a real `0`. Confirmed no scenario exists where a fact
+  or rule entry goes missing/undefined — every code path either returns
+  a real value or a real, typed "not applicable"/`null`, never an absent
+  key.
+- **No red/green: independently grepped `ambient-state.ts`,
+  `rule-overrides-repository.ts`, and all four test files** for hex/rgb
+  color literals and `success`/`danger`-shaped field names — the only
+  matches anywhere are the doc comments quoting AGENTS.md's
+  non-negotiable itself to explain why no such pair exists. Clean.
+- **Tint boundaries re-derived independently, matching spec exactly:**
+  broken+hard → `breach`, broken+soft → `watch`, followed/not_applicable
+  (both `operand_missing` and `tier` reasons) at any severity → `neutral`,
+  and `worseTint`/`worstTintForOperands` correctly rank breach > watch >
+  neutral when multiple rules of different severities govern the same
+  fact (verified against the coder's own three-severity fixture and a
+  fresh one of my own).
+- **`evaluate()` reuse confirmed by reading the actual import/call site**
+  in `ambient-state.ts` (`import { evaluate, ... } from './evaluate'`,
+  called once per rule inside the orchestrator's `.map`), not merely
+  trusted from the coder's spy-based test — there is no second,
+  parallel comparison implementation anywhere in this file.
+- **`NO_REFERENCE_TRADE_ID` sentinel confirmed structurally impossible to
+  collide with a real trade id:** read `retrospeq.uuid_generate_v7()`'s
+  actual definition (`20260819020000_shadow_harness.sql`) — the first 6
+  bytes are `clock_timestamp()`'s own epoch-millisecond value, which for
+  any timestamp after 1970 is nonzero, so a genuinely generated trade id
+  can never equal the all-zero nil UUID. The live test proves the
+  self-exclusion filter is a true no-op in this context (prior-trade
+  timing/outcome lookups work correctly with no real "self" trade to
+  exclude), not just asserted from reading the SQL.
+- **`scope='global'`/`evaluation in (pre_entry, session)` filtering
+  re-verified from the raw SQL** and independently re-proven live with
+  my own fixtures (different operands/values from the coder's own test):
+  a HARD `scope='strategy'` rule and a SOFT `evaluation='at_close'` rule
+  were both seeded and both confirmed excluded from the ambient
+  snapshot — severity does not affect the exclusion in either direction,
+  and a real included global pre_entry rule proved the query isn't just
+  returning nothing for everyone.
+- **`getAmbientAccountState` writes nothing — reconfirmed** via the
+  existing mocked SQL-text scan (asserts no query text anywhere matches
+  `insert|update|delete`, across a zero-rule and a multi-rule scenario)
+  and via the live tests' own before/after `rule_evaluations`/
+  `rule_overrides` row counts.
+- **`rule_overrides` double-counting protection — independently
+  constructed, deliberately different from the coder's fixture:** (1)
+  three (not two) override rows on the same trade collapsed to one
+  distinct trade in `avgRMultipleOverridden`; (2) a meaningful
+  discriminating case — one trade overridden twice (r=−2) plus a
+  different trade overridden once (r=+4) — averaged to the correct
+  deduped `+1.0`, not the wrong triple-counted `0.0` a broken
+  implementation would produce. Both passed against the real DB.
+- **`insertRuleOverride`'s ownership re-check — adversarial case
+  constructed independently:** user A (rule owner) citing user B's real
+  trade as the override's `tradeId` threw `RuleOverrideTradeNotOwnedError`
+  and left zero rows for that rule id on a direct follow-up SQL read
+  (not just trusting the thrown error), with user B's trade confirmed
+  untouched.
+- **`recordOverride`'s `ruleVersion` cannot be client-influenced —
+  confirmed structurally:** read `recordOverrideInputSchema`
+  (`z.strictObject({ ruleId, tradeId, observed })`) in
+  `app/(app)/rules/actions.ts` — there is no `ruleVersion` field in the
+  schema at all, and the Server Action sources it exclusively from
+  `fetchRuleForOverride(...).currentVersion`, a server-side read.
+- **RLS re-confirmed two ways, one independent of the app code entirely:**
+  the coder's own live tests exercise it through `withUserConnection`;
+  additionally ran a direct-Postgres check using `SET LOCAL ROLE
+  authenticated` + `request.jwt.claims` (the same mechanism PostgREST
+  itself uses to resolve `auth.uid()`, via the existing `asRole` test
+  helper) — a second user's raw `SELECT * FROM retrospeq.rule_overrides
+  WHERE rule_id = $1` against another user's row returned zero rows, the
+  owner's own query returned exactly one, and the `anon` role (no claims
+  at all) also returned zero. This proves RLS is enforced at the
+  Postgres role/policy level, not merely by the application's own query
+  shape.
+- **Query-count sanity re-confirmed:** exactly 8 round trips for
+  `getAmbientAccountState` regardless of 0 or 5 active rules — no
+  per-rule query, matching the freeze-evaluations "one fact-assembly
+  pass, then evaluate in-memory" precedent.
+- **`npm run build` / `npx eslint .` / `npx tsc --noEmit`: all clean,
+  independently re-run** across the full repo, not just the changed
+  files.
+- **Golden fixtures:** not applicable — this slice touches ambient live
+  evaluation and `rule_overrides`, not the grouping engine, so §9.3
+  fixture replay isn't triggered.
+- **Readiness for security review: YES.** No production code was
+  changed during this tester pass. Every one of this slice's own
+  dispatch-flagged risk areas (always-visible guarantee, sentinel
+  no-op-ness, scope/evaluation filtering, ownership re-check,
+  double-counting, RLS) was independently re-derived against real
+  Postgres or read directly from source, not taken on the coder's word,
+  and all held.
+
+**→ Module 04 Slice 8 (ambient live-state engine + `rule_overrides`) is
+DONE (2026-08-27).** Security-reviewer PASS (10/10) and QA PASS (8/8)
+both logged above in the phase-status table row; a short
+`docs/runbook.md` entry was added for the ambient-strip's deliberately-
+uncaught `RuleEvaluationError` variant (distinct from the freeze-time
+caught-and-logged one).
+
+**Next: Module 04 Slice 9 — the UI (§6, §5.10's guided three-rule front
+door), including the ambient strip that actually renders
+`getAmbientAccountState`'s output and calls `recordOverride`.** "Facts
+ambient, judgments silent" — account state (trades today, day P&L, risk
+vs cap) always visible, tinted by state, never a modal/confirm/block —
+`getAmbientAccountState`'s `AmbientTint` (`neutral`/`watch`/`breach`)
+maps to geometry/weight/opacity, never a red/green hue pair, per
+AGENTS.md's own non-negotiable. Also: the rule editor (one sentence, one
+tappable number, no operator dropdown — story 1.1), discovery (ranked
+detections leading, catalogue behind search — story 1.3), the guided
+three-rule front door (risk per trade / daily loss cap / stop-after-N-
+losses, all soft, thresholds seeded from `operand_distributions` — §5.10,
+"the entire free tier"), and adherence display (two fractions, never
+blended — §5.6). Per AGENTS.md step 4: this slice has a UI surface, so
+`retrospeq-coder`/`retrospeq-tester` must both do their screenshot-based
+visual self-check before it's considered done — there's no interactive
+browser tool in this environment, so that's the only way rendered UI
+actually gets looked at.
 
 **What was built [Slice 5, historical]:** `lib/rules/freeze-evaluations.ts` — one new
 orchestrating function, `evaluateAndFreezeTradeRules(client, tradeId,
@@ -4782,6 +4958,26 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-27 — **Module 04 Slice 8 (ambient live-state engine +
+  `rule_overrides`, §5.9) — independent tester verification PASS, no
+  production bugs, no test gaps closed.** Full write-up is in the
+  "Current task" section above (search "Slice 8 tester gate: PASS
+  (2026-08-27)"); not repeated here in full. Summary: re-ran the coder's
+  109 tests (99 mocked + 10 live) green; re-measured coverage (100%
+  line/function, 94.28%/100% branch on `ambient-state.ts`/
+  `rule-overrides-repository.ts`, the one gap a confirmed-unreachable
+  defensive guard); independently re-constructed — with fresh fixtures,
+  not the coder's own — the "always visible, never appear-on-threshold"
+  invariant, the tint boundary table, the `NO_REFERENCE_TRADE_ID`
+  sentinel's structural nil-UUID-collision-impossibility (read
+  `uuid_generate_v7()`'s actual definition), `scope`/`evaluation`
+  filtering with a HARD strategy rule and a SOFT at_close rule, a
+  triple-override same-trade dedup plus a discriminating two-trade dedup
+  case, an adversarial cross-user override-ownership rejection verified
+  by a follow-up read (not just the thrown error), and RLS reconfirmed
+  via a direct `SET LOCAL ROLE authenticated` + `request.jwt.claims`
+  check independent of the app's own `withUserConnection` wrapper — all
+  held. `build`/`lint`/`tsc` clean. Verdict: ready for security review.
 - 2026-08-25 — **Module 04 Slice 7 (severity lifecycle, §5.7) — the
   "6 weeks / ≥20 evals / ≥95% compliance / zero breaks in 3 weeks" gate
   read as ALL-TIME for the first three, ROLLING-21-DAYS for the fourth —

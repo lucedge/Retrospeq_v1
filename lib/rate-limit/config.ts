@@ -358,6 +358,28 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 04 §5.9 — Slice 8's `recordOverride`. Writes a real
+   * `rule_overrides` row (a live, append-only log entry), so this is not
+   * `previewRule`'s "writes nothing, ever" case — but it is also not a
+   * financially-new-record write like `createRule`/`manualTradeEntry`, and
+   * a trader can legitimately proceed past several DIFFERENT visible
+   * breaches across one trading session (a session-rule breach visible
+   * mid-day, another later, a pre_entry breach on the next fill) — this
+   * slice's own dispatch: "closer to previewRule's generosity than
+   * createRule's stricter limit." Given loosest-hourly-budget precedent in
+   * this file (`writeTradeCapture`/`toggleNotADecision`: a real per-trade
+   * write, not credential- or destruction-shaped, plausible several times
+   * per sitting) fits this shape better than `previewRule`'s 60-second
+   * interactive-slider window (an override is a discrete, deliberate
+   * proceed-past-a-breach action, not a rapid-fire UI drag) — this scope
+   * reuses `writeTradeCapture`'s exact budget rather than inventing a
+   * third number for the same reasoning.
+   */
+  recordOverride: {
+    ip: { limit: 60, windowSeconds: 3600 },
+    email: { limit: 40, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

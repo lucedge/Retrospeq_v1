@@ -573,6 +573,25 @@ Investigate immediately if this appears across MANY different
 `rule_id`s at once (a broken catalogue deploy, not an isolated stale
 row).
 
+**Related, but a genuinely different failure mode — `RuleEvaluationError` thrown from the ambient strip (`lib/rules/ambient-state.ts`'s `getAmbientAccountState`, Module 04 Slice 8):**
+unlike the freeze-time case above, this one is **deliberately NOT caught**
+— confirmed by that function's own inline comment. There is no
+transaction to protect and no confirmation to unblock (this is a plain
+synchronous read, called live while a trader is trading, not inside
+`confirm.ts`'s transaction), so a thrown `RuleEvaluationError` here
+propagates straight to the caller as a genuine, unexpected error —
+correct, since silently absorbing it into a fabricated `not_applicable`
+would misrepresent real data corruption as a legitimate "can't evaluate"
+outcome on the one screen a trader is actively looking at. **How to
+check:** this surfaces as an uncaught exception in whatever calls
+`getAmbientAccountState` (no dedicated log prefix exists yet — Slice 9's
+UI wiring should add one, and an error boundary, before this reaches
+production) — the error's own `code`/`message` name the exact rule/
+operand/version at fault, same vocabulary as the freeze-time case above.
+**Action:** same root cause and same fix as the freeze-time entry above
+(a stale `rule_versions` row referencing a retired/renamed catalogue
+operand) — if you've already investigated one, you've investigated both.
+
 ---
 
 ## `operand_distributions` recompute failing after a sync
