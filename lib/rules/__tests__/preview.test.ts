@@ -337,4 +337,39 @@ describe('lib/rules/preview.ts', () => {
       expect(result.calibration).toBeUndefined();
     });
   });
+
+  describe('percentileFromBuckets / weightedMedian — exported for lib/rules/guided-front-door.ts (Slice 10a) reuse', () => {
+    it('weightedMedian is exactly percentileFromBuckets at p=0.5 (same cumulative walk, not two parallel implementations)', async () => {
+      const { percentileFromBuckets, weightedMedian } = await import('../preview');
+      const buckets = [
+        { value: 1.0, count: 10 },
+        { value: 2.0, count: 10 },
+        { value: 3.0, count: 10 },
+      ];
+      expect(weightedMedian(buckets)).toBe(percentileFromBuckets(buckets, 0.5));
+    });
+
+    it('percentileFromBuckets(_, 0.8) returns the value where the cumulative count first reaches 80% of n', async () => {
+      const { percentileFromBuckets } = await import('../preview');
+      // n=20, target=16 -- reached exactly at the first bucket (16), so
+      // the 80th percentile is 1.0, not 2.0.
+      const buckets = [
+        { value: 1.0, count: 16 },
+        { value: 2.0, count: 4 },
+      ];
+      expect(percentileFromBuckets(buckets, 0.8)).toBe(1.0);
+    });
+
+    it('percentileFromBuckets returns null for an empty or non-numeric bucket set', async () => {
+      const { percentileFromBuckets } = await import('../preview');
+      expect(percentileFromBuckets([], 0.8)).toBeNull();
+      expect(percentileFromBuckets([{ value: 'EURUSD', count: 5 }], 0.8)).toBeNull();
+    });
+
+    it('rejects an out-of-range p rather than silently clamping it', async () => {
+      const { percentileFromBuckets } = await import('../preview');
+      expect(() => percentileFromBuckets([{ value: 1, count: 1 }], 0)).toThrow(/p must be in/);
+      expect(() => percentileFromBuckets([{ value: 1, count: 1 }], 1.5)).toThrow(/p must be in/);
+    });
+  });
 });

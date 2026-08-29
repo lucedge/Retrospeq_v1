@@ -51,7 +51,11 @@ export interface PreviewResult {
   calibration?: string;
 }
 
-const MIN_TRADES_FOR_PREVIEW = 20;
+// Exported (Slice 10a, §5.10's guided front door) so
+// `lib/rules/guided-front-door.ts` can reuse the SAME "meaningful sample"
+// threshold this file already established, rather than inventing a second
+// number that could silently drift from this one.
+export const MIN_TRADES_FOR_PREVIEW = 20;
 
 /** §5.8's exact guidance table, boundary-for-boundary: `0` (never flags),
  *  `> 0.35` (flags too often), `< 0.06` (already outside normal
@@ -72,26 +76,46 @@ function guidanceForRatio(ratio: number): string {
   return 'Tight enough to matter, loose enough to keep.';
 }
 
-/** Weighted median over a numeric-bucket distribution -- the bucket whose
- *  cumulative count first reaches half of `n`, walking buckets in
- *  ascending value order. Resolution is bounded by the operand's own
- *  bucket width (`bounds.step`), the same precision the preview itself
- *  already operates at, not a claim of exact-value precision. Returns
- *  `null` when there is nothing numeric to take a median of (an empty or
- *  non-numeric bucket set). */
-function weightedMedian(buckets: readonly DistributionBucket[]): number | null {
+/**
+ * Weighted percentile over a numeric-bucket distribution -- the bucket
+ * whose cumulative count first reaches the `p` fraction of `n`, walking
+ * buckets in ascending value order. Resolution is bounded by the operand's
+ * own bucket width (`bounds.step`), the same precision the preview itself
+ * already operates at, not a claim of exact-value precision. Returns
+ * `null` when there is nothing numeric to take a percentile of (an empty
+ * or non-numeric bucket set).
+ *
+ * Exported (Slice 10a, §5.10's guided front door) alongside the p50
+ * convenience wrapper below -- `guided-front-door.ts`'s threshold-seeding
+ * needs an arbitrary percentile (not just the median) over this exact
+ * bucket shape, so this is the ONE walk over `DistributionBucket[]` both
+ * that file and `weightedMedian` share, rather than two parallel copies of
+ * the same cumulative-count loop.
+ */
+export function percentileFromBuckets(buckets: readonly DistributionBucket[], p: number): number | null {
+  if (p <= 0 || p > 1) {
+    throw new Error(`percentileFromBuckets: p must be in (0, 1], got ${p}.`);
+  }
   const numeric = buckets.filter((b): b is { value: number; count: number } => typeof b.value === 'number' && b.count > 0);
   if (numeric.length === 0) return null;
   const sorted = [...numeric].sort((a, b) => a.value - b.value);
   const total = sorted.reduce((sum, b) => sum + b.count, 0);
   if (total === 0) return null;
-  const half = new Decimal(total).dividedBy(2);
+  const target = new Decimal(total).times(p);
   let cumulative = new Decimal(0);
   for (const bucket of sorted) {
     cumulative = cumulative.plus(bucket.count);
-    if (cumulative.greaterThanOrEqualTo(half)) return bucket.value;
+    if (cumulative.greaterThanOrEqualTo(target)) return bucket.value;
   }
   return sorted[sorted.length - 1].value;
+}
+
+/** The bucket whose cumulative count first reaches half of `n` -- p50 of
+ *  `percentileFromBuckets` above. Kept as its own named function since
+ *  "median" is the concept `calibrationCoaching`'s own copy names
+ *  explicitly ("Your median risk per trade is..."). */
+export function weightedMedian(buckets: readonly DistributionBucket[]): number | null {
+  return percentileFromBuckets(buckets, 0.5);
 }
 
 /** Presentational only -- appends the operand's own `unit` where it reads
@@ -156,12 +180,15 @@ function calibrationCoaching(
   );
 }
 
-interface OperandDistributionRow {
+export interface OperandDistributionRow {
   buckets: DistributionBucket[];
   n: number;
 }
 
-async function fetchOperandDistributionRow(userId: string, operandId: string): Promise<OperandDistributionRow | null> {
+// Exported (Slice 10a) so `guided-front-door.ts` reads the exact same
+// `operand_distributions` row this preview engine reads -- one query
+// shape, not a second copy of the same SQL.
+export async function fetchOperandDistributionRow(userId: string, operandId: string): Promise<OperandDistributionRow | null> {
   return withUserConnection(userId, async (client) => {
     const res = await client.query<{ buckets: DistributionBucket[]; n: number }>(
       `select buckets, n from retrospeq.operand_distributions where user_id = $1 and operand_id = $2`,
