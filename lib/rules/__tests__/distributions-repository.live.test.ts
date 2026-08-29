@@ -29,12 +29,19 @@ interface SeedTradeOverrides {
   status?: 'open' | 'closed' | 'confirmed';
   serverDay?: string;
   openedAt?: Date;
+  closedAt?: Date | null;
   confirmedAt?: Date | null;
   initialStop?: string | null;
   initialRiskPct?: string | null;
   riskPct?: string | null;
   exitPriceAvg?: string | null;
   holdSeconds?: number | null;
+  /** Slice 9 -- daily_loss_pct/consecutive_losses need real realized_pnl/
+   *  outcome values seeded; Slice 3's original seedTrade never set either
+   *  (both columns default null), which is exactly why those two operands
+   *  always computed n=0 before this slice. */
+  realizedPnl?: string | null;
+  outcome?: 'win' | 'loss' | 'scratch' | null;
 }
 
 describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live DB)', () => {
@@ -65,12 +72,12 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
     await db.end();
   });
 
-  async function seedAccount(userId: string): Promise<string> {
+  async function seedAccount(userId: string, startingEquity: string | null = null): Promise<string> {
     const res = await db.query<{ id: string }>(
-      `insert into retrospeq.trading_accounts (user_id, label, platform, base_currency, day_rollover)
-       values ($1, 'Distributions Live Test', 'mt5', 'USD', '00:00:00 UTC')
+      `insert into retrospeq.trading_accounts (user_id, label, platform, base_currency, day_rollover, starting_equity)
+       values ($1, 'Distributions Live Test', 'mt5', 'USD', '00:00:00 UTC', $2)
        returning id`,
-      [userId],
+      [userId, startingEquity],
     );
     return res.rows[0].id;
   }
@@ -80,6 +87,7 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
     const direction = overrides.direction ?? 'long';
     const status = overrides.status ?? 'confirmed';
     const openedAt = overrides.openedAt ?? new Date('2026-08-10T09:00:00Z');
+    const closedAt = overrides.closedAt === undefined ? openedAt : overrides.closedAt;
     const serverDay = overrides.serverDay ?? '2026-08-10';
     const confirmedAt = overrides.confirmedAt === undefined ? new Date('2026-08-10T12:00:00Z') : overrides.confirmedAt;
     const initialStop = overrides.initialStop === undefined ? '1.19800000' : overrides.initialStop;
@@ -87,6 +95,8 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
     const riskPct = overrides.riskPct === undefined ? '1.500000' : overrides.riskPct;
     const exitPriceAvg = overrides.exitPriceAvg === undefined ? '1.20500000' : overrides.exitPriceAvg;
     const holdSeconds = overrides.holdSeconds === undefined ? 1800 : overrides.holdSeconds;
+    const realizedPnl = overrides.realizedPnl === undefined ? null : overrides.realizedPnl;
+    const outcome = overrides.outcome === undefined ? null : overrides.outcome;
 
     const blockRes = await db.query<{ id: string }>(
       `insert into retrospeq.blocks (user_id, account_id, instrument, opened_at, closed_at, server_day)
@@ -99,10 +109,11 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
       `insert into retrospeq.trades
          (user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
           entry_price_avg, exit_price_avg, peak_volume, currency, grouping_confidence,
-          initial_stop, initial_risk_pct, risk_pct, hold_seconds, confirmed_at, confirmed_by)
-       values ($1,$2,$3,$4,$5,$6::timestamptz,$6::timestamptz,$7,$8,
-               '1.20000000',$9,'100000.00000000','USD','confident_single',
-               $10,$11,$12,$13,$14,$15)
+          initial_stop, initial_risk_pct, risk_pct, hold_seconds, confirmed_at, confirmed_by,
+          realized_pnl, outcome)
+       values ($1,$2,$3,$4,$5,$6::timestamptz,$7::timestamptz,$8,$9,
+               '1.20000000',$10,'100000.00000000','USD','confident_single',
+               $11,$12,$13,$14,$15,$16,$17,$18)
        returning id`,
       [
         userId,
@@ -111,6 +122,7 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
         instrument,
         direction,
         openedAt.toISOString(),
+        closedAt ? closedAt.toISOString() : null,
         serverDay,
         status,
         exitPriceAvg,
@@ -120,6 +132,8 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
         holdSeconds,
         confirmedAt ? confirmedAt.toISOString() : null,
         confirmedAt ? 'user' : null,
+        realizedPnl,
+        outcome,
       ],
     );
     return tradeRes.rows[0].id;
@@ -169,13 +183,25 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
       const { recomputeOperandDistributionsForUser } = await import('../distributions-repository');
       const result = await recomputeOperandDistributionsForUser(user.id);
       expect(result.tradesScanned).toBe(2); // the unconfirmed trade excluded
-      expect(result.operandsComputed).toBe(8);
+      expect(result.operandsComputed).toBe(10); // 8 (Slice 3) + daily_loss_pct + consecutive_losses (Slice 9)
 
       const rows = await db.query<{ operand_id: string; buckets: unknown; n: number }>(
         `select operand_id, buckets, n from retrospeq.operand_distributions where user_id = $1 order by operand_id`,
         [user.id],
       );
-      expect(rows.rows).toHaveLength(8);
+      expect(rows.rows).toHaveLength(10);
+
+      // Slice 9: this account was seeded with no starting_equity (default
+      // null), so daily_loss_pct correctly resolves to n=0 (docs/adr/0013
+      // -- unknown equity, never a fabricated value). Neither seeded trade
+      // has an outcome set (both default null), so consecutive_losses IS
+      // computable for both (a real 0 -- "no losing streak found," per
+      // computeConsecutiveLosses's own null-breaks-the-streak contract),
+      // n=2.
+      const dailyLossRow = rows.rows.find((r) => r.operand_id === 'daily_loss_pct')!;
+      expect(dailyLossRow.n).toBe(0);
+      const consecutiveLossesRow = rows.rows.find((r) => r.operand_id === 'consecutive_losses')!;
+      expect(consecutiveLossesRow.n).toBe(2);
 
       const instrumentRow = rows.rows.find((r) => r.operand_id === 'instrument')!;
       expect(instrumentRow.n).toBe(2);
@@ -227,7 +253,7 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
         `select operand_id, n from retrospeq.operand_distributions where user_id = $1`,
         [user.id],
       );
-      expect(rowsAfter.rows).toHaveLength(8); // still one row per operand, not 16
+      expect(rowsAfter.rows).toHaveLength(10); // still one row per operand, not 20
       const instrumentAfter = rowsAfter.rows.find((r) => r.operand_id === 'instrument')!;
       expect(instrumentAfter.n).toBe(3);
     },
@@ -323,6 +349,96 @@ describe.skipIf(!env)('lib/rules/distributions-repository.ts + preview.ts (live 
       expect(result.n).toBe(25);
       expect(result.flagged).toBe(5);
       expect(result.ratio).toBeCloseTo(5 / 25, 10);
+    },
+    30_000,
+  );
+
+  it(
+    'recomputeOperandDistributionsForUser (Slice 9): daily_loss_pct/consecutive_losses computed correctly, per-account, from real seeded history',
+    async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'dist-crosstrade');
+      cleanupUserIds.push(user.id);
+
+      // Account A: starting_equity 10,000, four SAME-DAY confirmed trades
+      // seeded in a deliberate loss/loss/win/(anything) sequence so each
+      // trade's OWN point-in-time daily_loss_pct/consecutive_losses is
+      // hand-computable:
+      //
+      //   trade1 09:00 loss -100  -> entering: day loss so far 0%,   streak 0
+      //   trade2 10:00 loss -100  -> entering: day loss so far 1.0%, streak 1 (trade1)
+      //   trade3 11:00 win  +50   -> entering: day loss so far 2.0%, streak 2 (trade2,trade1)
+      //   trade4 12:00 loss -20   -> entering: day loss so far 1.5%, streak 0 (trade3 was a win)
+      const accountA = await seedAccount(user.id, '10000');
+      await seedTrade(user.id, accountA, {
+        openedAt: new Date('2026-08-10T09:00:00Z'),
+        closedAt: new Date('2026-08-10T09:15:00Z'),
+        serverDay: '2026-08-10',
+        realizedPnl: '-100',
+        outcome: 'loss',
+      });
+      await seedTrade(user.id, accountA, {
+        openedAt: new Date('2026-08-10T10:00:00Z'),
+        closedAt: new Date('2026-08-10T10:15:00Z'),
+        serverDay: '2026-08-10',
+        realizedPnl: '-100',
+        outcome: 'loss',
+      });
+      await seedTrade(user.id, accountA, {
+        openedAt: new Date('2026-08-10T11:00:00Z'),
+        closedAt: new Date('2026-08-10T11:15:00Z'),
+        serverDay: '2026-08-10',
+        realizedPnl: '50',
+        outcome: 'win',
+      });
+      await seedTrade(user.id, accountA, {
+        openedAt: new Date('2026-08-10T12:00:00Z'),
+        closedAt: new Date('2026-08-10T12:15:00Z'),
+        serverDay: '2026-08-10',
+        realizedPnl: '-20',
+        outcome: 'loss',
+      });
+
+      // Account B: a SEPARATE account, same user, one confirmed trade with
+      // no prior history of its own at all -- must NOT see account A's
+      // loss streak, proving the real SQL (row_number() partitioned by
+      // account_id, joined to trading_accounts for its OWN
+      // starting_equity) is genuinely account-scoped, not just the
+      // already-unit-tested pure function in isolation.
+      const accountB = await seedAccount(user.id, '5000');
+      await seedTrade(user.id, accountB, {
+        openedAt: new Date('2026-08-10T09:00:00Z'),
+        closedAt: new Date('2026-08-10T09:15:00Z'),
+        serverDay: '2026-08-10',
+        realizedPnl: '-500', // would be a big loss IF it were entering after A's history
+        outcome: 'loss',
+      });
+
+      const { recomputeOperandDistributionsForUser } = await import('../distributions-repository');
+      const result = await recomputeOperandDistributionsForUser(user.id);
+      expect(result.tradesScanned).toBe(5);
+
+      const rows = await db.query<{ operand_id: string; buckets: unknown; n: number }>(
+        `select operand_id, buckets, n from retrospeq.operand_distributions where user_id = $1 order by operand_id`,
+        [user.id],
+      );
+
+      const dailyLossRow = rows.rows.find((r) => r.operand_id === 'daily_loss_pct')!;
+      expect(dailyLossRow.n).toBe(5);
+      const dailyLossByValue = new Map((dailyLossRow.buckets as Array<{ value: number; count: number }>).map((b) => [b.value, b.count]));
+      expect(dailyLossByValue.get(0)).toBe(2); // accountA trade1 (no prior) + accountB's own trade (no prior)
+      expect(dailyLossByValue.get(1)).toBe(1); // accountA trade2
+      expect(dailyLossByValue.get(2)).toBe(1); // accountA trade3
+      expect(dailyLossByValue.get(1.5)).toBe(1); // accountA trade4
+
+      const consecutiveLossesRow = rows.rows.find((r) => r.operand_id === 'consecutive_losses')!;
+      expect(consecutiveLossesRow.n).toBe(5);
+      const consecutiveByValue = new Map(
+        (consecutiveLossesRow.buckets as Array<{ value: number; count: number }>).map((b) => [b.value, b.count]),
+      );
+      expect(consecutiveByValue.get(0)).toBe(3); // accountA trade1 + trade4 (streak broken by trade3's win) + accountB's own trade
+      expect(consecutiveByValue.get(1)).toBe(1); // accountA trade2
+      expect(consecutiveByValue.get(2)).toBe(1); // accountA trade3
     },
     30_000,
   );

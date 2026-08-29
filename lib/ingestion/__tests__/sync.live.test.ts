@@ -365,16 +365,18 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
       // `recomputeOperandDistributionsForUser` runs unconditionally after
       // every successful, non-manual, non-failed sync (this file's own
       // header + `sync.ts`'s own call-site comment) — one row per
-      // computable operand, REGARDLESS of whether this fixture's trades
-      // happen to be `confirmed` yet (they are not — sync.ts never
-      // confirms a trade, Module 02 §4.6 is a separate transaction). A
-      // real, non-empty distribution ISN'T the point of this test; that
-      // the wiring actually fired or a real DB write happened is.
+      // distribution-bearing operand (the 8 single-trade operands from
+      // Slice 3, plus (Slice 9) `daily_loss_pct`/`consecutive_losses` — 10
+      // total), REGARDLESS of whether this fixture's trades happen to be
+      // `confirmed` yet (they are not — sync.ts never confirms a trade,
+      // Module 02 §4.6 is a separate transaction). A real, non-empty
+      // distribution ISN'T the point of this test; that the wiring
+      // actually fired or a real DB write happened is.
       const after = await db.query<{ operand_id: string; n: number }>(
         `select operand_id, n from retrospeq.operand_distributions where user_id = $1 order by operand_id`,
         [user.id],
       );
-      expect(after.rows).toHaveLength(8);
+      expect(after.rows).toHaveLength(10);
       // No `confirmed` trades exist yet -> every operand's n is 0, not a
       // fabricated non-zero count.
       for (const row of after.rows) expect(row.n).toBe(0);

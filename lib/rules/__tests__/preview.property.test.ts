@@ -41,7 +41,12 @@ describe('preview — property: never issues a write, for any operand/op/value/b
     'instrument',
     'pre_entry_captured_before_fill',
   );
-  const notComputableOperandIdArb = fc.constantFrom('daily_loss_pct', 'stop_moved_against', 'planned_rr');
+  // NOT in DISTRIBUTION_OPERAND_IDS -- daily_loss_pct/consecutive_losses
+  // are deliberately excluded from this list post-Slice-9: they are
+  // computableToday: false but ARE distribution-backed, so preview() now
+  // genuinely queries operand_distributions for them (see preview.ts's
+  // header and preview.test.ts's own dedicated describe block).
+  const notComputableOperandIdArb = fc.constantFrom('weekly_loss_pct', 'stop_moved_against', 'planned_rr');
   const opArb = fc.constantFrom('lte', 'gte', 'eq', 'neq', 'in', 'not_in', 'between', 'is_true', 'is_false');
   const bucketArb = fc.record({
     value: fc.oneof(fc.double({ noNaN: true, min: -100, max: 100 }), fc.boolean(), fc.string({ maxLength: 10 })),

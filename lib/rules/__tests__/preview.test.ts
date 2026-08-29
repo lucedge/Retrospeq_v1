@@ -31,10 +31,15 @@ describe('lib/rules/preview.ts', () => {
   });
 
   describe('operand_not_computable — distinct from insufficient_history, never conflated', () => {
-    it('returns operand_not_computable for a computableToday: false operand, without ever querying operand_distributions', async () => {
+    it('returns operand_not_computable for an operand outside DISTRIBUTION_OPERAND_IDS, without ever querying operand_distributions', async () => {
       const { preview } = await import('../preview');
-      // daily_loss_pct is computableToday: false per operand-catalogue.ts
-      const result = await preview('user-1', 'daily_loss_pct', 'lte', 2);
+      // weekly_loss_pct is computableToday: false AND has no cross-trade
+      // distribution computation built (unlike daily_loss_pct/
+      // consecutive_losses, which Slice 9 made distribution-backed even
+      // though their computableToday flag stayed false -- see preview.ts's
+      // own header for why the gate checks DISTRIBUTION_OPERAND_IDS, not
+      // computableToday).
+      const result = await preview('user-1', 'weekly_loss_pct', 'lte', 2);
       expect(result.state).toBe('operand_not_computable');
       expect(result.guidance).toMatch(/isn't available/i);
       expect(withUserConnectionMock).not.toHaveBeenCalled();
@@ -44,6 +49,71 @@ describe('lib/rules/preview.ts', () => {
     it('throws for a genuinely unknown operand_id (defensive -- callers must validate first via validateOperandOpValue)', async () => {
       const { preview } = await import('../preview');
       await expect(preview('user-1', 'not_a_real_operand', 'lte', 1)).rejects.toThrow(/unknown operand_id/);
+    });
+  });
+
+  describe('daily_loss_pct / consecutive_losses — computableToday: false but distribution-backed since Slice 9, gate fixed post-Slice-9', () => {
+    it('daily_loss_pct proceeds past the gate and queries operand_distributions (insufficient_history when no row exists)', async () => {
+      queryMock.mockResolvedValueOnce({ rows: [] });
+      const { preview } = await import('../preview');
+      const result = await preview('user-1', 'daily_loss_pct', 'lte', 2);
+      expect(result.state).toBe('insufficient_history');
+      expect(withUserConnectionMock).toHaveBeenCalledWith('user-1', expect.any(Function));
+      expect(queryMock).toHaveBeenCalledWith(expect.stringMatching(/select buckets, n from retrospeq\.operand_distributions/i), [
+        'user-1',
+        'daily_loss_pct',
+      ]);
+    });
+
+    it('daily_loss_pct returns a real flagged ratio once >= 20 real distribution observations exist', async () => {
+      queryMock.mockResolvedValueOnce({
+        rows: [
+          {
+            buckets: [
+              { value: 0.5, count: 80 },
+              { value: 3.0, count: 20 },
+            ],
+            n: 100,
+          },
+        ],
+      });
+      const { preview } = await import('../preview');
+      const result = await preview('user-1', 'daily_loss_pct', 'lte', 2);
+      expect(result.state).toBe('flagged');
+      expect(result.n).toBe(100);
+      expect(result.flagged).toBe(20);
+      expect(typeof result.ratio).toBe('number');
+    });
+
+    it('consecutive_losses proceeds past the gate and queries operand_distributions (insufficient_history when no row exists)', async () => {
+      queryMock.mockResolvedValueOnce({ rows: [] });
+      const { preview } = await import('../preview');
+      const result = await preview('user-1', 'consecutive_losses', 'lte', 3);
+      expect(result.state).toBe('insufficient_history');
+      expect(queryMock).toHaveBeenCalledWith(expect.stringMatching(/select buckets, n from retrospeq\.operand_distributions/i), [
+        'user-1',
+        'consecutive_losses',
+      ]);
+    });
+
+    it('consecutive_losses returns a real flagged ratio once >= 20 real distribution observations exist', async () => {
+      queryMock.mockResolvedValueOnce({
+        rows: [
+          {
+            buckets: [
+              { value: 1, count: 70 },
+              { value: 5, count: 30 },
+            ],
+            n: 100,
+          },
+        ],
+      });
+      const { preview } = await import('../preview');
+      const result = await preview('user-1', 'consecutive_losses', 'lte', 3);
+      expect(result.state).toBe('flagged');
+      expect(result.n).toBe(100);
+      expect(result.flagged).toBe(30);
+      expect(typeof result.ratio).toBe('number');
     });
   });
 
@@ -212,7 +282,7 @@ describe('lib/rules/preview.ts', () => {
 
     it('the operand_not_computable path issues NO database call at all', async () => {
       const { preview } = await import('../preview');
-      await preview('user-1', 'daily_loss_pct', 'lte', 2);
+      await preview('user-1', 'weekly_loss_pct', 'lte', 2);
       expect(queryMock).not.toHaveBeenCalled();
       expect(withUserConnectionMock).not.toHaveBeenCalled();
     });

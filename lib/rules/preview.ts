@@ -3,7 +3,7 @@ import { Decimal } from 'decimal.js';
 import { withUserConnection } from '@/lib/supabase/direct';
 import { compare } from './evaluate';
 import { getOperand, type OperandCatalogueEntry, type RuleOperator } from './operand-catalogue';
-import type { DistributionBucket } from './distributions-repository';
+import { DISTRIBUTION_OPERAND_IDS, type DistributionBucket } from './distributions-repository';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.8 — the preview engine.
@@ -185,19 +185,35 @@ async function fetchOperandDistributionRow(userId: string, operandId: string): P
  * data yet is a correct, intended state, not a bug" applied literally
  * here):
  *
- * - `operand_not_computable`: this operand's `computableToday` is
- *   `false` — no distribution EVER gets computed for it by
- *   `distributions-repository.ts` today, regardless of how many trades
- *   the trader has. A BUILDER-SCOPE gap, not a data-volume one.
- * - `insufficient_history`: the operand IS computable, a distribution row
- *   may or may not exist yet, but `n < 20` — §5.8's literal "No history
- *   yet — we'll refine this once you've logged 20 trades." A DATA-VOLUME
- *   gap the trader can actually fix by trading (and logging) more.
+ * - `operand_not_computable`: this operand is not in
+ *   `DISTRIBUTION_OPERAND_IDS` (`distributions-repository.ts`) — no
+ *   distribution EVER gets computed for it today, regardless of how many
+ *   trades the trader has. A BUILDER-SCOPE gap, not a data-volume one.
+ * - `insufficient_history`: the operand IS distribution-backed, a
+ *   distribution row may or may not exist yet, but `n < 20` — §5.8's
+ *   literal "No history yet — we'll refine this once you've logged 20
+ *   trades." A DATA-VOLUME gap the trader can actually fix by trading
+ *   (and logging) more.
  *
  * Conflating the two would tell a trader "log 20 more trades" for a rule
  * type this app cannot preview at all no matter how many trades they log
  * — a misrepresentation AGENTS.md's "never fake it" instinct forbids just
  * as much as faking a real ratio would be.
+ *
+ * GATE, `DISTRIBUTION_OPERAND_IDS` not `operand.computableToday` (fixed
+ * post-Slice-9, see `distributions-repository.independent-verify.live
+ * .test.ts`'s file header for the full bug history): `computableToday`
+ * means "derivable from a single trade row" (Slice 1) and is `false` for
+ * `daily_loss_pct`/`consecutive_losses` even though Slice 9 made both
+ * genuinely distribution-backed via cross-trade computation. Gating on
+ * `computableToday` here silently defeated §5.10's guided front door for
+ * exactly those two operands despite real data existing. Deliberately NOT
+ * fixed by changing `operand-catalogue.ts`'s `computableToday` values
+ * themselves — that flag has other consumers (fact-assembly readiness)
+ * this preview gate has no business affecting. `DISTRIBUTION_OPERAND_IDS`
+ * is the precise, single-purpose set: every operand id
+ * `recomputeOperandDistributionsForUser` actually writes a row for,
+ * today, no more and no less — exactly what this gate needs to check.
  */
 export async function preview(userId: string, operandId: string, op: RuleOperator, value: unknown): Promise<PreviewResult> {
   const operand = getOperand(operandId);
@@ -207,7 +223,7 @@ export async function preview(userId: string, operandId: string, op: RuleOperato
     );
   }
 
-  if (!operand.computableToday) {
+  if (!DISTRIBUTION_OPERAND_IDS.includes(operandId)) {
     return {
       operandId,
       state: 'operand_not_computable',

@@ -8,6 +8,8 @@ import {
   type ComputableTradeRow,
   type PreEntryCaptureSummary,
 } from './computable-operand-values';
+import { computeConsecutiveLosses, computeDayWeekPnl, type DayWeekPnlRow } from './cross-trade-operand-values';
+import { weekEndForServerDay, weekStartForServerDay } from './week-boundary';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.8 / §12 — the `operand_distributions`
@@ -69,13 +71,19 @@ const DISTRIBUTION_TRADE_LIMIT = 200;
 
 export interface DistributionTradeRow extends ComputableTradeRow {
   id: string;
+  accountId: string;
+  /** ISO-8601 timestamptz string -- the point in time these two
+   *  cross-trade operands' (Slice 9) values are computed "as of." */
+  openedAt: string;
 }
 
 interface TradesQueryRow {
   id: string;
+  account_id: string;
   instrument: string;
   direction: 'long' | 'short';
   server_day: string;
+  opened_at: string;
   initial_stop: string | null;
   initial_risk_pct: string | null;
   risk_pct: string | null;
@@ -85,9 +93,11 @@ interface TradesQueryRow {
 
 /**
  * The window this trader's distributions are computed over — see this
- * file's own header for the "200 trades AND 12 months" reading. Every
- * column selected is exactly what `computable-operand-values.ts`'s 8
- * extractors need, nothing more.
+ * file's own header for the "200 trades AND 12 months" reading. Selects
+ * every column `computable-operand-values.ts`'s 8 extractors need, plus
+ * (Slice 9) `account_id`/`opened_at` — the two additional columns
+ * `computeCrossTradeDistributionValues` needs to place each trade in its
+ * own account's history and at its own point in time.
  */
 export async function fetchTradesForDistributions(userId: string): Promise<DistributionTradeRow[]> {
   return withServiceRoleConnection(async (client) => {
@@ -96,7 +106,7 @@ export async function fetchTradesForDistributions(userId: string): Promise<Distr
     // "no string interpolation, ever" convention (00-foundation §4.3),
     // even though both are internal constants, not user input.
     const res = await client.query<TradesQueryRow>(
-      `select id, instrument, direction, server_day::text as server_day,
+      `select id, account_id, instrument, direction, server_day::text as server_day, opened_at,
               initial_stop, initial_risk_pct, risk_pct, exit_price_avg, hold_seconds
          from retrospeq.trades
         where user_id = $1
@@ -109,9 +119,11 @@ export async function fetchTradesForDistributions(userId: string): Promise<Distr
     );
     return res.rows.map((row) => ({
       id: row.id,
+      accountId: row.account_id,
       instrument: row.instrument,
       direction: row.direction,
       serverDay: row.server_day,
+      openedAt: row.opened_at,
       initialStop: row.initial_stop,
       initialRiskPct: row.initial_risk_pct,
       riskPct: row.risk_pct,
@@ -119,6 +131,234 @@ export async function fetchTradesForDistributions(userId: string): Promise<Distr
       holdSeconds: row.hold_seconds,
     }));
   });
+}
+
+/**
+ * Module 04 §5.10 — Slice 9. `daily_loss_pct` and `consecutive_losses` are
+ * the two remaining operands the guided three-rule front door needs a real
+ * `operand_distributions` row for. Both are cross-trade facts (marked
+ * `computableToday: false` in `operand-catalogue.ts`, since Slice 3
+ * pre-dated any cross-trade fact-assembly code) — Slice 4
+ * (`cross-trade-operand-values.ts`) has since built the real per-trade
+ * computation for exactly these two (`computeDayWeekPnl`'s `dailyLossPct`
+ * output, `computeConsecutiveLosses`). This section REUSES those pure
+ * functions verbatim rather than re-implementing day/week P&L accumulation
+ * or streak counting a second time.
+ *
+ * **Reuse boundary.** Slice 4's own fetch functions
+ * (`fetchClosedTradesForPnlWindow`, `fetchPriorOutcomesDescending`) are
+ * shaped for ONE reference trade at a time — exactly right for evaluating
+ * a single trade at freeze, wrong for building a distribution across up to
+ * 200 window trades (calling them once per trade would be an N+1 query
+ * pattern this file's own established convention never accepts). Instead:
+ * for every distinct `account_id` among this trader's window trades,
+ * fetch that account's OWN confirmed-trade history ONCE
+ * (`fetchAccountHistoryForCrossTradeOperands` — a single query for every
+ * account at once, via a `row_number() over (partition by account_id ...)`
+ * window function in place of a per-account query loop, so the query
+ * COUNT does not grow with the number of accounts either), plus each
+ * account's `starting_equity` in one more query
+ * (`fetchAccountStartingEquities`). `computeDayWeekPnl`/
+ * `computeConsecutiveLosses` are then called ONCE PER WINDOW TRADE, purely
+ * in memory against the already-fetched history slice for that trade's
+ * own account — no further I/O. Net query count added: 2 (account history,
+ * starting equities), regardless of how many trades are in the window or
+ * how many accounts they span.
+ *
+ * **Point-in-time semantics, not a live snapshot.** Each window trade
+ * contributes the value ITS OWN entry would have observed — "what was the
+ * day's loss so far / the consecutive-loss streak entering THIS trade" —
+ * the same freeze-time semantics `cross-trade-operand-values.ts`'s own
+ * header documents, never "as of right now." This is what makes the
+ * result a genuine HISTORICAL DISTRIBUTION (up to 200 independent
+ * point-in-time observations), not a single current value repeated N
+ * times.
+ *
+ * **Per-account history window** reuses this file's own "200 trades AND
+ * 12 months" convention (`DISTRIBUTION_WINDOW_MONTHS`/
+ * `DISTRIBUTION_TRADE_LIMIT`) rather than inventing a third window
+ * definition — the same values `cross-trade-operand-values.ts`'s own
+ * `size_vs_avg` computation independently arrived at
+ * (`SIZE_AVG_WINDOW_MONTHS`/`SIZE_AVG_TRADE_LIMIT`, 12/200) for the same
+ * class of "trader's own historical baseline" query. A best-effort CACHE
+ * (this file's own header, above) does not need a truly unbounded
+ * lookback to be useful.
+ */
+
+/** One row per confirmed, closed trade in an account's own recent history —
+ *  everything `computeCrossTradeDistributionValues` needs to reconstruct,
+ *  for any ONE window trade on this account, both "closed trades in my own
+ *  ISO week, before my own opened_at" (daily_loss_pct) and "confirmed
+ *  trades closed at or before my own opened_at, most-recent-first"
+ *  (consecutive_losses) — without a second round trip per window trade. */
+export interface AccountHistoryRow {
+  id: string;
+  accountId: string;
+  /** ISO-8601 timestamptz string. */
+  closedAt: string;
+  serverDay: string;
+  /** `null` when this trade's realized_pnl was never computed (e.g. no
+   *  starting_equity was known at write time) — excluded from P&L
+   *  accumulation, never treated as a zero. */
+  realizedPnl: string | null;
+  outcome: string | null;
+}
+
+/**
+ * Every account's own confirmed-trade history, fetched in ONE query
+ * regardless of how many distinct accounts are represented — a
+ * `row_number() over (partition by account_id order by closed_at desc)`
+ * window function does the per-account "most recent N, within M months"
+ * capping that would otherwise need one query per account. Ordered
+ * ascending by `closed_at` within each account (the order
+ * `computeDayWeekPnl`'s own forward pass expects), grouped into a
+ * `Map<accountId, AccountHistoryRow[]>` for O(1) lookup per window trade.
+ *
+ * Deliberately NOT filtered on `realized_pnl is not null` here (unlike
+ * `cross-trade-operand-values.ts`'s own single-trade
+ * `fetchClosedTradesForPnlWindow`) — this one query feeds BOTH the P&L
+ * computation (which needs `realized_pnl`) and the consecutive-losses
+ * computation (which needs `outcome` regardless of whether `realized_pnl`
+ * happens to be null for that row); rows with a null `realized_pnl` are
+ * filtered out when building `daily_loss_pct`'s own input list in
+ * `computeCrossTradeDistributionValues`, not excluded from the fetch.
+ */
+export async function fetchAccountHistoryForCrossTradeOperands(
+  userId: string,
+  accountIds: readonly string[],
+): Promise<Map<string, AccountHistoryRow[]>> {
+  if (accountIds.length === 0) return new Map();
+  return withServiceRoleConnection(async (client) => {
+    const res = await client.query<{
+      id: string;
+      account_id: string;
+      closed_at: string;
+      server_day: string;
+      realized_pnl: string | null;
+      outcome: string | null;
+    }>(
+      `select id, account_id, closed_at, server_day::text as server_day, realized_pnl, outcome
+         from (
+           select t.id, t.account_id, t.closed_at, t.server_day, t.realized_pnl, t.outcome,
+                  row_number() over (partition by t.account_id order by t.closed_at desc) as rn
+             from retrospeq.trades t
+            where t.user_id = $1
+              and t.account_id = any($2::uuid[])
+              and t.status = 'confirmed'
+              and t.closed_at is not null
+              and t.closed_at >= now() - ($3::int * interval '1 month')
+         ) ranked
+        where rn <= $4
+        order by account_id, closed_at asc`,
+      [userId, accountIds, DISTRIBUTION_WINDOW_MONTHS, DISTRIBUTION_TRADE_LIMIT],
+    );
+    const out = new Map<string, AccountHistoryRow[]>();
+    for (const row of res.rows) {
+      const list = out.get(row.account_id) ?? [];
+      list.push({
+        id: row.id,
+        accountId: row.account_id,
+        closedAt: row.closed_at,
+        serverDay: row.server_day,
+        realizedPnl: row.realized_pnl,
+        outcome: row.outcome,
+      });
+      out.set(row.account_id, list);
+    }
+    return out;
+  });
+}
+
+/** `trading_accounts.starting_equity` for every account represented in the
+ *  window, in one query — `daily_loss_pct` (via `computeDayWeekPnl`) is a
+ *  percent-of-equity fact and cannot be computed without it (resolves to
+ *  `null`, correctly dropping out of that trade's own contribution, per
+ *  `docs/adr/0013`'s "null means not sourced yet, never a fabricated
+ *  value"). Explicitly scoped to `user_id` too, even though every
+ *  `accountId` passed in already came from THIS user's own trades
+ *  (`fetchTradesForDistributions`) — never trusting RLS under a
+ *  service-role connection, matching this file's own established
+ *  paranoia. */
+export async function fetchAccountStartingEquities(
+  userId: string,
+  accountIds: readonly string[],
+): Promise<Map<string, string | null>> {
+  if (accountIds.length === 0) return new Map();
+  return withServiceRoleConnection(async (client) => {
+    const res = await client.query<{ id: string; starting_equity: string | null }>(
+      `select id, starting_equity from retrospeq.trading_accounts where user_id = $1 and id = any($2::uuid[])`,
+      [userId, accountIds],
+    );
+    const out = new Map<string, string | null>();
+    for (const row of res.rows) out.set(row.id, row.starting_equity);
+    return out;
+  });
+}
+
+/**
+ * Pure. For every trade in `trades` (in the same order), computes its own
+ * point-in-time `daily_loss_pct`/`consecutive_losses` value against that
+ * trade's own account's pre-fetched history — REUSING
+ * `cross-trade-operand-values.ts`'s own `computeDayWeekPnl`/
+ * `computeConsecutiveLosses` pure functions verbatim, never a second
+ * implementation of the same accumulation/streak logic. `history` is
+ * already ordered ascending by `closedAt` within each account (the fetch
+ * function's own contract) — filtered here per trade, not re-sorted (a
+ * plain array filter preserves relative order, and walking a filtered view
+ * backwards for the "most-recent-first" streak scan is equivalent to
+ * sorting descending, without the extra sort).
+ *
+ * Millisecond `Date` comparisons for `closedAt` vs. `openedAt` (never raw
+ * string comparison of timestamptz values, whose string representation is
+ * not guaranteed comparable across formats) — `serverDay`/week-boundary
+ * comparisons stay plain `YYYY-MM-DD` string comparisons, which ARE safe
+ * lexicographically, matching `week-boundary.ts`'s own established
+ * convention.
+ */
+export function computeCrossTradeDistributionValues(
+  trades: readonly DistributionTradeRow[],
+  historyByAccount: ReadonlyMap<string, readonly AccountHistoryRow[]>,
+  startingEquityByAccount: ReadonlyMap<string, string | null>,
+): { dailyLossPct: Array<number | null>; consecutiveLosses: Array<number | null> } {
+  const dailyLossPct: Array<number | null> = [];
+  const consecutiveLosses: Array<number | null> = [];
+
+  for (const trade of trades) {
+    const history = historyByAccount.get(trade.accountId) ?? [];
+    const equity = startingEquityByAccount.get(trade.accountId) ?? null;
+    const referenceOpenedAtMs = new Date(trade.openedAt).getTime();
+
+    // daily_loss_pct: same-ISO-week rows, closed strictly before this
+    // trade's own entry -- mirrors cross-trade-operand-values.ts's own
+    // fetchClosedTradesForPnlWindow filter, applied here in memory.
+    const weekStart = weekStartForServerDay(trade.serverDay);
+    const weekEnd = weekEndForServerDay(trade.serverDay);
+    const pnlRows: DayWeekPnlRow[] = [];
+    for (const row of history) {
+      if (row.realizedPnl === null) continue;
+      if (row.serverDay < weekStart || row.serverDay > weekEnd) continue;
+      if (new Date(row.closedAt).getTime() >= referenceOpenedAtMs) continue;
+      pnlRows.push({ serverDay: row.serverDay, closedAt: row.closedAt, realizedPnl: row.realizedPnl });
+    }
+    const pnl = computeDayWeekPnl(pnlRows, trade.serverDay, equity);
+    dailyLossPct.push(pnl.dailyLossPct);
+
+    // consecutive_losses: confirmed trades closed at or before this
+    // trade's own entry, excluding itself, most-recent-first -- mirrors
+    // cross-trade-operand-values.ts's own fetchPriorOutcomesDescending
+    // filter, applied here in memory by walking the ascending history
+    // backwards rather than re-sorting.
+    const outcomes: Array<string | null> = [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const row = history[i];
+      if (row.id === trade.id) continue;
+      if (new Date(row.closedAt).getTime() > referenceOpenedAtMs) continue;
+      outcomes.push(row.outcome);
+    }
+    consecutiveLosses.push(computeConsecutiveLosses(outcomes));
+  }
+
+  return { dailyLossPct, consecutiveLosses };
 }
 
 /**
@@ -270,14 +510,33 @@ export function buildOperandDistribution(operandId: string, rawValues: readonly 
   return { operandId, buckets, n: nonNull.length };
 }
 
-/** Computes every computable operand's distribution from one already-
- *  fetched trade set, purely in memory -- no I/O, directly unit-testable
- *  (including against `fixtures/golden/*\/expected.json`'s own `trades[]`
- *  arrays, which is exactly what this slice's fixture-driven "matches a
- *  full scan" test does). */
+/** Every operand id this file computes a distribution row for — the
+ *  original 8 `computableToday: true` single-trade operands (Slice 3) plus
+ *  (Slice 9) the two cross-trade operands §5.10's guided front door needs.
+ *  Exported so a caller/test can assert the FULL list without hardcoding
+ *  it a second time. */
+export const DISTRIBUTION_OPERAND_IDS: readonly string[] = [...COMPUTABLE_OPERAND_IDS, 'daily_loss_pct', 'consecutive_losses'];
+
+/**
+ * Computes every distribution-bearing operand's distribution from one
+ * already-fetched trade set, purely in memory — no I/O, directly
+ * unit-testable (including against `fixtures/golden/*\/expected.json`'s
+ * own `trades[]` arrays, which is exactly what this slice's fixture-driven
+ * "matches a full scan" test does).
+ *
+ * `crossTradeHistoryByAccount`/`startingEquityByAccount` default to empty
+ * maps — a caller that doesn't pass them (e.g. a test exercising only the
+ * original 8 single-trade operands) gets `daily_loss_pct`/
+ * `consecutive_losses` distributions with `n = 0` (correctly "no history
+ * available"), not a crash and not a silently-dropped operand — the ROW
+ * still gets produced, per §5.10's own requirement that these two operands
+ * always have a real (possibly empty) `operand_distributions` row.
+ */
 export function computeAllOperandDistributions(
   trades: readonly DistributionTradeRow[],
   preEntryCapturesByTradeId: ReadonlyMap<string, PreEntryCaptureSummary>,
+  crossTradeHistoryByAccount: ReadonlyMap<string, readonly AccountHistoryRow[]> = new Map(),
+  startingEquityByAccount: ReadonlyMap<string, string | null> = new Map(),
 ): OperandDistribution[] {
   const perOperandValues = new Map<string, unknown[]>();
   for (const operandId of COMPUTABLE_OPERAND_IDS) perOperandValues.set(operandId, []);
@@ -290,7 +549,17 @@ export function computeAllOperandDistributions(
     }
   }
 
-  return COMPUTABLE_OPERAND_IDS.map((operandId) => buildOperandDistribution(operandId, perOperandValues.get(operandId)!));
+  const computableDistributions = COMPUTABLE_OPERAND_IDS.map((operandId) =>
+    buildOperandDistribution(operandId, perOperandValues.get(operandId)!),
+  );
+
+  const crossTradeValues = computeCrossTradeDistributionValues(trades, crossTradeHistoryByAccount, startingEquityByAccount);
+  const crossTradeDistributions = [
+    buildOperandDistribution('daily_loss_pct', crossTradeValues.dailyLossPct),
+    buildOperandDistribution('consecutive_losses', crossTradeValues.consecutiveLosses),
+  ];
+
+  return [...computableDistributions, ...crossTradeDistributions];
 }
 
 /** One upsert per operand -- `(user_id, operand_id)` is the table's own
@@ -323,12 +592,24 @@ export interface RecomputeResult {
  * `lib/ingestion/sync.ts`'s `runSync` for the "after a sync" half; see
  * that file's own call site for why nightly is explicitly NOT built this
  * slice (no cron infra exists, AGENTS.md "never fake it").
+ *
+ * Slice 9: the pre-entry captures fetch, the per-account cross-trade
+ * history fetch, and the per-account starting-equity fetch are
+ * independent reads (none depends on another's result) -- run
+ * concurrently via `Promise.all`, matching this file's own established
+ * "small, independently testable functions" wiring style rather than
+ * three sequential round trips.
  */
 export async function recomputeOperandDistributionsForUser(userId: string): Promise<RecomputeResult> {
   const trades = await fetchTradesForDistributions(userId);
   const tradeIds = trades.map((t) => t.id);
-  const preEntryCaptures = await fetchPreEntryCaptureSummaries(userId, tradeIds);
-  const distributions = computeAllOperandDistributions(trades, preEntryCaptures);
+  const accountIds = [...new Set(trades.map((t) => t.accountId))];
+  const [preEntryCaptures, crossTradeHistoryByAccount, startingEquityByAccount] = await Promise.all([
+    fetchPreEntryCaptureSummaries(userId, tradeIds),
+    fetchAccountHistoryForCrossTradeOperands(userId, accountIds),
+    fetchAccountStartingEquities(userId, accountIds),
+  ]);
+  const distributions = computeAllOperandDistributions(trades, preEntryCaptures, crossTradeHistoryByAccount, startingEquityByAccount);
   await upsertOperandDistributions(userId, distributions);
   return { operandsComputed: distributions.length, tradesScanned: trades.length };
 }

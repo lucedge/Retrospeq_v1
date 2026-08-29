@@ -638,6 +638,24 @@ directly. A quick live check for a specific trader: compare
 latest successful sync means either this recompute failed, or (for a
 brand-new account) it has simply never run yet.
 
+**Slice 9 update (operand list grew from 8 to 10):** the recompute now
+also produces `daily_loss_pct`/`consecutive_losses` rows (§5.10's guided
+three-rule front door needs a real distribution for both), via two
+additional reads inside the same recompute —
+`fetchAccountHistoryForCrossTradeOperands` (one query, every account's own
+confirmed-trade history via a `row_number()`-partitioned window function)
+and `fetchAccountStartingEquities`. A failure in EITHER of these two now
+fails the whole recompute the same way a `fetchTradesForDistributions`/
+`fetchPreEntryCaptureSummaries` failure already did (all four run inside
+the same best-effort, non-blocking `recomputeOperandDistributionsForUser`
+call) — nothing about the failure MODE changed, only the set of queries
+that can trigger it. A trader's `operand_distributions` row count going
+from 10 to fewer than 10 (rather than the failure being total/all-or-
+nothing) would itself be a signal worth investigating, since a genuine
+partial-recompute bug (rather than a total failure, which this function's
+own "no lost data, self-heals" property already covers) is not a shape
+this design otherwise expects.
+
 **Action:** an isolated failure (a transient DB hiccup during the
 recompute's own reads/writes) self-heals on the NEXT successful sync,
 since `recomputeOperandDistributionsForUser` always recomputes the FULL
@@ -646,8 +664,9 @@ lost data. Investigate if the SAME trader's recompute fails repeatedly
 across multiple syncs (a real, persistent bug, not a blip), or if this
 error appears across many traders at once (likely a `retrospeq.trades`/
 `retrospeq.trade_captures` schema or connectivity issue affecting
-`fetchTradesForDistributions`/`fetchPreEntryCaptureSummaries` broadly,
-worth checking before assuming it's isolated). Building nightly recompute
+`fetchTradesForDistributions`/`fetchPreEntryCaptureSummaries`/
+`fetchAccountHistoryForCrossTradeOperands`/`fetchAccountStartingEquities`
+broadly, worth checking before assuming it's isolated). Building nightly recompute
 (once real scheduler infra exists) would also close the "no independent
 safety net" gap this entry names above — worth prioritizing once a
 Vercel project/cron surface exists, not before.

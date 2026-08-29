@@ -22,12 +22,99 @@ authority.
 |---|---|---|
 | 0 | Golden fixture library + shadow harness | Fixture library built (8/8, `fixtures/golden/`); shadow harness infrastructure built (`shadow_runs` migration + `lib/analytics/shadow-harness/`), unit/property tested, and **RLS cross-user isolation now verified against the live DB** (2026-08-20 — the `profiles`-table forward dependency that blocked this is resolved; see decision log). Harness infra only — no real shadow analytics registered yet, tracked for Phase 3 alongside Module 05's edge engine |
 | 1 | Module 01 (Identity & Accounts) + Module 02 (Trade Ingestion & Model) | **COMPLETE (2026-08-23).** Module 01 and Module 02 are both fully built — coded, tested, security-reviewed, QA-reviewed. Every backend security review either module required found and closed at least one real issue before passing (concurrency races in `erasure.ts`, `confirm.ts`, and `split-join.ts` — all the same bug class, all fixed with the same atomic-conditional-UPDATE pattern; a DB-level lock-enforcement gap in `trade_captures`; a freeze-trigger transition-window gap) — the gate did its job every time it fired, never rubber-stamped. Phase 1 boundary process done: a `simplify` pass over Module 02's ~7,770 lines of production code (two safe extractions applied, several real-but-riskier findings deliberately deferred with reasoning logged), then `retrospeq-docs` brought `docs/DEVELOPMENT.md` fully current. 951 tests passing, 12 skip-guard fallbacks, 0 failed. Clean build/lint/tsc. |
-| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). **Slice 8 (ambient live-state engine + `rule_overrides`, §5.9) DONE (2026-08-27)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/ambient-state.ts`'s `getAmbientAccountState` (read-only, reuses Slice 4's cross-trade fetch/compute functions via a structurally-impossible-to-collide `NO_REFERENCE_TRADE_ID` sentinel and the real `evaluate()`, always returns a fully-defined `facts`/`rules` shape — the "always visible, never appear-on-threshold" guarantee independently re-verified against fresh fixtures by BOTH tester and QA) + `lib/rules/rule-overrides-repository.ts` (`fetchRuleForOverride`/`insertRuleOverride` with an adversarial-verified trade-ownership re-check/`fetchOverrideOutcomeSummary` with an independently-reconfirmed DISTINCT-trade dedup) + `recordOverride` Server Action (`ruleVersion` structurally un-influenceable by the client). Security-reviewer PASS (10/10 — confirmed the cross-user `trade_id` ownership check is the sole real defense beyond RLS since `rule_overrides`' own RLS never constrains the FK target's ownership, confirmed non-racy same-transaction check-then-insert, confirmed no injection surface; one non-blocking future-hardening note on `observed`'s lack of an explicit size cap, mitigated today by Next.js's framework body-size limit + rate limiting). QA PASS (8/8 — re-derived the "always visible" guarantee adversarially a third time, confirmed the tint vocabulary never leaks a color mapping, confirmed §5.9's worked-example fields are all present, confirmed no punitive language in error strings; two non-blocking documentation notes: this ledger entry itself, and an optional `docs/runbook.md` addition for the uncaught-`RuleEvaluationError` live-read variant, distinct from the freeze-time caught-and-logged one). 109 tests (99 mocked + 10 live), 100% line/function coverage, 94.28%/100% branch. See the 2026-08-27 decision-log entries for the full independent-verification write-ups. |
+| 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). **Slice 8 (ambient live-state engine + `rule_overrides`, §5.9) DONE (2026-08-27)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/ambient-state.ts`'s `getAmbientAccountState` (read-only, reuses Slice 4's cross-trade fetch/compute functions via a structurally-impossible-to-collide `NO_REFERENCE_TRADE_ID` sentinel and the real `evaluate()`, always returns a fully-defined `facts`/`rules` shape — the "always visible, never appear-on-threshold" guarantee independently re-verified against fresh fixtures by BOTH tester and QA) + `lib/rules/rule-overrides-repository.ts` (`fetchRuleForOverride`/`insertRuleOverride` with an adversarial-verified trade-ownership re-check/`fetchOverrideOutcomeSummary` with an independently-reconfirmed DISTINCT-trade dedup) + `recordOverride` Server Action (`ruleVersion` structurally un-influenceable by the client). Security-reviewer PASS (10/10 — confirmed the cross-user `trade_id` ownership check is the sole real defense beyond RLS since `rule_overrides`' own RLS never constrains the FK target's ownership, confirmed non-racy same-transaction check-then-insert, confirmed no injection surface; one non-blocking future-hardening note on `observed`'s lack of an explicit size cap, mitigated today by Next.js's framework body-size limit + rate limiting). QA PASS (8/8 — re-derived the "always visible" guarantee adversarially a third time, confirmed the tint vocabulary never leaks a color mapping, confirmed §5.9's worked-example fields are all present, confirmed no punitive language in error strings; two non-blocking documentation notes: this ledger entry itself, and an optional `docs/runbook.md` addition for the uncaught-`RuleEvaluationError` live-read variant, distinct from the freeze-time caught-and-logged one). 109 tests (99 mocked + 10 live), 100% line/function coverage, 94.28%/100% branch. See the 2026-08-27 decision-log entries for the full independent-verification write-ups. **Slice 9 (`operand_distributions` extended to `daily_loss_pct`/`consecutive_losses`, closing the gap §5.10's guided front door needs) DONE (2026-08-29)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/distributions-repository.ts` wires Slice 4's already-built cross-trade pure functions (`computeDayWeekPnl`/`computeConsecutiveLosses`) into Slice 3's distribution-bucketing pipeline via two new batched fetch functions (`fetchAccountHistoryForCrossTradeOperands` — one query for every distinct account via a `row_number()`-partitioned window function; `fetchAccountStartingEquities`), keeping net query count flat (+2) regardless of window size/account count; exports `DISTRIBUTION_OPERAND_IDS` (the 8 original + these 2). **Independent tester verification found a real production bug the coder's own pass missed**: the coder's "`preview.ts` needed ZERO changes" claim was wrong — `preview.ts` still gated on the stale `operand.computableToday` flag (never updated when cross-trade computation was added for these two operands), so `preview('daily_loss_pct', ...)`/`preview('consecutive_losses', ...)` always returned `operand_not_computable` regardless of real data, silently defeating this slice's entire stated purpose. Caught via a live-DB `it.fails` test (`distributions-repository.independent-verify.live.test.ts`) that encoded the desired behaviour and failed exactly as designed against real seeded data, plus 13 fresh pure-function tests (`distributions-repository.independent-verify.test.ts`: point-in-time correctness, 3-account isolation, decimal-precision-through-the-real-pipeline, batching/N+1 proof) — both written with fresh fixtures, not the coder's own. **Fixed**: `preview.ts`'s gate swapped to `DISTRIBUTION_OPERAND_IDS.includes(operandId)` (the precise, single-purpose set), `operand-catalogue.ts`'s `computableToday` deliberately left untouched (different consumer, out of scope), the `it.fails` converted to a normal passing `it()` once confirmed live. Security-reviewer PASS (5/5 — no import cycle, `getOperand` validation still runs before the new gate check so no injection surface, user-scoped RLS via `withUserConnection` unchanged, read-only/no `rule_evaluations` touch, no compound-rule/XP introduction; independently re-ran `preview.test.ts`+`preview.property.test.ts`, 24/24). QA PASS (9/9 — all non-negotiables held, `insufficient_history`/`operand_not_computable` distinction still coherent post-fix, no UI surface so no screenshot check needed, analytics/rules import boundary clean, runbook accuracy verified against actual code; one procedural-only finding — this ledger itself still claimed coder-pass-only and "zero changes," fixed in this entry). Full suite re-run clean after the fix: 101 files, 1400 passed, 8 skipped, 0 failed; `tsc --noEmit` and `eslint .` both clean (19 pre-existing unrelated warnings only). No migration, no ADR (filling an already-scoped Slice 3/4 deferral; the preview.ts fix is a bug fix restoring intended behavior, not a new deviation). |
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | Not started |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
+
+**AT A GLANCE (2026-08-29): Module 04 Slice 9 is DONE (full gate
+sequence passed, see below). The active/next task is Module 04 Slice
+10 — the §6 UI / §5.10 guided three-rule front door — see the "Next:
+Module 04 Slice 10" paragraph further down this section for its full
+scope. Nothing is currently blocked or mid-flight.**
+
+**→ Module 04 Slice 9 — `operand_distributions` extended to
+`daily_loss_pct`/`consecutive_losses` — DONE (2026-08-29).** Full coder →
+tester → security-reviewer → qa gate sequence passed — see the
+2026-08-29 phase-status table entry above (search "Slice 9 (`operand_
+distributions` extended") for the complete summary, and the 2026-08-29
+decision-log entries below for the full preview.ts-bug-and-fix write-up.
+The paragraphs immediately below are the ORIGINAL coder-pass write-up
+(2026-08-27) — kept as historical record of what was built and how, but
+its closing claims ("preview.ts needed ZERO changes", "NOT yet
+independently tested/security-reviewed/QA'd") are SUPERSEDED: tester's
+independent verification found the "zero changes" claim was wrong (a
+real bug in `preview.ts`'s gate, since fixed and re-verified by
+security-reviewer and qa — see above). Closes the
+gap §5.10's guided three-rule front door (next slice) needs: Slice 3's
+`lib/rules/distributions-repository.ts` only ever bucketed the 8
+`computableToday: true` single-trade operands; `risk_pct`, `daily_loss_pct`,
+and `consecutive_losses` are the three the front door actually needs, and
+the latter two are cross-trade facts Slice 4 (`cross-trade-operand-
+values.ts`) built real per-trade computation for AFTER Slice 3 shipped.
+This slice wires that already-built Slice 4 logic (`computeDayWeekPnl`'s
+`dailyLossPct` output, `computeConsecutiveLosses`) into Slice 3's
+distribution-bucketing pipeline — REUSED verbatim, not re-implemented.
+
+**Reuse-without-N+1 approach** (the specific thing this slice's own
+dispatch asked to be documented): Slice 4's own fetch functions
+(`fetchClosedTradesForPnlWindow`, `fetchPriorOutcomesDescending`) are
+shaped for evaluating ONE trade at a time — correct for freeze-time
+evaluation, wrong for building a distribution across up to 200 window
+trades (200+ round trips otherwise). Instead, added two NEW batched fetch
+functions to `distributions-repository.ts`: `fetchAccountHistoryForCrossTradeOperands`
+(ONE query for every distinct account among the window trades at once,
+via `row_number() over (partition by account_id order by closed_at desc)`
+— the query count does not grow with the number of accounts) and
+`fetchAccountStartingEquities` (one more query). A new pure function,
+`computeCrossTradeDistributionValues`, then calls Slice 4's
+`computeDayWeekPnl`/`computeConsecutiveLosses` ONCE PER WINDOW TRADE, but
+purely in memory against the already-fetched per-account history slice —
+net query count added: 2, regardless of window size or account count.
+Each window trade's value is computed AS OF that trade's own entry
+(point-in-time, matching Slice 4's own freeze-time semantics), not "as of
+now" — this is what makes the result a genuine historical distribution.
+
+Verified, not assumed: both `daily_loss_pct` (`bounds: {min:0.5, max:10,
+step:0.5}`) and `consecutive_losses` (`bounds: {min:1, max:10, step:1}`)
+already had real catalogue bounds/step from Slice 1 — no catalogue gap to
+flag. `preview.ts` needed ZERO changes — **[CORRECTED 2026-08-29: this was
+WRONG. `preview.ts` DID need a change — see the phase-status table's
+2026-08-29 Slice 9 entry and the matching decision-log entry above/below.
+The coder's own inspection missed that `preview.ts`'s gate read the
+stale `operand.computableToday` flag, not `operand_distributions`
+directly, so "reads it generically by operand_id" was true but
+irrelevant — the gate never let execution reach that generic read for
+either new operand in the first place.]** — confirmed by inspection AND by
+the live-DB test suite: it already reads `operand_distributions` generically
+by `operand_id`, with no operand-specific branching. `computeAllOperandDistributions`
+now always returns 10 distributions (was 8) — `recomputeOperandDistributionsForUser`'s
+`operandsComputed` return value and every `operand_distributions` row-count
+assertion across the test suite (`distributions-repository.test.ts`,
+`distributions-repository.live.test.ts`, `sync.live.test.ts`) updated to
+match; `COMPUTABLE_OPERAND_IDS` itself (the 8-operand single-trade list)
+is UNCHANGED, correctly — the two new operands are cross-trade, not added
+to that list. New tests: pure-function unit tests (account isolation,
+point-in-time correctness against a hand-computed loss-streak scenario),
+a golden-fixture bucket-vs-full-scan parity extension (§8.1's own bar,
+though the golden fixture library itself has no losing trades, so the
+`consecutive_losses` case there only proves the invariant on all-zero
+data — the hand-computed unit tests are what prove a genuine >0 streak),
+and a new live-DB test seeding a real 4-trade loss/loss/win/loss sequence
+across two accounts, asserting exact per-trade bucket values against a
+by-hand calculation. Full `lib/rules` suite (494 tests) + the
+`sync.live.test.ts` operand_distributions-wiring test + `npm run build` +
+`tsc --noEmit` + `eslint .` all clean, re-run after the change. No
+migration (schema unchanged), no ADR (filling an already-scoped Slice
+3/4 deferral, not a new deviation). `docs/runbook.md`'s existing
+`operand_distributions` recompute-failure entry updated with a one-line
+note that the operand list/query set grew. **[SUPERSEDED 2026-08-29:
+independently tested/security-reviewed/QA'd, all passed (after the
+preview.ts fix above) — Slice 9 and this paragraph's "NOT yet ..." close
+are both stale. See the 2026-08-29 phase-status table entry for the
+current, accurate status.]**
 
 **→ Module 04 Slices 1-6 are all DONE (2026-08-25).** Full coder →
 tester → security-reviewer → qa gate sequence passed on every one. Slice
@@ -298,7 +385,15 @@ both logged above in the phase-status table row; a short
 uncaught `RuleEvaluationError` variant (distinct from the freeze-time
 caught-and-logged one).
 
-**Next: Module 04 Slice 9 — the UI (§6, §5.10's guided three-rule front
+**Renumbering note (2026-08-27):** a backend-only "Slice 9" (extending
+`operand_distributions` to `daily_loss_pct`/`consecutive_losses`, coded
+above) was inserted between this Slice 8 and the UI slice this paragraph
+originally called "Slice 9" — the UI slice is renumbered **Slice 10**
+throughout the paragraph below; nothing about its scope changed, only its
+number. Logged in the decision log per 00-foundation §12's "spec vs code:
+fix one deliberately, do not let drift accumulate silently."
+
+**Next: Module 04 Slice 10 — the UI (§6, §5.10's guided three-rule front
 door), including the ambient strip that actually renders
 `getAmbientAccountState`'s output and calls `recordOverride`.** "Facts
 ambient, judgments silent" — account state (trades today, day P&L, risk
@@ -4958,6 +5053,141 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-27 — **Module 04 — a second, unplanned "Slice 9" was dispatched
+  (backend `operand_distributions` extension) after the ledger had already
+  named the NEXT slice "Slice 9" (the §6 UI) — reconciled by renumbering
+  the UI slice to Slice 10, not by renumbering the dispatched work.** Per
+  00-foundation §12's "spec vs code: fix one deliberately, do not let
+  drift accumulate silently" — this is exactly that class of drift,
+  logged rather than silently resolved. The dispatched task's own title
+  ("Module 04 Slice 9: extend `operand_distributions` computation to
+  cover `daily_loss_pct` and `consecutive_losses`") is authoritative for
+  what this slice IS; the ledger's own prior "Next: Slice 9" pointer (the
+  UI) is what moved, to Slice 10, with its scope completely unchanged —
+  only the number. See "Current task" above (search "Renumbering note")
+  for the exact edit.
+- 2026-08-27 — **Module 04 Slice 9 (`operand_distributions` extended to
+  `daily_loss_pct`/`consecutive_losses`, §5.10) — CODED, coder pass only.**
+  Closes a gap between two earlier slices that shipped out of the order
+  their own dependency implied: Slice 3 built `operand_distributions`
+  bucketing scoped to the 8 `computableToday: true` single-trade operands
+  (before any cross-trade fact-assembly code existed); Slice 4
+  SUBSEQUENTLY built real cross-trade computation for `daily_loss_pct`/
+  `consecutive_losses` (`cross-trade-operand-values.ts`'s
+  `computeDayWeekPnl`/`computeConsecutiveLosses`) but never wired it into
+  Slice 3's distribution pipeline, since that wasn't Slice 4's own scope.
+  §5.10's guided three-rule front door (`risk_pct`, `daily_loss_pct`,
+  `consecutive_losses`, "thresholds seeded from `operand_distributions`")
+  needs all three to have real rows — per AGENTS.md's "never fake it," a
+  front door claiming a threshold is "seeded from history" for an operand
+  with no real distribution would be exactly the kind of simulated success
+  that rule forbids.
+  **What was reused, not reimplemented:** Slice 4's own
+  `computeDayWeekPnl`/`computeConsecutiveLosses` pure functions, called
+  verbatim, unmodified. Slice 4's own FETCH functions
+  (`fetchClosedTradesForPnlWindow`/`fetchPriorOutcomesDescending`) were
+  NOT reused directly — they're shaped for one reference trade at a time,
+  which would be an N+1 query pattern across a 200-trade distribution
+  window. Instead, two new batched fetch functions
+  (`fetchAccountHistoryForCrossTradeOperands` — one query for every
+  account at once via a `row_number()`-partitioned window function;
+  `fetchAccountStartingEquities`) feed a new pure function
+  (`computeCrossTradeDistributionValues`) that calls Slice 4's pure
+  functions once per window trade, purely in memory. Net query count
+  added to `recomputeOperandDistributionsForUser`: 2, regardless of window
+  size or account count — no N+1 introduced.
+  **Verified, not assumed:** both operands already had real catalogue
+  `bounds`/`step` values from Slice 1 (no catalogue gap). `preview.ts`
+  needed zero changes (confirmed by inspection and by the live-DB test
+  suite exercising it against the two new operand rows). **[CORRECTED
+  2026-08-29: this specific claim was wrong — see the 2026-08-29 entry
+  below for what independent verification actually found.]** Full
+  `lib/rules` suite (494 tests), `sync.live.test.ts`'s
+  operand_distributions-wiring test, `npm run build`, `tsc --noEmit`, and
+  `eslint .` all clean, re-run after the change. Full write-up in "Current
+  task" above (search "Module 04 Slice 9"). No migration, no ADR (filling
+  an already-scoped deferral, not a new deviation). NOT yet independently
+  tested/security-reviewed/QA'd. **[SUPERSEDED 2026-08-29: now fully
+  gated — see below.]**
+- 2026-08-29 — **Module 04 Slice 9 — independent verification found a
+  real bug in the coder's own "`preview.ts` needed zero changes" claim;
+  fixed, security-reviewed, and QA'd — Slice 9 now DONE.** `retrospeq-
+  tester`'s independent verification (fresh fixtures, not the coder's
+  own) built two new files: `lib/rules/__tests__/distributions-
+  repository.independent-verify.test.ts` (13 pure-function tests —
+  point-in-time correctness across a 2-day/5-trade trajectory, 3-account
+  interleaved isolation, decimal.js precision through the REAL
+  `bucketNumeric`/`buildOperandDistribution` pipeline rather than
+  decimal.js checked in isolation, and a mocked-query-count proof that
+  the two new batched fetch functions stay at exactly 1 query each
+  regardless of account count) and `.independent-verify.live.test.ts` (a
+  live-DB test against real seeded data). The live test's `it.fails`
+  documented, rather than silently patched, a real gap: `preview.ts`'s
+  gate (`if (!operand.computableToday)`) predates Slice 4/9's cross-trade
+  computation and was never updated, so `preview('daily_loss_pct', ...)`
+  and `preview('consecutive_losses', ...)` unconditionally returned
+  `operand_not_computable` — §5.10's guided front door could not show a
+  live preview for 2 of its 3 rules despite this slice's own real,
+  correct distribution data existing for both. This is exactly the class
+  of thing AGENTS.md's "never fake it" instinct exists to catch: a slice
+  whose whole stated purpose (enable preview for these two operands) was
+  silently undelivered by one missed call site.
+  **Fix** (dispatched back to `retrospeq-coder`, narrowly scoped to this
+  one gate): `preview.ts`'s condition changed from `!operand.computableToday`
+  to `!DISTRIBUTION_OPERAND_IDS.includes(operandId)` — `DISTRIBUTION_
+  OPERAND_IDS` (already exported from `distributions-repository.ts`) is
+  the exact set every operand `recomputeOperandDistributionsForUser`
+  actually writes a row for, today, no more and no less. Deliberately did
+  NOT touch `operand-catalogue.ts`'s `computableToday` values themselves
+  — that flag has other consumers (fact-assembly readiness) this preview
+  gate has no business affecting; changing the single-purpose gate
+  condition is the narrower, correct fix. `preview.test.ts`/`preview.
+  property.test.ts` updated to match; the live independent-verify test's
+  `it.fails` converted to a normal passing `it()`, re-run live and
+  confirmed green (no longer failing-as-designed — genuinely passing).
+  **Security-reviewer PASS (5/5):** no import cycle from importing
+  `DISTRIBUTION_OPERAND_IDS` as a value into `preview.ts` (confirmed only
+  the id-list constant crosses, not any service-role-connection-using
+  function); `getOperand(operandId)` validation still runs BEFORE the new
+  gate check, so an unknown/malicious operand id still throws before
+  reaching it (no injection surface introduced); `preview()`'s
+  `withUserConnection`-scoped, `user_id`-filtered read of
+  `operand_distributions` is unchanged by this fix; the fix touches
+  nothing in `rule_evaluations` and writes nothing anywhere (`preview()`
+  remains read-only end to end); no compound-rule or XP-coupling
+  introduced. Independently re-ran `preview.test.ts` + `preview.
+  property.test.ts` (24/24) directly rather than trusting the coder's own
+  run.
+  **QA PASS (9/9):** `rule_evaluations` untouched; no compound rules; no
+  XP/adherence coupling; §5.3's "one code path" convention held (every
+  bucket comparison still routes through `evaluate.ts`'s `compare()`, no
+  parallel comparison logic for the new operands); the `insufficient_
+  history` vs `operand_not_computable` distinction remains coherent post-
+  fix (an operand outside `DISTRIBUTION_OPERAND_IDS` still correctly gets
+  `operand_not_computable`; one inside it with `n < 20` still correctly
+  gets `insufficient_history` — genuinely different, both-correct "no
+  ratio yet" states, still not conflated); `preview.test.ts`'s pre-
+  existing Slice-3-era "computableToday: false operand never queries
+  operand_distributions" assertion confirmed to use an operand genuinely
+  outside `DISTRIBUTION_OPERAND_IDS` (not accidentally left pointing at
+  one of the two newly-distribution-backed operands); no UI surface in
+  this slice, so no screenshot self-check was required; the analytics/
+  rules import boundary is clean (all new imports are within `lib/rules/`
+  itself); `docs/runbook.md`'s Slice 9 update verified accurate against
+  the actual new failure surface (the two new fetch functions really do
+  run inside the same best-effort `recomputeOperandDistributionsForUser`
+  call). One procedural (non-code) finding: this ledger's own "Current
+  task" section and this decision log still claimed Slice 9 was
+  coder-pass-only with a now-false "zero changes" claim — corrected in
+  this entry and the one above, and in the phase-status table.
+  **Re-verification after the fix:** full suite `npx vitest run` = 101
+  files, 1400 passed, 8 skipped, 0 failed; `tsc --noEmit` clean; `eslint
+  .` clean (19 pre-existing unrelated warnings only, none touched by this
+  slice or its fix). No migration, no ADR (the preview.ts change is a bug
+  fix restoring this slice's own already-stated intent, not a new
+  deviation from a 00-foundation convention). **Module 04 Slice 9 is now
+  DONE** — see the phase-status table's 2026-08-29 entry for the
+  consolidated summary.
 - 2026-08-27 — **Module 04 Slice 8 (ambient live-state engine +
   `rule_overrides`, §5.9) — independent tester verification PASS, no
   production bugs, no test gaps closed.** Full write-up is in the
