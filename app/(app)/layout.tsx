@@ -69,6 +69,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/trades" className="rq-sub underline">
             Trades
           </Link>
+          {/* Module 04 Slice 10e: before this link, `/rules` had no UI
+              entry point anywhere in this shell — a trader could reach it
+              only by typing the URL directly. */}
+          <Link href="/rules" className="rq-sub underline">
+            Rules
+          </Link>
           <Link href="/plan" className="rq-sub underline">
             Plan
           </Link>

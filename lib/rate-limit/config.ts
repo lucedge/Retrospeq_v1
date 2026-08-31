@@ -415,6 +415,19 @@ export const RATE_LIMITS = {
     ip: { limit: 90, windowSeconds: 3600 },
     email: { limit: 60, windowSeconds: 3600 },
   },
+  /**
+   * Module 04 story 1.1 — Slice 10e's rule list/browsing view
+   * (`app/(app)/rules/page.tsx`). Read-only end to end
+   * (`fetchRulesForUser` writes nothing), fetched once per page load —
+   * same shape and reasoning as `adherenceDisplay` immediately above (no
+   * client-side re-fetch trigger; a real session hits this a handful of
+   * times per hour even browsing back and forth), so it reuses that exact
+   * budget rather than inventing a third near-identical number.
+   */
+  ruleList: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

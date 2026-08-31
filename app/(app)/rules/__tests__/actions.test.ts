@@ -43,6 +43,7 @@ const {
   insertRuleOverrideMock,
   getAmbientAccountStateMock,
   getAdherenceDisplayForUserMock,
+  fetchRulesForUserMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -66,6 +67,7 @@ const {
   insertRuleOverrideMock: vi.fn(),
   getAmbientAccountStateMock: vi.fn(),
   getAdherenceDisplayForUserMock: vi.fn(),
+  fetchRulesForUserMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -92,6 +94,7 @@ vi.mock('@/lib/rules/rules-repository', async (importOriginal) => {
     fetchCurrentRuleForEdit: fetchCurrentRuleForEditMock,
     insertRuleAndVersion: insertRuleAndVersionMock,
     applyRuleEdit: applyRuleEditMock,
+    fetchRulesForUser: fetchRulesForUserMock,
   };
 });
 vi.mock('@/lib/rules/preview', () => ({
@@ -141,6 +144,7 @@ const {
   recordOverride,
   fetchAmbientState,
   fetchAdherenceDisplay,
+  fetchRulesList,
 } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleCreateCapExceededError, RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import(
@@ -175,6 +179,7 @@ beforeEach(() => {
   insertRuleOverrideMock.mockReset();
   getAmbientAccountStateMock.mockReset();
   getAdherenceDisplayForUserMock.mockReset();
+  fetchRulesForUserMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -650,13 +655,44 @@ describe('promoteRule', () => {
   });
 
   it('rejects an ineligible rule with RULE_PROMOTION_NOT_ELIGIBLE and attaches every failing reason', async () => {
+    // Default beforeEach entitlement (`reason: 'ok'`) applies here — a Pro
+    // caller under the cap, ineligible on the merits only. `canForUser` IS
+    // now called (bug fix, 2026-08-31 — see `promoteRule`'s own header),
+    // but `proRequired` correctly reads `false` since this caller isn't
+    // plan-blocked.
     checkPromotionEligibilityForUserMock.mockResolvedValue(eligibleResult({ eligible: false }));
     const result = await promoteRule(RULE_ID);
     expect(result.error?.code).toBe('RULE_PROMOTION_NOT_ELIGIBLE');
     expect(result.eligibility?.reasons).toEqual([{ code: 'RULE_NOT_OLD_ENOUGH', message: 'not old enough yet' }]);
-    expect(canForUserMock).not.toHaveBeenCalled();
+    expect(result.eligibility?.proRequired).toBe(false);
+    expect(canForUserMock).toHaveBeenCalledWith(FAKE_USER.id, 'rules.hard');
     expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
   });
+
+  it(
+    'BUG FIX (independent tester verification, 2026-08-31): a free-tier trader with an INELIGIBLE rule sees ' +
+      'proRequired:true ALONGSIDE the eligibility breakdown, never the gates alone -- fresh fixture, distinct from ' +
+      'the eligible-but-free-tier RULE_HARD_CAP-adjacent ENTITLEMENT_LIMIT case below',
+    async () => {
+      checkPromotionEligibilityForUserMock.mockResolvedValue(
+        eligibleResult({
+          eligible: false,
+        }),
+      );
+      canForUserMock.mockResolvedValue({ allowed: false, reason: 'plan', limit: 0 });
+
+      const result = await promoteRule(RULE_ID);
+
+      // Still the SAME rejection code and the SAME full gate breakdown --
+      // this is additive, not a replacement of the eligibility gates.
+      expect(result.error?.code).toBe('RULE_PROMOTION_NOT_ELIGIBLE');
+      expect(result.eligibility?.reasons).toEqual([{ code: 'RULE_NOT_OLD_ENOUGH', message: 'not old enough yet' }]);
+      // The fact a free-tier trader was previously never told.
+      expect(result.eligibility?.proRequired).toBe(true);
+      expect(canForUserMock).toHaveBeenCalledWith(FAKE_USER.id, 'rules.hard');
+      expect(promoteRuleSeverityMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('blocks the FREE tier entirely (reason: plan) with ENTITLEMENT_LIMIT, never reaching promoteRuleSeverity', async () => {
     canForUserMock.mockResolvedValue({ allowed: false, reason: 'plan', limit: 0 });
@@ -1082,5 +1118,67 @@ describe('fetchAdherenceDisplay', () => {
     const result = await fetchAdherenceDisplay();
     expect(result.error?.code).toBe('RULE_SESSION_MISSING');
     expect(getAdherenceDisplayForUserMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// fetchRulesList — Module 04 story 1.1 (§6.1 rule list), Slice 10e
+// ---------------------------------------------------------------------
+
+describe('fetchRulesList', () => {
+  function fakeRule(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      ruleId: 'rule-1',
+      rendered: 'Never risk more than 1% per trade.',
+      operandId: 'risk_pct',
+      severity: 'soft' as const,
+      state: 'active' as const,
+      scope: 'global' as const,
+      scopeId: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      promotedAt: null,
+      retiredAt: null,
+      ...overrides,
+    };
+  }
+
+  it('succeeds and passes the caller\'s session-derived userId (never a client-supplied one — this action takes no arguments at all) straight through to fetchRulesForUser', async () => {
+    const rules = [fakeRule(), fakeRule({ ruleId: 'rule-2', severity: 'hard', promotedAt: '2026-02-01T00:00:00.000Z' })];
+    fetchRulesForUserMock.mockResolvedValue(rules);
+
+    const result = await fetchRulesList();
+
+    expect(result.success).toBe(true);
+    expect(result.rules).toEqual(rules);
+    expect(fetchRulesForUserMock).toHaveBeenCalledWith(FAKE_USER.id);
+    expect(enforceRateLimitMock).toHaveBeenCalledWith('ruleList', expect.anything(), FAKE_USER.id);
+  });
+
+  it('passes through an empty list unchanged (a brand-new trader with no rules yet is not an error)', async () => {
+    fetchRulesForUserMock.mockResolvedValue([]);
+    const result = await fetchRulesList();
+    expect(result.success).toBe(true);
+    expect(result.rules).toEqual([]);
+  });
+
+  it('maps an unexpected read failure to a retryable RULE_LIST_INTERNAL, never a raw error', async () => {
+    fetchRulesForUserMock.mockRejectedValue(new Error('connection reset'));
+    const result = await fetchRulesList();
+    expect(result.error?.code).toBe('RULE_LIST_INTERNAL');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('is rate-limited independently of the other rule actions (RULE_RATE_LIMITED on exceed), before any read', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('ruleList', 'ip:1.2.3.4', 3600));
+    const result = await fetchRulesList();
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(fetchRulesForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing session the same way every other action in this file does', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: new Error('no session') });
+    const result = await fetchRulesList();
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(fetchRulesForUserMock).not.toHaveBeenCalled();
   });
 });

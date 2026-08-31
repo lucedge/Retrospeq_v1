@@ -16,6 +16,7 @@ import {
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
   fetchRuleRenderedText,
+  fetchRulesForUser,
   insertRuleAndVersion,
   RuleCreateCapExceededError,
   RuleEditConflictError,
@@ -372,6 +373,123 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
     // written" -- an edit must be reflected immediately.
     expect(await fetchRuleRenderedText(user.id, created.ruleId)).toBe('Never risk more than 2.5% per trade.');
   });
+
+  // -----------------------------------------------------------------
+  // fetchRulesForUser — story 1.1's rule list/browsing view, Slice 10e.
+  // -----------------------------------------------------------------
+
+  it('fetchRulesForUser returns every rule this user owns, active before retired, hard before soft within active, oldest-first as the final tiebreak', async () => {
+    // 15s, not the 5s default — this test's own three insertRuleAndVersion
+    // calls plus two direct UPDATEs and one real createTestAuthUser round
+    // trip push comfortably past 5s under normal live-DB latency, matching
+    // this file's own established precedent for its other multi-step tests
+    // (the two-connection race tests below use 15_000/30_000 for the same
+    // reason).
+    const owner = await createTestAuthUser(env!, 'rules-repo-list');
+    try {
+      const soft1 = await insertRuleAndVersion({
+        userId: owner.id,
+        operandId: 'risk_pct',
+        op: 'lte',
+        value: 1,
+        scope: 'global',
+        scopeId: null,
+        evaluation: 'pre_entry',
+        rendered: 'List test — soft 1.',
+        capLimit: null,
+      });
+      const hard1 = await insertRuleAndVersion({
+        userId: owner.id,
+        operandId: 'risk_pct',
+        op: 'lte',
+        value: 1.5,
+        scope: 'global',
+        scopeId: null,
+        evaluation: 'pre_entry',
+        rendered: 'List test — will be hard.',
+        capLimit: null,
+      });
+      await db.query(`update retrospeq.rules set severity = 'hard', promoted_at = now() where id = $1`, [hard1.ruleId]);
+      const retired1 = await insertRuleAndVersion({
+        userId: owner.id,
+        operandId: 'daily_pnl_pct',
+        op: 'lte',
+        value: -1,
+        scope: 'global',
+        scopeId: null,
+        evaluation: 'session',
+        rendered: 'List test — retired.',
+        capLimit: null,
+      });
+      await db.query(`update retrospeq.rules set state = 'retired', retired_at = now() where id = $1`, [retired1.ruleId]);
+
+      const list = await fetchRulesForUser(owner.id);
+      expect(list).toHaveLength(3);
+
+      // Active before retired.
+      expect(list[0].state).toBe('active');
+      expect(list[1].state).toBe('active');
+      expect(list[2].state).toBe('retired');
+      // Hard before soft within the active set.
+      expect(list[0].ruleId).toBe(hard1.ruleId);
+      expect(list[0].severity).toBe('hard');
+      expect(list[0].promotedAt).not.toBeNull();
+      expect(list[1].ruleId).toBe(soft1.ruleId);
+      expect(list[1].severity).toBe('soft');
+      // The retired row carries its own retiredAt and rendered text.
+      expect(list[2].ruleId).toBe(retired1.ruleId);
+      expect(list[2].rendered).toBe('List test — retired.');
+      expect(list[2].retiredAt).not.toBeNull();
+    } finally {
+      await db.query('begin');
+      await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
+      await db.query('delete from retrospeq.rules where user_id = $1', [owner.id]);
+      await db.query('commit');
+      await deleteTestAuthUser(env!, owner.id).catch(() => {});
+    }
+  }, 15_000);
+
+  it('fetchRulesForUser resolves the CURRENT (post-edit) rendered text, and returns [] for a user with no rules — never another user\'s rows', async () => {
+    // 15s — this test creates TWO real auth users (owner + a second, empty
+    // one) plus an edit round trip, pushing past the 5s default the same
+    // way the test above does.
+    const owner = await createTestAuthUser(env!, 'rules-repo-list-edit');
+    try {
+      const created = await insertRuleAndVersion({
+        userId: owner.id,
+        operandId: 'risk_pct',
+        op: 'lte',
+        value: 6,
+        scope: 'global',
+        scopeId: null,
+        evaluation: 'pre_entry',
+        rendered: 'List test — pre-edit text.',
+        capLimit: null,
+      });
+      await applyRuleEdit(owner.id, created.ruleId, 1, 'risk_pct', 'lte', 3, 'List test — post-edit text.');
+
+      const list = await fetchRulesForUser(owner.id);
+      expect(list).toHaveLength(1);
+      expect(list[0].rendered).toBe('List test — post-edit text.');
+
+      // A brand-new user with zero rules gets an empty array, not an error.
+      const emptyUser = await createTestAuthUser(env!, 'rules-repo-list-empty');
+      try {
+        expect(await fetchRulesForUser(emptyUser.id)).toEqual([]);
+        // Cross-user isolation: the empty user's own read never sees owner's rows.
+        const emptyUsersList = await fetchRulesForUser(emptyUser.id);
+        expect(emptyUsersList.some((r) => r.ruleId === created.ruleId)).toBe(false);
+      } finally {
+        await deleteTestAuthUser(env!, emptyUser.id).catch(() => {});
+      }
+    } finally {
+      await db.query('begin');
+      await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
+      await db.query('delete from retrospeq.rules where user_id = $1', [owner.id]);
+      await db.query('commit');
+      await deleteTestAuthUser(env!, owner.id).catch(() => {});
+    }
+  }, 15_000);
 
   it(
     'fetchRuleRenderedText returns null for a nonexistent rule id, and null (not another user\'s text) for a rule owned by someone else',

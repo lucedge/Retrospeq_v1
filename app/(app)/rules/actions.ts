@@ -28,8 +28,10 @@ import {
   fetchAccountSyncTiers,
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
+  fetchRulesForUser,
   insertRuleAndVersion,
   applyRuleEdit,
+  type RuleListItem,
 } from '@/lib/rules/rules-repository';
 import { preview, type PreviewResult } from '@/lib/rules/preview';
 import {
@@ -612,8 +614,15 @@ export interface SeverityLifecycleActionState {
   /** Populated only on a `RULE_PROMOTION_NOT_ELIGIBLE` rejection — every
    *  gate the rule is currently failing, per this slice's own dispatch
    *  ("the trader needs to understand what's missing"), not just the
-   *  first one found. */
-  eligibility?: { reasons: PromotionIneligibilityReason[]; detail: PromotionEligibilityDetail };
+   *  first one found. `proRequired` is a bug fix (independent tester
+   *  verification, 2026-08-31, see `promoteRule`'s own header for the full
+   *  writeup): true when the caller is ALSO structurally blocked from ever
+   *  promoting on their current plan (`rules.hard` entitlement reason
+   *  `'plan'`), regardless of whether the gates above are ever cleared —
+   *  without this, a free-tier trader with an ineligible rule saw only the
+   *  eligibility breakdown, falsely implying waiting it out would
+   *  eventually work. */
+  eligibility?: { reasons: PromotionIneligibilityReason[]; detail: PromotionEligibilityDetail; proRequired: boolean };
   /** Populated only on a `RULE_HARD_CAP` rejection — the caller's own
    *  currently active hard rules, for a future UI's demote-chooser
    *  (§6.1's reference markup: "choose one to move back to soft"). */
@@ -641,6 +650,29 @@ export interface SeverityLifecycleActionState {
  * §5.7/§10 UX ("presented as a trade-off, not an error") layered on top
  * of the same entitlement fact Module 01's generic quota-exceeded case
  * already represents.
+ *
+ * BUG FOUND AND FIXED (independent tester verification, 2026-08-31):
+ * checking eligibility before entitlement means a free-tier trader with a
+ * genuinely INELIGIBLE rule (the common case — most free-tier rules are
+ * both ineligible AND non-Pro at once, since `rules.hard: {free: 0}` is a
+ * structural, unconditional plan exclusion true regardless of any rule's
+ * own facts) used to return ONLY `RULE_PROMOTION_NOT_ELIGIBLE` with the
+ * eligibility breakdown — never mentioning Pro at all, falsely implying
+ * that waiting out the gates would eventually let them promote, when the
+ * entitlement block would stop them regardless. Fixed WITHOUT reordering
+ * the check sequence above (eligibility still runs first, and
+ * `checkPromotionEligibilityForUser`'s own single query pass is still the
+ * only source of `currentSeverity`/`currentState` — reordering would mean
+ * either a second, redundant query or restructuring that function, neither
+ * warranted for a messaging-only fix): the ineligible branch below now
+ * ALSO resolves the `rules.hard` entitlement and attaches
+ * `eligibility.proRequired` when the reason is `'plan'`, so the trader
+ * always sees both facts together. This does not change WHEN entitlement
+ * is checked for an ELIGIBLE rule (still after the gates, unchanged) — it
+ * only adds one additional cheap, non-mutating read to the branch that was
+ * already about to return early, after ownership/state/eligibility are all
+ * already confirmed, so this is not "burning a round trip before
+ * confirming a valid target."
  */
 export async function promoteRule(ruleId: string): Promise<SeverityLifecycleActionState> {
   const user = await requireSessionAndRateLimit('promoteRule');
@@ -671,13 +703,23 @@ export async function promoteRule(ruleId: string): Promise<SeverityLifecycleActi
     return { error: { code: 'RULE_ALREADY_HARD', user_message: 'This rule is already hard.', retryable: false } };
   }
   if (!eligibility.eligible) {
+    // Bug fix (2026-08-31) — see this function's own header, "BUG FOUND
+    // AND FIXED": resolve the entitlement here too so the response can
+    // always tell a free-tier trader that Pro is required, not just which
+    // gates are failing. Cheap and non-mutating; ownership/state/
+    // eligibility are already confirmed by this point.
+    const hardEntitlement = await canForUser(user.id, 'rules.hard');
     return {
       error: {
         code: 'RULE_PROMOTION_NOT_ELIGIBLE',
         user_message: eligibility.reasons[0]?.message ?? 'This rule is not yet eligible for promotion.',
         retryable: false,
       },
-      eligibility: { reasons: eligibility.reasons, detail: eligibility.detail },
+      eligibility: {
+        reasons: eligibility.reasons,
+        detail: eligibility.detail,
+        proRequired: hardEntitlement.reason === 'plan',
+      },
     };
   }
 
@@ -1030,6 +1072,38 @@ export async function fetchAdherenceDisplay(): Promise<AdherenceDisplayActionRes
     console.error('[rules/actions:fetchAdherenceDisplay] read failed:', err);
     return {
       error: { code: 'RULE_ADHERENCE_INTERNAL', user_message: 'Adherence is unavailable right now. Please try again.', retryable: true },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// fetchRulesList — Module 04 story 1.1 (§6.1 rule list), Slice 10e
+//
+// Thin Server Action wrapper around `lib/rules/rules-repository.ts`'s
+// `fetchRulesForUser` — session-derived `userId` only, no arguments, same
+// shape as `fetchAdherenceDisplay` immediately above (and called the SAME
+// way from `page.tsx`: directly, not through the underlying library
+// function, per that page's own already-documented "route every read
+// through the rate-limited entry point" convention).
+// ---------------------------------------------------------------------
+
+export interface RulesListActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  rules?: RuleListItem[];
+}
+
+export async function fetchRulesList(): Promise<RulesListActionResult> {
+  const user = await requireSessionAndRateLimit('ruleList');
+  if (isErrorState(user)) return user;
+
+  try {
+    const rules = await fetchRulesForUser(user.id);
+    return { success: true, rules };
+  } catch (err) {
+    console.error('[rules/actions:fetchRulesList] read failed:', err);
+    return {
+      error: { code: 'RULE_LIST_INTERNAL', user_message: 'Your rulebook is unavailable right now. Please try again.', retryable: true },
     };
   }
 }

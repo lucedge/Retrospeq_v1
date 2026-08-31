@@ -139,6 +139,85 @@ export async function fetchRuleRenderedText(userId: string, ruleId: string): Pro
 }
 
 // ---------------------------------------------------------------------
+// fetchRulesForUser — story 1.1's rule list/browsing view, Slice 10e
+// ---------------------------------------------------------------------
+
+export interface RuleListItem {
+  ruleId: string;
+  rendered: string;
+  operandId: string;
+  severity: 'soft' | 'hard';
+  state: 'active' | 'retired' | 'deactivated_by_plan';
+  scope: 'global' | 'strategy' | 'account';
+  scopeId: string | null;
+  createdAt: string;
+  promotedAt: string | null;
+  retiredAt: string | null;
+}
+
+interface RuleListItemRow {
+  rule_id: string;
+  rendered: string;
+  operand_id: string;
+  severity: 'soft' | 'hard';
+  state: 'active' | 'retired' | 'deactivated_by_plan';
+  scope: 'global' | 'strategy' | 'account';
+  scope_id: string | null;
+  created_at: string;
+  promoted_at: string | null;
+  retired_at: string | null;
+}
+
+/**
+ * Story 1.1's "one sentence, one tappable number" rule list — Slice 10e.
+ * NO repository function listed a trader's own rules before this one
+ * (grep-confirmed at this slice's own dispatch time) — `fetchCurrentRuleForEdit`
+ * above reads exactly ONE rule by id, and `fetchActiveGlobalRuleVersionsForOperand`
+ * reads active GLOBAL rules for ONE operand at a time (an authoring-validation
+ * helper, not a browsing view). This is the first "give me everything this
+ * trader has ever authored" read.
+ *
+ * Returns EVERY rule regardless of `state` — `active` (both severities),
+ * `retired`, and (defensively, though nothing in this codebase writes it yet
+ * per `lib/entitlements/downgrade.ts`'s own header) `deactivated_by_plan` —
+ * one query, one round trip, no N+1 (matching this file's own established
+ * "one indexed join, not a per-rule fetch" posture). The CALLER (this
+ * slice's `RuleList.tsx`) decides how to group/de-emphasise non-active rows;
+ * this read stays a plain, complete list.
+ *
+ * Ordering: active rules first (a retired rule is a dead end per story 2.4,
+ * not the trader's current concern), hard before soft within the active set
+ * (the few, rare, meant-to-be-loud rules lead, matching `.adherence`'s own
+ * "hard first" convention), oldest-authored-first as the final tiebreak —
+ * a stable, meaningful default rather than insertion-order-by-accident.
+ */
+export async function fetchRulesForUser(userId: string): Promise<RuleListItem[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<RuleListItemRow>(
+      `select r.id as rule_id, rv.rendered, rv.operand_id, r.severity, r.state, r.scope, r.scope_id,
+              r.created_at::text as created_at, r.promoted_at::text as promoted_at, r.retired_at::text as retired_at
+         from retrospeq.rules r
+         join retrospeq.rule_versions rv on rv.rule_id = r.id and rv.version = r.current_version
+        where r.user_id = $1
+        order by (r.state = 'active') desc, (r.severity = 'hard') desc, r.created_at asc`,
+      [userId],
+    );
+    return res.rows.map((row) => ({
+      ruleId: row.rule_id,
+      rendered: row.rendered,
+      operandId: row.operand_id,
+      severity: row.severity,
+      state: row.state,
+      scope: row.scope,
+      scopeId: row.scope_id,
+      createdAt: row.created_at,
+      promotedAt: row.promoted_at,
+      retiredAt: row.retired_at,
+    }));
+  });
+}
+
+// ---------------------------------------------------------------------
 // createRule's write
 // ---------------------------------------------------------------------
 

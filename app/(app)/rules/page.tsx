@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
-import { fetchAdherenceDisplay } from './actions';
+import { canForUser } from '@/lib/entitlements/service';
+import { fetchAdherenceDisplay, fetchRulesList } from './actions';
 import { AdherenceSection } from './Adherence';
+import { RuleList } from './RuleList';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.6 UI / story 3.3 — Slice 10d part 2.
@@ -44,6 +46,20 @@ import { AdherenceSection } from './Adherence';
  * read through the same rate-limited, session-scoped entry point a future
  * client-triggered re-fetch (e.g. a week picker) would also use — strictly
  * safer by default, not merely equally safe, with no offsetting downside.
+ *
+ * **Slice 10e adds the rule list below the adherence section, exactly where
+ * this file's own comment (below) already marked it.** Same "call the
+ * rate-limited Server Action directly" posture as `fetchAdherenceDisplay`
+ * above — `fetchRulesList()`, not `fetchRulesForUser()` directly. The
+ * `rules.hard` entitlement snapshot (`canForUser`) is fetched the SAME way
+ * `app/(app)/rules/new/page.tsx` fetches `rules.create`'s — a plain,
+ * unthrottled `canForUser` call, since it is a pure entitlement resolution
+ * read with no table of its own to rate-limit against, not a Server Action.
+ * `RuleList.tsx` (client) owns every bit of interactive state from there —
+ * promote/demote/retire, the hard-cap swap chooser, and the promotion-
+ * ineligibility explanation — the same "Server Component composes the
+ * read, Client Component owns the interaction" split every other Module 04
+ * UI slice in this file tree already uses.
  */
 export default async function RulesPage() {
   const supabase = await createClient();
@@ -63,7 +79,11 @@ export default async function RulesPage() {
     );
   }
 
-  const result = await fetchAdherenceDisplay();
+  const [adherenceResult, rulesResult, hardEntitlement] = await Promise.all([
+    fetchAdherenceDisplay(),
+    fetchRulesList(),
+    canForUser(user.id, 'rules.hard'),
+  ]);
 
   return (
     <section className="flex flex-col gap-6" aria-labelledby="rules-h">
@@ -71,19 +91,33 @@ export default async function RulesPage() {
         Your rulebook
       </h1>
 
-      {result.success && result.display ? (
-        <AdherenceSection display={result.display} />
+      {adherenceResult.success && adherenceResult.display ? (
+        <AdherenceSection display={adherenceResult.display} />
       ) : (
         <p className="rq-sub" role="alert">
-          {result.error?.user_message ?? 'Adherence is unavailable right now.'}
+          {adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.'}
         </p>
       )}
 
-      {/* Future sub-slice: the general rule list (story 1.1 — one sentence,
-          one tappable number per rule, severity promote/demote/retire
-          controls) and discovery (§1.3 — ranked detections leading,
-          catalogue behind search) belong here, as additional sections below
-          the adherence display — not built in this dispatch. */}
+      {/* Story 1.1 / §6.1's rule list — Slice 10e, built exactly where this
+          comment used to mark it as future work (Slice 10d part 2's own
+          note). Discovery (§1.3 — ranked detections leading, catalogue
+          behind search) is still a separate future sub-slice (Slice 10c,
+          blocked on Module 05), not built here. */}
+      {rulesResult.success && rulesResult.rules ? (
+        <RuleList
+          initialRules={rulesResult.rules}
+          hardEntitlement={{
+            allowed: hardEntitlement.allowed,
+            reason: hardEntitlement.reason,
+            limit: hardEntitlement.limit,
+          }}
+        />
+      ) : (
+        <p className="rq-sub" role="alert">
+          {rulesResult.error?.user_message ?? 'Your rulebook is unavailable right now.'}
+        </p>
+      )}
     </section>
   );
 }

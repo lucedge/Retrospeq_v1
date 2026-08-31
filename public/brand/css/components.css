@@ -224,3 +224,50 @@
   font-size: var(--rq-text-sm); font-weight: var(--rq-weight-regular);
   color: var(--rq-ink-faint); margin: 0;
 }
+
+/* ---------- Alerts (choice / trade-off) ----------
+   Module 04 §5.7/§6.1's own reference markup names `.alert`,
+   `.alert--choice`, and `.demote-list` directly ("Hard cap: a trade-off,
+   not an error") but, like `.ambient`/`.adherence` before their own
+   additions, no rule ever shipped the CSS for them -- added here for
+   Slice 10e's hard-cap swap chooser, not invented independently of the
+   spec that already named it. (`.alert--blocking`, the tighten-only
+   rejection markup, is named by the same spec section but stays
+   unshipped -- Slice 10b's own `RuleEditor.tsx` header confirms that
+   rejection is structurally unreachable through every screen built so
+   far, so its CSS is left for whichever future slice first needs it,
+   same "don't build dead UI" posture that file already documents.)
+
+   A hard-cap swap is a DECISION the trader is being asked to weigh, not a
+   danger -- this reuses `.rq-cost`'s own accent-bordered "weigh this"
+   device (the one non-neutral emphasis surface in this system) rather
+   than inventing a second one, and there is still no red/danger anywhere:
+   `.alert` on its own (no modifier) is neutral ink-on-surface, exactly
+   like `.rq-card`. */
+.alert {
+  background: var(--rq-surface);
+  border-radius: var(--rq-radius-lg);
+  padding: var(--rq-space-4);
+  display: flex; flex-direction: column; gap: var(--rq-space-3);
+}
+.alert h2 {
+  font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight); margin: 0;
+}
+.alert--choice {
+  border: 1px solid var(--rq-accent);
+  background: var(--rq-accent-soft);
+}
+.demote-list {
+  display: flex; flex-direction: column; gap: var(--rq-space-2);
+  list-style: none; margin: 0; padding: 0;
+}
+.demote-list li {
+  padding: var(--rq-space-2) var(--rq-space-3);
+  border-radius: var(--rq-radius-md);
+  background: var(--rq-surface);
+}
+.demote-list label {
+  display: flex; align-items: center; gap: var(--rq-space-2);
+  font-size: var(--rq-text-base); cursor: pointer;
+}
