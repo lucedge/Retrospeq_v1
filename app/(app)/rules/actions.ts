@@ -50,6 +50,7 @@ import {
   fetchRuleForOverride,
   insertRuleOverride,
 } from '@/lib/rules/rule-overrides-repository';
+import { AmbientAccountNotFoundError, getAmbientAccountState, type AmbientAccountState } from '@/lib/rules/ambient-state';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -926,6 +927,67 @@ export async function recordOverride(input: RecordOverrideInput): Promise<Record
     console.error('[rules/actions:recordOverride] insert failed:', err);
     return {
       error: { code: 'RULE_OVERRIDE_INTERNAL', user_message: 'Something went wrong. Please try again.', retryable: true },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// fetchAmbientState — Module 04 §5.9 UI, Slice 10d
+//
+// Thin Server Action wrapper around `lib/rules/ambient-state.ts`'s
+// `getAmbientAccountState` — that file's own header documents it as a
+// "live, client-driven read triggered by the trader's own session,"
+// which is exactly what did NOT exist yet: Slice 8 built the read-only
+// engine, Slice 10d's own dispatch is the first caller that needs it from
+// a live screen, and the account being read is chosen INSIDE a client
+// form (`ManualEntryScreen.tsx`'s account selector), so a plain
+// server-rendered read on page load alone cannot cover "re-fetch when the
+// trader switches accounts" — this action is the same
+// fetch-again-on-interaction pattern `previewRule` already established
+// for the guided front door's live stepper (`GuidedFrontDoor.tsx`), reused
+// here for a live account switch instead of a live threshold drag.
+// ---------------------------------------------------------------------
+
+export interface AmbientStateActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  state?: AmbientAccountState;
+}
+
+const fetchAmbientStateInputSchema = z.strictObject({ accountId: z.uuid() });
+
+/**
+ * Read-only end to end (see `getAmbientAccountState`'s own header) — no
+ * `revalidatePath`, nothing. `AmbientAccountNotFoundError` is mapped to
+ * the SAME generic "we couldn't find that account" shape regardless of
+ * whether the account genuinely doesn't exist or exists but is owned by a
+ * different user — `getAmbientAccountState` itself already scopes its own
+ * `trading_accounts` read to `user_id = $2` (real RLS via
+ * `withUserConnection`, PLUS this repository-layer `WHERE`), so a
+ * cross-user probe here surfaces no signal beyond "not found," matching
+ * this file's own `RULE_NOT_FOUND` precedent elsewhere (`editRule`,
+ * `promoteRule`, ...) rather than a distinguishable "exists but isn't
+ * yours" response.
+ */
+export async function fetchAmbientState(accountId: string): Promise<AmbientStateActionResult> {
+  const user = await requireSessionAndRateLimit('ambientAccountState');
+  if (isErrorState(user)) return user;
+
+  const parsed = fetchAmbientStateInputSchema.safeParse({ accountId });
+  if (!parsed.success) {
+    return { error: { code: 'RULE_AMBIENT_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  try {
+    const state = await getAmbientAccountState(user.id, parsed.data.accountId);
+    return { success: true, state };
+  } catch (err) {
+    if (err instanceof AmbientAccountNotFoundError) {
+      return { error: { code: 'RULE_AMBIENT_ACCOUNT_NOT_FOUND', user_message: "We couldn't find that account.", retryable: false } };
+    }
+    console.error('[rules/actions:fetchAmbientState] read failed:', err);
+    return {
+      error: { code: 'RULE_AMBIENT_INTERNAL', user_message: 'Account state is unavailable right now. Please try again.', retryable: true },
     };
   }
 }

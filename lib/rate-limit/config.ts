@@ -380,6 +380,22 @@ export const RATE_LIMITS = {
     ip: { limit: 60, windowSeconds: 3600 },
     email: { limit: 40, windowSeconds: 3600 },
   },
+  /**
+   * Module 04 §5.9 UI — Slice 10d's ambient strip
+   * (`app/(app)/trades/manual-entry`). A read-only wrapper around
+   * `lib/rules/ambient-state.ts`'s `getAmbientAccountState` (writes
+   * nothing, same "read-only, ever" contract that function's own header
+   * documents), fetched once on page load PLUS once per account switch —
+   * bursty in the same interactive-UI sense `previewRule` is (a trader
+   * flipping between two or three accounts while deciding where to log a
+   * trade), but nowhere near `previewRule`'s per-keystroke-slider-drag
+   * cadence, so this gets a real but looser budget than that 60-second/
+   * 240-request window rather than reusing it outright.
+   */
+  ambientAccountState: {
+    ip: { limit: 120, windowSeconds: 60 },
+    email: { limit: 80, windowSeconds: 60 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

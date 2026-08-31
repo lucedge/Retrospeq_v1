@@ -41,6 +41,7 @@ const {
   retireRuleStateMock,
   fetchRuleForOverrideMock,
   insertRuleOverrideMock,
+  getAmbientAccountStateMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -62,6 +63,7 @@ const {
   retireRuleStateMock: vi.fn(),
   fetchRuleForOverrideMock: vi.fn(),
   insertRuleOverrideMock: vi.fn(),
+  getAmbientAccountStateMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -115,15 +117,24 @@ vi.mock('@/lib/rules/rule-overrides-repository', async (importOriginal) => {
     insertRuleOverride: insertRuleOverrideMock,
   };
 });
+vi.mock('@/lib/rules/ambient-state', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/rules/ambient-state')>();
+  return {
+    ...actual,
+    getAmbientAccountState: getAmbientAccountStateMock,
+  };
+});
 vi.mock('server-only', () => ({}));
 
-const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule, recordOverride } = await import('../actions');
+const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule, recordOverride, fetchAmbientState } =
+  await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleCreateCapExceededError, RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import(
   '@/lib/rules/rules-repository'
 );
 const { RuleLifecycleConflictError } = await import('@/lib/rules/severity-lifecycle-repository');
 const { RuleOverrideTradeNotOwnedError } = await import('@/lib/rules/rule-overrides-repository');
+const { AmbientAccountNotFoundError } = await import('@/lib/rules/ambient-state');
 
 const FAKE_USER = { id: 'user-aaaa-1111', email: 'trader@example.com' };
 
@@ -148,6 +159,7 @@ beforeEach(() => {
   retireRuleStateMock.mockReset();
   fetchRuleForOverrideMock.mockReset();
   insertRuleOverrideMock.mockReset();
+  getAmbientAccountStateMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -918,5 +930,80 @@ describe('recordOverride', () => {
     const result = await recordOverride({ ruleId: RULE_ID, tradeId: null, observed: 1 });
     expect(result.error?.code).toBe('RULE_SESSION_MISSING');
     expect(fetchRuleForOverrideMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// fetchAmbientState — Module 04 §5.9 UI, Slice 10d
+// ---------------------------------------------------------------------
+
+describe('fetchAmbientState', () => {
+  const ACCOUNT_ID = '01927e00-0000-7000-8000-0000000000bb';
+
+  function fakeAmbientState() {
+    return {
+      accountId: ACCOUNT_ID,
+      asOf: '2026-09-01T00:00:00.000Z',
+      facts: {
+        tradesToday: { value: 2, tint: 'neutral' as const },
+        dayPnlPct: { value: -1.1, tint: 'neutral' as const },
+        riskVsCap: { currentPct: 0.8, capPct: 1.0, tint: 'neutral' as const },
+      },
+      rules: [],
+    };
+  }
+
+  it('succeeds and passes accountId + the caller\'s userId straight through to getAmbientAccountState', async () => {
+    getAmbientAccountStateMock.mockResolvedValue(fakeAmbientState());
+
+    const result = await fetchAmbientState(ACCOUNT_ID);
+
+    expect(result.success).toBe(true);
+    expect(result.state).toEqual(fakeAmbientState());
+    expect(getAmbientAccountStateMock).toHaveBeenCalledWith(FAKE_USER.id, ACCOUNT_ID);
+    expect(enforceRateLimitMock).toHaveBeenCalledWith('ambientAccountState', expect.anything(), FAKE_USER.id);
+  });
+
+  it('rejects a non-uuid accountId at the Zod boundary, before any read', async () => {
+    const result = await fetchAmbientState('not-a-uuid');
+    expect(result.error?.code).toBe('RULE_AMBIENT_INVALID_INPUT');
+    expect(getAmbientAccountStateMock).not.toHaveBeenCalled();
+  });
+
+  it('maps AmbientAccountNotFoundError to RULE_AMBIENT_ACCOUNT_NOT_FOUND -- identical for "does not exist" and "exists but is owned by someone else" (no cross-user signal leaked)', async () => {
+    getAmbientAccountStateMock.mockRejectedValue(new AmbientAccountNotFoundError(ACCOUNT_ID));
+    const result = await fetchAmbientState(ACCOUNT_ID);
+    expect(result.error?.code).toBe('RULE_AMBIENT_ACCOUNT_NOT_FOUND');
+  });
+
+  it('maps an unexpected read failure to a retryable RULE_AMBIENT_INTERNAL, never a raw error', async () => {
+    getAmbientAccountStateMock.mockRejectedValue(new Error('connection reset'));
+    const result = await fetchAmbientState(ACCOUNT_ID);
+    expect(result.error?.code).toBe('RULE_AMBIENT_INTERNAL');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('is rate-limited independently of the other rule actions (RULE_RATE_LIMITED on exceed), before any read', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('ambientAccountState', 'ip:1.2.3.4', 60));
+    const result = await fetchAmbientState(ACCOUNT_ID);
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(getAmbientAccountStateMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing session the same way every other action in this file does', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: new Error('no session') });
+    const result = await fetchAmbientState(ACCOUNT_ID);
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(getAmbientAccountStateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown top-level keys / extra params via .strictObject (defence in depth, matching every other action\'s Zod boundary)', async () => {
+    // fetchAmbientState's own TS signature is a single string parameter, so
+    // this exercises the schema directly by simulating a caller that
+    // bypasses the type system (e.g. a hand-crafted RPC payload) -- the
+    // Zod schema, not TypeScript, is the real boundary per 00-foundation §4.2.
+    const result = await fetchAmbientState(undefined as unknown as string);
+    expect(result.error?.code).toBe('RULE_AMBIENT_INVALID_INPUT');
+    expect(getAmbientAccountStateMock).not.toHaveBeenCalled();
   });
 });

@@ -136,3 +136,50 @@
   border-radius: var(--rq-radius-md);
   padding: var(--rq-space-3);
 }
+
+/* ---------- Ambient strip ----------
+   Module 04 §5.9 / §6.1's own reference markup names this markup
+   directly (`.ambient`, `.ambient__cell[data-state]`, `.ambient__label`,
+   `.ambient__value`) but no rule prior to this addition ever shipped the
+   CSS for it — added here, not invented independently of the spec.
+   ALWAYS rendered, all three cells, regardless of state — "an indicator
+   that only appears when you cross a limit IS an alarm" (this file's own
+   `.rq-gauge` comment, same rule applied to a 3-cell strip instead of one
+   bar). `data-state` drives tint through GEOMETRY/WEIGHT ONLY — a left
+   border's width/colour and font-weight, never a hue swap. There is no
+   `--color-success`/`--color-danger` pair anywhere in this system and
+   this component does not invent one: `watch` (a broken SOFT rule,
+   visible not alarming) and `breach` (a broken HARD rule, the one state
+   meant to read as urgent) both stay within --rq-ink/--rq-ink-soft/
+   --rq-line-strong — the same neutral ink already used everywhere else in
+   this system, just applied with more weight and a firmer edge as the
+   state escalates. */
+.ambient { display: flex; gap: var(--rq-space-3); }
+.ambient__cell {
+  flex: 1; display: flex; flex-direction: column; gap: 2px;
+  padding: var(--rq-space-2) var(--rq-space-3);
+  border-radius: var(--rq-radius-md);
+  background: var(--rq-surface-2);
+  border-left: 3px solid var(--rq-line-strong);
+  transition: border-color var(--rq-duration) var(--rq-ease), box-shadow var(--rq-duration) var(--rq-ease);
+}
+.ambient__label {
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--rq-ink-faint);
+}
+.ambient__value {
+  font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--rq-text-md); font-weight: var(--rq-weight-medium); color: var(--rq-ink);
+}
+/* watch: a broken SOFT rule -- visible, not alarming. Heavier edge only. */
+.ambient__cell[data-state="watch"] { border-left-color: var(--rq-ink-soft); }
+.ambient__cell[data-state="watch"] .ambient__value { font-weight: var(--rq-weight-semi); }
+/* breach: a broken HARD rule -- the one state meant to read as urgent.
+   Full-ink edge plus an inset ring, same device `.rq-cost`/`.rq-btn--equal`
+   already use for "this needs your attention," never a colour swap. */
+.ambient__cell[data-state="breach"] {
+  border-left-color: var(--rq-ink);
+  background: var(--rq-surface);
+  box-shadow: inset 0 0 0 1.5px var(--rq-ink);
+}
+.ambient__cell[data-state="breach"] .ambient__value { font-weight: var(--rq-weight-bold); }

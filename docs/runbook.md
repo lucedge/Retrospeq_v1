@@ -583,11 +583,43 @@ propagates straight to the caller as a genuine, unexpected error —
 correct, since silently absorbing it into a fabricated `not_applicable`
 would misrepresent real data corruption as a legitimate "can't evaluate"
 outcome on the one screen a trader is actively looking at. **How to
-check:** this surfaces as an uncaught exception in whatever calls
-`getAmbientAccountState` (no dedicated log prefix exists yet — Slice 9's
-UI wiring should add one, and an error boundary, before this reaches
-production) — the error's own `code`/`message` name the exact rule/
-operand/version at fault, same vocabulary as the freeze-time case above.
+check, updated 2026-08-31 (Module 04 Slice 10d part 1 — the ambient strip
+UI actually landed here, not "Slice 9" as this entry previously said);
+updated again 2026-08-31 (same-day follow-up fix closing the SSR gap this
+entry flagged below):** BOTH call sites now catch this — same two sites,
+same generic user-facing copy either way:
+  - The LIVE re-fetch path (`app/(app)/rules/actions.ts`'s
+    `fetchAmbientState` Server Action, called from
+    `ManualEntryScreen.tsx` on every account switch) catches this
+    — logged with a real, dedicated prefix, `[rules/actions:fetchAmbientState]
+    read failed: <err>`, then mapped to a generic retryable
+    `RULE_AMBIENT_INTERNAL` the UI shows as "Account state is unavailable
+    right now. Please try again." — no raw error/stack reaches the
+    trader.
+  - The INITIAL server-side read (`app/(app)/trades/manual-entry/page.tsx`'s
+    own call to `getAmbientAccountState` on first page load) is now
+    **wrapped in a try/catch that mirrors `fetchAmbientState`'s own,
+    verbatim** (same `AmbientAccountNotFoundError` → "We couldn't find
+    that account." mapping, same generic-error →
+    "Account state is unavailable right now. Please try again." mapping,
+    logged with its own dedicated prefix,
+    `[trades/manual-entry:page] initial getAmbientAccountState read
+    failed: <err>`). On catch, `page.tsx` passes `initialAmbient: null` +
+    `initialAmbientError: <message>` down to `ManualEntryScreen.tsx`,
+    which seeds its existing `ambientError` state from that prop — the
+    SAME rendered fallback the live re-fetch path already used, not a
+    second UI. This degrades ONLY the ambient section; the account
+    picker and the rest of the manual-entry form are unaffected and
+    remain fully usable. This repo still has no `app/**/error.tsx`/
+    `global-error.tsx` anywhere — that remains a separate, broader,
+    not-yet-made architectural decision, out of scope for this
+    per-call-site fix. Covered by
+    `e2e/rules-ambient-strip.spec.ts`'s "SSR degradation" test (seeds a
+    genuinely malformed `rule_versions` row via the same
+    catalogue-bypass technique `freeze-evaluations.live.test.ts`/
+    `ambient-state.live.test.ts` already establish, confirms the page
+    still renders with the degraded ambient section, and confirms a
+    trade can still be logged through the rest of the form).
 **Action:** same root cause and same fix as the freeze-time entry above
 (a stale `rule_versions` row referencing a retired/renamed catalogue
 operand) — if you've already investigated one, you've investigated both.
@@ -727,3 +759,57 @@ before assuming it's isolated). Building nightly recompute (once real
 scheduler infra exists) would also close the same "no independent safety
 net" gap the `operand_distributions` entry names — worth prioritizing
 once a Vercel project/cron surface exists, not before.
+
+## `rule_overrides` write failing silently
+
+**Source:** Module 04 §5.9 — "When the trader proceeds past a visible
+breach, write a `rule_overrides` row. Not a penalty — the data behind the
+most persuasive line the product can produce: 'You've exceeded your risk
+cap 12 times.'" Owning code: `app/(app)/rules/actions.ts`'s
+`recordOverride` Server Action (Slice 8), called automatically and
+fire-and-forget from `app/(app)/trades/manual-entry/ManualEntryScreen.tsx`
+(Slice 10d part 1) for every currently-`breach`-tinted ambient rule at the
+moment a trade is submitted — this call deliberately never gates or
+delays the real trade submission, per §5.9's "never blocks."
+
+**What this means operationally:** `recordOverride` failures are
+`console.error`-only on BOTH sides of this call today — server-side
+(`[rules/actions:recordOverride] insert failed:`, inside the action
+itself) and client-side (`[manual-entry] recordOverride failed:`, if the
+Server Action call itself throws/rejects reaching the client). Neither
+side retries, queues, or surfaces the failure to the trader in any way —
+by design, since a failed override write must never be allowed to look
+like a blocked trade submission. Before Slice 10d part 1, `recordOverride`
+(built in Slice 8) had no caller anywhere in the app yet — this failure
+mode was purely theoretical. As of Slice 10d part 1 it fires
+AUTOMATICALLY on every trade submitted while any rule is in `breach`,
+which means a silent failure here now systematically undercounts the
+"you've exceeded your cap N times" statistic on every affected trade —
+worth treating as a real (if low-severity) alerting gap now that there's
+an actual call site for it to fail at.
+
+**How to check:** grep application logs for `recordOverride] insert
+failed` (server-side) or `[manual-entry] recordOverride failed` (client-
+side) — neither log line currently includes the `ruleId`/`tradeId` that
+failed to write (a gap worth closing if this ever needs real
+investigation rather than just noticing the failure exists). A live
+cross-check for a specific trader: compare how many times their ambient
+strip should have shown a `breach` tint (not directly logged anywhere
+today) against `select count(*) from retrospeq.rule_overrides where
+user_id = $1` — a suspiciously low override count relative to how often
+that trader trades over-cap is the only current signal something is being
+dropped.
+
+**Action:** an isolated failure (a transient DB hiccup on one override
+insert) is invisible and self-contained — it does not corrupt or block
+anything else, and the trader's trade submission itself is unaffected.
+There is no self-healing retry today, unlike `operand_distributions`/
+`adherence_weekly`'s "next successful run recomputes the full state"
+pattern — a dropped override row is simply gone, since nothing
+re-derives it from other data later. If this needs to become a
+non-silent gap (e.g. once real error-tracking infra exists, per
+PROGRESS.md's "Infra gaps"), the fix is straightforward: both
+`console.error` call sites already have everything needed (`ruleId`,
+`observed`, the caught `err`) to attach to a real alerting pipeline
+without any further code change — this is a logging-destination gap, not
+a missing-data gap.

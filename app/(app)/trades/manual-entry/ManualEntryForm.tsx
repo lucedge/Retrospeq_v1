@@ -23,8 +23,27 @@ import { createManualTradeAction, type ManualEntryActionState } from '../actions
  * `connect/page.tsx`'s own text inputs use elsewhere in this repo; there
  * is no stepper primitive in the design system built for arbitrary
  * decimal price entry.
+ *
+ * `accountId`/`onAccountIdChange` (Slice 10d): the account picker is now a
+ * CONTROLLED select, lifted to `ManualEntryScreen.tsx` — that sibling
+ * component's own ambient strip (§5.9) needs to know which account is
+ * selected too, since `getAmbientAccountState` is per-account and the
+ * strip must re-fetch the moment this select changes. `onSubmitProceed`
+ * (optional) fires on the form's own `onSubmit`, alongside — never
+ * blocking or delaying — the real `action={formAction}` submission; see
+ * `ManualEntryScreen.tsx`'s `handleProceedPastBreach` for what it does.
  */
-export function ManualEntryForm({ accounts }: { accounts: { id: string; label: string }[] }) {
+export function ManualEntryForm({
+  accounts,
+  accountId,
+  onAccountIdChange,
+  onSubmitProceed,
+}: {
+  accounts: { id: string; label: string }[];
+  accountId: string;
+  onAccountIdChange: (accountId: string) => void;
+  onSubmitProceed?: () => void;
+}) {
   const [state, formAction, pending] = useActionState<ManualEntryActionState | undefined, FormData>(
     createManualTradeAction,
     undefined,
@@ -46,7 +65,7 @@ export function ManualEntryForm({ accounts }: { accounts: { id: string; label: s
   }
 
   return (
-    <form action={formAction} noValidate className="flex flex-col gap-5">
+    <form action={formAction} onSubmit={onSubmitProceed} noValidate className="flex flex-col gap-5">
       <div className="flex flex-col gap-1.5">
         <label htmlFor="accountId" className="rq-label">
           Account
@@ -54,7 +73,8 @@ export function ManualEntryForm({ accounts }: { accounts: { id: string; label: s
         <select
           id="accountId"
           name="accountId"
-          defaultValue={accounts[0]?.id}
+          value={accountId}
+          onChange={(e) => onAccountIdChange(e.target.value)}
           className="rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
         >
           {accounts.map((a) => (
