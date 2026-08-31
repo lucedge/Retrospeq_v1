@@ -119,7 +119,9 @@ vi.mock('server-only', () => ({}));
 
 const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule, recordOverride } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
-const { RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import('@/lib/rules/rules-repository');
+const { RuleCreateCapExceededError, RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import(
+  '@/lib/rules/rules-repository'
+);
 const { RuleLifecycleConflictError } = await import('@/lib/rules/severity-lifecycle-repository');
 const { RuleOverrideTradeNotOwnedError } = await import('@/lib/rules/rule-overrides-repository');
 
@@ -162,10 +164,32 @@ describe('createRule', () => {
         scope: 'global',
         scopeId: null,
         rendered: 'Never risk more than 1.5% per trade.',
+        // The entitlement pre-check's OWN `limit` is threaded straight
+        // through to the repository's guarded-insert backstop — see
+        // `insertRuleAndVersion`'s own header ("CONCURRENCY FIX
+        // (2026-08-29...)") for why this is the real invariant-enforcing
+        // check, not merely the earlier `canForUser` call above it.
+        capLimit: 3,
       }),
     );
     expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
   });
+
+  it(
+    'a concurrent/cross-tab double-submit that wins the early canForUser pre-check but LOSES insertRuleAndVersion\'s own guarded-insert race ' +
+      '(RuleCreateCapExceededError) is mapped to the SAME ENTITLEMENT_LIMIT shape as the early pre-check, not an internal error',
+    async () => {
+      canForUserMock.mockResolvedValue({ allowed: true, reason: 'ok', limit: 3, used: 2 });
+      insertRuleAndVersionMock.mockRejectedValue(new RuleCreateCapExceededError(FAKE_USER.id, 3));
+
+      const result = await createRule({ operandId: 'risk_pct', op: 'lte', value: 1.5, scope: 'global' });
+
+      expect(result.success).toBeUndefined();
+      expect(result.error?.code).toBe('ENTITLEMENT_LIMIT');
+      expect(result.error?.user_message).toContain('3 of 3');
+      expect(result.error?.retryable).toBe(false);
+    },
+  );
 
   it('rejects an unknown operand_id with code UNKNOWN_OPERAND, before any repository call', async () => {
     const result = await createRule({ operandId: 'not_a_real_operand', op: 'lte', value: 1, scope: 'global' });

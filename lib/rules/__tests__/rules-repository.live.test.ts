@@ -16,6 +16,7 @@ import {
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
   insertRuleAndVersion,
+  RuleCreateCapExceededError,
   RuleEditConflictError,
 } from '../rules-repository';
 
@@ -125,6 +126,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
       scopeId: null,
       evaluation: 'pre_entry',
       rendered: 'Never risk more than 2% per trade.',
+      capLimit: null,
     });
 
     expect(result.version).toBe(1);
@@ -150,6 +152,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
       scopeId: null,
       evaluation: 'pre_entry',
       rendered: 'Never risk more than 3% per trade.',
+      capLimit: null,
     });
 
     const edited = await applyRuleEdit(user.id, created.ruleId, 1, 'risk_pct', 'lte', 1.5, 'Never risk more than 1.5% per trade.');
@@ -186,6 +189,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
       scopeId: null,
       evaluation: 'pre_entry',
       rendered: 'Never risk more than 4% per trade.',
+      capLimit: null,
     });
 
     // The "winner" — a real, successful edit, version 1 -> 2.
@@ -227,6 +231,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
         scopeId: null,
         evaluation: 'pre_entry',
         rendered: 'Never risk more than 4.5% per trade.',
+        capLimit: null,
       });
 
       // A second, raw connection deliberately holds an UNCOMMITTED
@@ -286,6 +291,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
       scopeId: null,
       evaluation: 'session',
       rendered: "Stop trading once today's P&L drops below -2%.",
+      capLimit: null,
     });
     const ruleB = await insertRuleAndVersion({
       userId: user.id,
@@ -296,6 +302,7 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
       scopeId: null,
       evaluation: 'session',
       rendered: "Stop trading once today's P&L drops below -5%.",
+      capLimit: null,
     });
 
     const both = await fetchActiveGlobalRuleVersionsForOperand(user.id, 'daily_pnl_pct');
@@ -335,4 +342,156 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
     expect(tiers.sort()).toEqual(['t0', 't1', 't2'].sort());
     expect(tiers).toHaveLength(3);
   });
+});
+
+/**
+ * CONCURRENCY FIX (2026-08-29) — genuine two-connection proof, own
+ * `describe` block with its OWN dedicated user (deliberately NOT reusing
+ * the shared `user` above, whose active-rule count depends on every other
+ * test in this file having already run against it — a real, fresh
+ * fixture with a KNOWN active-rule count is the only way to make "exactly
+ * at the cap" a meaningful precondition).
+ *
+ * Matches `severity-lifecycle.independent-verification.live.test.ts`'s own
+ * gold-standard two-connection technique for `promoteRuleSeverity`'s
+ * analogous fix: a second, raw connection genuinely holds the SAME
+ * `pg_advisory_xact_lock(hashtext(user_id))` `insertRuleAndVersion` itself
+ * takes, plus an uncommitted extra active rule that lands the user at
+ * exactly `capLimit`; the real `insertRuleAndVersion` call is started for
+ * real and the test polls `pg_stat_activity` until Postgres confirms it is
+ * genuinely BLOCKED on that lock (not merely slow) before releasing the
+ * race connection — proving an actual live interleaving, not a timing
+ * guess.
+ */
+describe.skipIf(!env)('insertRuleAndVersion — CONCURRENCY FIX (2026-08-29): genuine two-connection cap-race proof (live DB)', () => {
+  let db: Client;
+  let user: TestAuthUser;
+
+  async function waitForBlockedQuery(ownerConn: Client, queryPattern: string, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const res = await ownerConn.query<{ pid: number }>(
+        `select pid from pg_stat_activity where query ilike $1 and wait_event_type = 'Lock'`,
+        [queryPattern],
+      );
+      if (res.rows.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`waitForBlockedQuery: no query matching ${JSON.stringify(queryPattern)} was found blocked on a lock within ${timeoutMs}ms.`);
+  }
+
+  beforeAll(async () => {
+    if (!env) return;
+    db = await connectAsOwner(env);
+    user = await createTestAuthUser(env, 'rules-repo-create-cap-race');
+  }, 30_000);
+
+  afterAll(async () => {
+    if (!env) return;
+    await db.query('begin');
+    await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
+    await db.query('delete from retrospeq.rules where user_id = $1', [user.id]);
+    await db.query('commit');
+    await deleteTestAuthUser(env, user.id).catch(() => {});
+    await db.end();
+  });
+
+  it(
+    'GENUINE concurrency at the cap: a real second connection holding the SAME advisory lock plus an uncommitted extra active rule (landing the user at capLimit=3) forces the real insertRuleAndVersion call to genuinely block, then correctly lose — RuleCreateCapExceededError, never a 4th active rule',
+    async () => {
+      // Exactly capLimit - 2 = 1 pre-existing active rule, seeded directly
+      // (owner connection, bypasses RLS -- setup only, not the thing under
+      // test).
+      await db.query(
+        `insert into retrospeq.rules (user_id, current_version, scope, severity, origin, evaluation, state)
+         values ($1, 1, 'global', 'soft', 'authored', 'pre_entry', 'active')`,
+        [user.id],
+      );
+
+      const raceConn = new Client({ connectionString: env!.SUPABASE_DB_URL });
+      await raceConn.connect();
+      try {
+        // raceConn takes the EXACT same advisory lock insertRuleAndVersion's
+        // own first statement takes, then inserts a SECOND active rule
+        // (uncommitted) -- landing the user at exactly 2 active rules, one
+        // short of capLimit=3, but NOT yet visible to any other
+        // transaction's snapshot.
+        await raceConn.query('begin');
+        await raceConn.query('select pg_advisory_xact_lock(hashtext($1::text))', [user.id]);
+        await raceConn.query(
+          `insert into retrospeq.rules (user_id, current_version, scope, severity, origin, evaluation, state)
+           values ($1, 1, 'global', 'soft', 'authored', 'pre_entry', 'active')`,
+          [user.id],
+        );
+
+        // Started for real -- genuinely in flight, requesting the 3rd
+        // (cap-filling) rule against capLimit=3.
+        const createPromise = insertRuleAndVersion({
+          userId: user.id,
+          operandId: 'risk_pct',
+          op: 'lte',
+          value: 2.5,
+          scope: 'global',
+          scopeId: null,
+          evaluation: 'pre_entry',
+          rendered: 'Never risk more than 2.5% per trade (race attempt, should be rejected or land at exactly cap).',
+          capLimit: 3,
+        });
+
+        // Block until Postgres itself confirms insertRuleAndVersion's own
+        // connection is genuinely queued on the SAME advisory lock --
+        // proves it actually reached its own first statement, not merely
+        // that it would if it got there.
+        await waitForBlockedQuery(db, '%select pg_advisory_xact_lock%');
+
+        // Release the race connection's second rule for real -- the user
+        // is now committed at exactly 2 active rules.
+        await raceConn.query('commit');
+
+        // The real call, having genuinely blocked on the advisory lock and
+        // only now proceeding, re-evaluates its own guarded INSERT's
+        // correlated count(*) against the COMMITTED post-race count (2)
+        // -- 2 < 3, so THIS call actually wins and lands the user at
+        // exactly 3. (This specific interleaving is the "last slot" case,
+        // not the over-cap case -- see the second assertion below for the
+        // over-cap case, which reuses this same fixture at the now-full
+        // cap.)
+        const created = await createPromise;
+        expect(created.version).toBe(1);
+
+        const afterFirstRace = await db.query<{ c: string }>(
+          `select count(*)::text as c from retrospeq.rules where user_id = $1 and state = 'active'`,
+          [user.id],
+        );
+        expect(Number(afterFirstRace.rows[0].c)).toBe(3); // exactly at cap, never exceeded
+
+        // Now genuinely AT the cap (3 active rules) -- a second real
+        // concurrent attempt (no race connection needed this time, the cap
+        // is already committed) must be rejected outright, not silently
+        // exceed it.
+        await expect(
+          insertRuleAndVersion({
+            userId: user.id,
+            operandId: 'risk_pct',
+            op: 'lte',
+            value: 2.6,
+            scope: 'global',
+            scopeId: null,
+            evaluation: 'pre_entry',
+            rendered: 'Never risk more than 2.6% per trade (over-cap attempt, must be rejected).',
+            capLimit: 3,
+          }),
+        ).rejects.toThrow(RuleCreateCapExceededError);
+
+        const finalCount = await db.query<{ c: string }>(
+          `select count(*)::text as c from retrospeq.rules where user_id = $1 and state = 'active'`,
+          [user.id],
+        );
+        expect(Number(finalCount.rows[0].c)).toBe(3); // still exactly 3 -- the over-cap attempt wrote nothing
+      } finally {
+        await raceConn.end();
+      }
+    },
+    30_000,
+  );
 });

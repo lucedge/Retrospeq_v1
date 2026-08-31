@@ -21,6 +21,7 @@ import { TightenOnlyViolationError, checkTightenOnly } from '@/lib/rules/validat
 import { UnsatisfiableRuleError, checkSatisfiability } from '@/lib/rules/validate-satisfiability';
 import { RenderSentenceError, renderSentence } from '@/lib/rules/render-sentence';
 import {
+  RuleCreateCapExceededError,
   RuleEditConflictError,
   RuleNotEditableError,
   RuleNotFoundError,
@@ -256,7 +257,13 @@ export async function createRule(input: CreateRuleInput): Promise<RuleActionStat
     throw err;
   }
 
-  // Step 5 — entitlement (free tier: 3 rules, §4.3 of Module 01).
+  // Step 5 — entitlement (free tier: 3 rules, §4.3 of Module 01). This is
+  // a fast, friendly pre-check for the common (non-racing) case only —
+  // `entitlement.limit` is threaded through to `insertRuleAndVersion`
+  // below as `capLimit`, whose OWN guarded INSERT is the real,
+  // race-proof, invariant-enforcing backstop (see that function's header,
+  // "CONCURRENCY FIX (2026-08-29...)", for why this two-step shape is
+  // deliberate, matching `promoteRuleSeverity`'s established precedent).
   const entitlement = await canForUser(user.id, 'rules.create');
   if (!entitlement.allowed) {
     return {
@@ -327,6 +334,7 @@ export async function createRule(input: CreateRuleInput): Promise<RuleActionStat
       scopeId,
       evaluation: operand.evaluation,
       rendered,
+      capLimit: entitlement.limit,
     });
     revalidatePath('/rules');
     return {
@@ -334,6 +342,22 @@ export async function createRule(input: CreateRuleInput): Promise<RuleActionStat
       rule: { id: inserted.ruleId, operandId, op, value, rendered, scope, scopeId, version: inserted.version },
     };
   } catch (err) {
+    // Lost the race against the SAME cap the pre-check above just passed
+    // non-atomically — see `insertRuleAndVersion`'s own header
+    // ("CONCURRENCY FIX (2026-08-29...)") for exactly how a concurrent
+    // caller reaches this. Mapped to the SAME `ENTITLEMENT_LIMIT` shape
+    // (and the same `ruleCreateLimitMessage` copy) as the early pre-check
+    // above, not a generic internal error — a trader who loses this race
+    // should see the honest "you've reached your rule limit" message.
+    if (err instanceof RuleCreateCapExceededError && err.capLimit !== null) {
+      return {
+        error: {
+          code: 'ENTITLEMENT_LIMIT',
+          user_message: ruleCreateLimitMessage(err.capLimit, err.capLimit),
+          retryable: false,
+        },
+      };
+    }
     console.error('[rules/actions:createRule] insert failed:', err);
     return {
       error: { code: 'RULE_CREATE_INTERNAL', user_message: 'Something went wrong saving your rule. Please try again.', retryable: true },

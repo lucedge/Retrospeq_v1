@@ -144,6 +144,7 @@ describe.skipIf(!env)('lib/rules/guided-front-door.ts (live DB)', () => {
       scopeId: null,
       evaluation: 'pre_entry',
       rendered: 'Never risk more than 1.5% per trade.',
+      capLimit: null,
     });
 
     const { seedGuidedRuleThresholds } = await import('../guided-front-door');

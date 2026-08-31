@@ -105,11 +105,49 @@ export interface InsertRuleInput {
   scopeId: string | null;
   evaluation: 'pre_entry' | 'at_close' | 'session';
   rendered: string;
+  /**
+   * The caller's OWN `rules.create` entitlement cap (Module 01 §4.3: free
+   * 3, pro unlimited), sourced from `canForUser(userId, 'rules.create')`'s
+   * `entitlement.limit` — never re-derived or hardcoded here, matching
+   * `promoteRuleSeverity`'s own `hardCapLimit` parameter convention (this
+   * file stays free of any entitlement-table knowledge, same separation
+   * `severity-lifecycle-repository.ts`'s own header establishes). `null`
+   * means unlimited (Pro) — the guarded insert below skips the count check
+   * entirely in that case, exactly like `resolveQuantityCapability`'s own
+   * `limit === null` short-circuit.
+   */
+  capLimit: number | null;
 }
 
 export interface InsertedRule {
   ruleId: string;
   version: number;
+}
+
+/**
+ * Thrown when `insertRuleAndVersion`'s own guarded INSERT (see that
+ * function's header, "CONCURRENCY FIX") returns zero rows — the caller's
+ * active-rule count reached `capLimit` between `createRule`'s own earlier,
+ * non-atomic `canForUser` pre-check and this guarded write actually
+ * running (the exact race a concurrent/cross-tab double-submit produces).
+ * The Server Action layer (`app/(app)/rules/actions.ts`) maps this to the
+ * SAME `ENTITLEMENT_LIMIT` user-facing shape the early pre-check already
+ * returns — a trader who loses this race sees the same honest "you've
+ * reached your rule limit" message, not an internal error, matching
+ * `RuleLifecycleConflictError`'s own "lost race -> named, typed error, not
+ * a silent no-op or a generic 500" convention.
+ */
+export class RuleCreateCapExceededError extends Error {
+  readonly code = 'RULE_CREATE_CAP_EXCEEDED' as const;
+  constructor(
+    readonly userId: string,
+    readonly capLimit: number | null,
+  ) {
+    super(
+      `User ${userId} already has ${capLimit ?? 'unlimited'} (or more) active rules -- insertRuleAndVersion's own guarded INSERT rejected this new rule rather than exceeding the cap.`,
+    );
+    this.name = 'RuleCreateCapExceededError';
+  }
 }
 
 /**
@@ -122,16 +160,69 @@ export interface InsertedRule {
  * `'authored'` origin (§2.1's other origins — graduated/detected/ai/firm
  * — belong to modules that don't exist yet, per the schema migration's
  * own comment), never a caller-supplied value for either column.
+ *
+ * CONCURRENCY FIX (2026-08-29, `retrospeq-tester` independent verification
+ * pass over Slice 10b, `e2e/rules-general-editor.independent-verify.spec.ts`'s
+ * cross-tab race test): `createRule`'s entitlement check
+ * (`canForUser(user.id, 'rules.create')`, backed by `rules-usage.ts`'s
+ * `countActiveRules`) and this function's write used to be two SEPARATE,
+ * unguarded round trips with no atomic guard spanning both — the exact
+ * same bug CLASS Slice 7's own `promoteRuleSeverity` fix (see that
+ * function's header, "CONCURRENCY FIX (2026-08-25...)") already closed for
+ * the `rules.hard` cap. Two concurrent `createRule` calls for the same
+ * user, each starting from "2 active rules, cap 3," could each
+ * independently read "room for one more" (neither sees the other's still-
+ * uncommitted insert under READ COMMITTED) and both commit, landing at 4
+ * against a cap of 3 — reproduced 3/3 independent runs, including a
+ * genuine two-browser-context cross-tab race with no shared client state.
+ *
+ * Fixed the same way: `pg_advisory_xact_lock(hashtext(user_id))` as the
+ * FIRST statement in this function's transaction, before the guarded
+ * INSERT runs. Transaction-scoped, released automatically at this
+ * transaction's own COMMIT/ROLLBACK (`withUserConnection` owns both), no
+ * manual unlock. A second concurrent `insertRuleAndVersion` call for the
+ * SAME user now genuinely blocks on this lock until the first transaction
+ * commits or rolls back — at which point its own correlated `count(*)`
+ * subquery (the `insert ... select ... where $5::int is null or (select
+ * count(*) ...) < $5` guard below, same "fold the cap into the write's own
+ * WHERE clause, not a separate read-then-write step" reasoning
+ * `promoteRuleSeverity`'s header documents) runs against the already-
+ * committed post-insert state and correctly counts 3, failing the `< $5`
+ * guard and returning zero rows. Two concurrent creates for TWO DIFFERENT
+ * users hash to (almost certainly) different lock keys and never contend.
+ *
+ * `createRule`'s existing EARLY `canForUser` pre-check in
+ * `app/(app)/rules/actions.ts` stays exactly as-is — per
+ * `promoteRuleSeverity`'s own precedent, it still performs an earlier,
+ * non-atomic pre-check for a fast, friendly `ENTITLEMENT_LIMIT` message in
+ * the common (non-racing) case; THIS guarded INSERT is the actual
+ * invariant-enforcing backstop, not merely a formality.
  */
 export async function insertRuleAndVersion(input: InsertRuleInput): Promise<InsertedRule> {
   return withUserConnection(input.userId, async (client) => {
+    // Serializes concurrent creates for the SAME user before the
+    // count-guarded INSERT below runs — see this function's own header
+    // ("CONCURRENCY FIX") for why the correlated subquery alone is not
+    // race-safe without it. Not the same `$1` as the INSERT below (a
+    // separate statement, its own parameter list).
+    await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [input.userId]);
+
     const ruleRes = await client.query<{ id: string }>(
       `insert into retrospeq.rules
          (user_id, current_version, scope, scope_id, severity, origin, evaluation, state)
-       values ($1, 1, $2, $3, 'soft', 'authored', $4, 'active')
+       select $1, 1, $2, $3, 'soft', 'authored', $4, 'active'
+        where $5::int is null or (
+          select count(*)
+            from retrospeq.rules r2
+           where r2.user_id = $1
+             and r2.state = 'active'
+        ) < $5
        returning id`,
-      [input.userId, input.scope, input.scopeId, input.evaluation],
+      [input.userId, input.scope, input.scopeId, input.evaluation, input.capLimit],
     );
+    if ((ruleRes.rowCount ?? 0) !== 1) {
+      throw new RuleCreateCapExceededError(input.userId, input.capLimit);
+    }
     const ruleId = ruleRes.rows[0].id;
 
     await client.query(
