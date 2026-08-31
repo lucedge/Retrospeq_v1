@@ -31,249 +31,85 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-08-31): Module 04 Slices 9, 10a, 10b, AND 10d part 1
-are all DONE** (full coder → tester → security-reviewer → qa gate
-sequence passed on each). Slice 10a's QA pass found and closed one real
-`.rq-num` gap. Slice 10b's independent tester verification found a REAL,
-REPRODUCIBLE PRODUCTION BUG — a cross-tab double-submit race that let a
-free-tier trader exceed the documented 3-rule cap, a pre-existing gap in
-`createRule`/`insertRuleAndVersion` shared with Slice 10a — fixed with the
-same `pg_advisory_xact_lock` pattern Slice 7 already established for a
-different cap, then security-reviewed (5/5) and qa'd (PASS, one
-non-blocking follow-up: `RuleEditor.tsx`'s entitlement-count header goes
-stale within a session, fixed same day, QA-confirmed). Slice 10d part 1
-(§5.9 UI, the ambient strip on `/trades/manual-entry`) is now FULLY DONE
-— coder pass found and closed a real design-system CSS gap (`.ambient`
-was never shipped despite §6.1 naming it directly) and a real
-Strict-Mode-induced double-fetch bug before handoff; independent tester
-verification found the coder's "7 failures are flaky" diagnosis imprecise
-(9 failures, 5 of them a deterministic too-tight-timeout issue rather than
-classic flakiness, none related to this slice) and confirmed a real,
-worth-fixing SSR-error-handling gap (`page.tsx`'s initial
-`getAmbientAccountState` read wasn't wrapped the way the new
-`fetchAmbientState` action was) — fixed same day, verified via a real
-malformed-rule E2E test; security-reviewer PASS (5/5 — `recordOverride`'s
-inputs confirmed server-sourced end-to-end, rate-limit scope correctly
-keyed, cross-user isolation re-confirmed a third time, SSR fix confirmed
-leak-free); qa PASS (all 5 ambient states screenshot-verified, achromatic
-tint confirmed a fourth time, `docs/runbook.md` gained a new entry for
-`recordOverride`'s now-higher-stakes silent-failure mode). **Slice 10d
-part 2 — the adherence display, §5.6 UI — is now FULLY DONE (2026-08-31)**
-— full coder → tester → security-reviewer → qa gate sequence passed. See
-the phase-status table's Slice 10d part 2 entry for the complete write-up
-(coder's original build, the independent tester's 9-point re-derivation
-including the now-3-times-confirmed build-memory OOM pattern, security-
-reviewer PASS 6/6, qa PASS on all 7 items). **Slice 10e (rule
-list/browsing view, story 1.1, plus §5.7 severity promote/demote/retire
-controls) — both tester-found bugs are now FIXED (2026-08-31), still NOT
-DONE pending security-reviewer/qa.** Independent tester verification
-(2026-08-31) found a REAL, REPRODUCIBLE BUG (the hard-cap swap gets stuck
-in "Swapping…" forever, 3/3 reproductions in isolation against the
-shipped E2E test, root cause a client-side hang with no timeout) and a
-REAL, CONFIRMED free-tier-messaging gap (an ineligible free-tier rule's
-rejection message never mentions the Pro requirement at all, only
-eligibility gates that implicitly overstate what would actually let the
-trader promote). **Both fixed (coder fix pass, 2026-08-31)** — search
-"CODER FIX PASS DONE" under the Slice 10e entry below for the full
-write-up: bug #1 closed with a new `app/(app)/rules/with-timeout.ts`
-(`Promise.race`-based client deadline, wired into every awaited Server
-Action call in `RuleList.tsx`, proven deterministically with a
-never-settling-promise unit test, then verified live with 5/5 clean
-isolated E2E re-runs plus a full 6/6 file re-run — the intervening
-failures during verification turned out to be self-inflicted rate-limit
-exhaustion and host memory pressure from repeated manual re-runs, not the
-bug persisting, both root-caused and fixed rather than assumed away); bug
-#2 closed by attaching a new `eligibility.proRequired` flag so a
-free-tier trader always sees both the gate breakdown AND the Pro
-requirement together. **Independent RE-VERIFICATION of both fixes DONE
-(2026-08-31, tester) — PASS, both fixes hold up under adversarial retest,
-no new gap found.** Full write-up:
+**AT A GLANCE (2026-08-31): Module 04 Slices 9, 10a, 10b, 10d part 1,
+10d part 2, AND 10e are ALL DONE** — full coder → tester →
+security-reviewer → qa gate sequence passed on every one. Real bugs found
+and fixed at nearly every stage, not rubber-stamped: Slice 10a (a
+`.rq-num` gap), Slice 10b (a cross-tab entitlement-cap race shared with
+10a), Slice 10d part 1 (a missing design-system CSS gap, a React Strict
+Mode double-fetch bug, an unwrapped SSR error-handling gap), Slice 10d
+part 2 (a missing design-system CSS gap, same class as part 1), Slice 10e
+(a stuck-forever swap dialog on a hung Server Action call, and misleading
+free-tier promote messaging). Full write-ups for each are further down
+this section and in the phase-status table row above — search by slice
+number, not repeated here.
 
-1. **Timeout mechanism (`with-timeout.ts`) — tried to break it with 4
-   scenarios distinct from the coder's own 4 fake-timer tests, all
-   PASS.** (a) Exact-deadline race: a promise that settles in the SAME
-   tick the 15s deadline is reached — real settlement wins deterministically
-   (native `Promise` semantics: only the first `resolve`/`reject` call on
-   the race's own executor counts; `clearTimeout` always beats a
-   `setTimeout` macrotask that hasn't fired yet if the real promise's
-   microtask settles first). No window found where both the timeout path
-   and a late real response could each visibly affect UI state — confirmed
-   both by reading `withTimeout`'s own implementation (a `new Promise`
-   executor's `resolve`/`reject` are no-ops after the first call, by spec)
-   and by a fresh fake-timer test proving it. (b) Second-call-while-
-   first-pending: traced through the actual mechanism rather than assumed
-   — a genuinely late-arriving resolution from an ABANDONED first call
-   cannot resurrect or re-fire its own derived promise once that promise
-   already settled via timeout (proved with a dedicated fake-timer test:
-   attached a settle-counter to the derived promise, advanced past the
-   timeout, then resolved the real underlying promise 5s later — settle
-   count stayed at 1, value stayed the original `ActionTimeoutError`
-   rejection). Separately confirmed via code reading that the UI itself
-   structurally prevents a true concurrent double-click on the SAME row's
-   busy control (`disabled={row.busy}` gates both the promote/demote AND
-   retire buttons together, and the swap chooser). One adjacent, non-
-   timeout-related observation worth flagging (see item 5 below) — NOT
-   a gap in the timeout fix itself. (c) Checked every call site directly
-   in `RuleList.tsx` rather than trusting the coder's claim of
-   uniformity: `handlePromote` (line 290), `handleDemote` (line 312),
-   `handleRetireConfirm` (line 334), and BOTH of `handleSwap`'s sequential
-   calls (lines 420 and 436) are all wrapped in `withTimeout` — confirmed
-   uniform, no gap. (d) A promise that rejects with a real `Error` object
-   1ms before the deadline: the real rejection reason propagates
-   correctly and is never masked/replaced by a timeout artifact (own
-   fresh fake-timer test, distinct fixture from the coder's own "1000ms"
-   rejection test — mine rejects at 14,999ms, one tick from the deadline).
-   All 4 of my own adversarial fake-timer tests written to a throwaway
-   file (`with-timeout.adversarial-verify.test.ts`), run (4/4 passed),
-   then deleted per this repo's own established "throwaway, not shipped"
-   independent-verification convention — not part of the permanent suite.
-2. **`proRequired` — re-confirmed with THREE fresh live-DB/E2E fixtures,
-   none reused from the coder's own mocked `actions.test.ts` fixture.**
-   Free-tier (no `subscriptions` row — confirmed via code reading that
-   this defaults to `'free'`) trader with a rule created 3 days ago
-   (fails `RULE_NOT_OLD_ENOUGH`, a different concrete ineligibility
-   fixture than the coder's own): the rendered UI showed the full gate
-   breakdown ("Active for 3 of the 42 days...", "0 of 20 applicable
-   evaluations...") AND "Hard rules are also a Pro feature. Upgrade to
-   promote a rule." together, screenshot-confirmed. Pro-tier trader,
-   same ineligibility fixture: breakdown only, explicitly asserted
-   ABSENT of "Pro feature"/"Upgrade" text, screenshot-confirmed ("Hard
-   rules: 0 of 6 used" correctly shown instead, proving the Pro-tier
-   entitlement resolved correctly). Free-tier trader with a genuinely
-   ELIGIBLE rule (60-day-old, 20 real trades/evaluations, 100%
-   compliance — reused the existing `seedEligibleSoftRule` helper):
-   confirmed the ORIGINAL, unchanged `ENTITLEMENT_LIMIT` denial path
-   ("Hard rules are a Pro feature. Upgrade to promote a rule.", no
-   structured breakdown box at all since the rule IS eligible on the
-   merits) still fires exactly as it did before this fix — this is the
-   one pre-existing path the fix was explicitly not supposed to touch,
-   and it wasn't. All 3 in a throwaway Playwright spec
-   (`e2e/rules-list.prorequired-verify.spec.ts`, 3/3 passed against the
-   real dev Supabase project, screenshots read and confirmed
-   achromatic/on-brand — single accent-colour `.rq-tag--on` token, no
-   red/green anywhere), then deleted (not shipped).
-3. **Entitlement-info leakage — checked, none found.** `promoteRule`'s
-   ineligible branch attaches only a single boolean
-   (`hardEntitlement.reason === 'plan'`) as `proRequired` — the full
-   `EntitlementResult` (`allowed`/`reason`/`limit`/`used`) is never
-   spread into the response; the client never learns the Pro-tier hard-
-   rule cap number, usage count, or any entitlement field beyond this one
-   yes/no fact, which is exactly what the UI needs to render the
-   additive line and nothing more.
-4. **Full targeted suite re-run independently**, all green: 90/90
-   `app/(app)/rules/__tests__/actions.test.ts` (mocked, includes the
-   coder's own fresh `proRequired` fixture); 11/11
-   `lib/rules/__tests__/rules-repository.live.test.ts` (live DB); 6/6
-   `e2e/rules-list.spec.ts` full file (1.9 min); the swap test specifically
-   re-run 3 MORE times in full isolation beyond that (`-g "promoting a
-   7th rule"`, 39.6s/39.5s/40.7s, all green) — no rate-limit exhaustion or
-   flakiness observed this pass. `npx tsc --noEmit` clean (exit 0).
-   `npx eslint .` clean: 0 errors, the same 19 pre-existing warnings this
-   ledger has already logged repeatedly (unrelated files —
-   `accounts/actions.ts`, `plan/actions.ts`, `privacy/actions.ts`,
-   `security/actions.ts`, `trades/actions.ts`, `(auth)/actions.ts`,
-   `broker/*`, `entitlements/billing.ts`, all pre-existing
-   `_unusedParam`-shaped warnings, none touched by this slice).
-   `npm run build` was NOT re-run this pass (not in this dispatch's
-   named targeted-suite list; the prior coder fix pass's own `tsc`/
-   `eslint` were already independently reconfirmed clean here, and this
-   session's memory stayed flat — 6.3GB physical/2.6GB virtual free both
-   before and after — so no OOM-relevant state changed).
-5. **One adjacent, non-blocking UI observation found while tracing the
-   timeout mechanism, NOT a defect in either fix, logged here rather than
-   silently dropped**: `RuleRow`'s hard-cap swap chooser
-   (`row.hardCapChooser`) and the row's normal promote/demote/retire
-   button block are not mutually exclusive in the JSX — both can render
-   at once (the chooser appears after a failed promote attempt, but
-   `row.busy` is independently `false` again by then, so the normal
-   "Promote to hard" button is also live). A trader could click "Promote
-   to hard" directly instead of using the chooser; if that direct
-   promote happens to succeed (e.g., the cap freed up elsewhere between
-   the two clicks), `handlePromote`'s success branch does not clear
-   `hardCapChooser`/`swapSelectedRuleId`/`swapError`, so the stale
-   "You already have N hard rules" chooser would remain visible
-   alongside a rule that has already flipped to Hard. Not a
-   timeout-related race, not reachable through the swap flow itself, and
-   not something this dispatch's own scope (re-verifying the two named
-   fixes) covers fixing — flagging as a genuine, small, separate finding
-   for a future pass rather than scope-creeping a fix into this
-   re-verification dispatch.
+**A fresh, deliberate spec-coverage check against
+`retrospeq-design-system/modules/04-rulebook-and-evaluation.md`'s full
+story list (2026-08-31), not just declaring victory, found two things
+worth tracking that weren't before:**
 
-**Memory hygiene**: checked before starting (6.3GB physical / 2.6GB
-virtual free, zero stray node processes) and after finishing (same
-levels, zero node processes) — started exactly one `next dev` instance
-for this dispatch's own E2E runs, killed it (`Stop-Process -Force` on
-all `node` processes) before finishing, confirmed via `Get-Process node`
-returning empty.
+1. **Story 2.5's UI half (editing an EXISTING rule's threshold value) has
+   ZERO UI anywhere, and — unlike discovery (§1.3) or strategy-scoped
+   rules (§1.5/1.6/1.7) — is NOT blocked on any other module.**
+   `editRule` (`app/(app)/rules/actions.ts`) is fully built, tested, and
+   security-reviewed (Slice 2, 2026-08-19) — a trader can create a rule,
+   promote/demote/retire it, but cannot change its threshold once
+   created. Both Slice 10b's and Slice 10e's own coder dispatches
+   independently, explicitly scoped this out as "a separate future
+   decision" — but neither claimed a slice number for it, which is
+   EXACTLY the pattern that let the promote/demote/retire UI gap go
+   untracked for 5 weeks before Slice 10d part 2's QA pass caught it.
+   **Given its own number now: Slice 10f.** Genuinely buildable today,
+   no external blocker.
+2. **`lib/privacy/export.ts`'s `buildExportBundle` does not include
+   Module 04's data at all, and its own header comment is stale** — it
+   still says "Module 02 isn't built," though Module 02 has been DONE
+   since 2026-08-23. Today it exports only `profile`/`tradingAccounts`/
+   `subscription`/`mfa` — zero trades, zero rules/versions/evaluations/
+   overrides/adherence, directly contradicting §14's own explicit
+   requirement ("Included in export as rules, versions, evaluations and
+   overrides"). **Erasure, by contrast, IS genuinely comprehensive** —
+   verified directly: every Module 04 table has `user_id references
+   retrospeq.profiles(id) on delete cascade` (confirmed in
+   `supabase/migrations/20260823020000_rulebook_schema.sql`), and
+   `rule_evaluations`' own immutability trigger already special-cases
+   `retrospeq.erasure_in_progress` to let erasure delete a frozen row it
+   would otherwise protect forever — this was clearly built deliberately,
+   not an accident. Export is the one that's fallen behind, not erasure.
+   **This is a real, currently-open gap, but it's Module 01's own file
+   (the privacy/export feature), not a Module 04 UI slice** — logged here
+   rather than silently dropped, per AGENTS.md's "never fake it, always
+   flag it," but not claimed as a Module 04 slice number; worth a
+   dedicated dispatch against `lib/privacy/export.ts` at some point,
+   flagged in the decision log below (search "export.ts is stale").
 
-**→ Module 04 Slice 10e — SECURITY-REVIEWER PASS (2026-08-31, 4/4).**
-Traced the timeout mechanism's client-side-abandonment scenario end to
-end through `severity-lifecycle-repository.ts` (confirmed untouched by
-either fix via `git diff --stat`) — any second/retry Server Action call
-issued after a client-side timeout serializes on the SAME per-user
-`pg_advisory_xact_lock` and its guarded UPDATE Slice 7 already
-established, so the loser of any such race always gets an honest
-`RuleLifecycleConflictError`, never a double-promotion or a cap breach —
-client-side abandonment cannot produce a server-side inconsistency. The
-15s timeout masking a legitimate rejection (e.g. `RULE_HARD_CAP`/
-`RULE_PROMOTION_NOT_ELIGIBLE`) assessed as a UX rough edge only, not a
-security concern — both of those rejections return BEFORE any write
-happens, so a retry after a timeout deterministically reproduces the
-same honest rejection, nothing is hidden or bypassed by the delay.
-`proRequired` confirmed (independently, not just trusting the tester's
-own summary) to expose only a single derived boolean —
-`hardEntitlement.reason === 'plan'` — never the full `EntitlementResult`
-(limit/used/allowed untouched). The tester's own flagged chooser-bypass
-UX gap (item 5 above) assessed as having no security angle either — the
-server-side invariant (the atomic guarded UPDATE) is structurally
-independent of which buttons the client happens to render simultaneously,
-so a trader clicking "Promote to hard" directly instead of using the
-stale chooser still goes through the exact same guarded path as any
-other promote attempt. Standard non-negotiables re-confirmed clean
-(neither fix touches `rule_evaluations`, no compound-rule shape, no
-XP/gamification introduced).
+**Confirmed correctly, deliberately blocked on other modules (not
+oversights)**: Slice 10c (discovery, story 1.3) needs Module 05's
+pattern-detection logic. Stories 1.5/1.6(UI half)/1.7 (strategy-scoped
+rule creation, the tighten-only rejection alert, "applies to N of your M
+strategies" coverage messaging) all need Module 03's field registry/
+strategy picker — zero strategies exist anywhere in this repo yet, so
+there is nothing for a scope picker to show. §7.2's PROACTIVE
+promotion/relaxation offering (as opposed to the trader-INITIATED
+promote/demote/retire Slice 10e already built) is explicitly Module 06's
+job per §13's own relationships table (Module 04 "provides →" the
+eligibility/candidate data TO Module 06's weekly-review flow) — Slice
+10e's self-service version makes the underlying capability usable today
+without shortcutting Module 06's real job.
 
-**→ Module 04 Slice 10e — QA PASS (2026-08-31), ready to commit.** Both
-dispatch-specific states screenshot-verified fresh: the timeout message
-reads as an honest "may have already gone through, refresh to check"
-(not "Error:", not alarming), the affected control genuinely re-enables
-afterward rather than staying stuck; the `proRequired` state shows the
-full eligibility breakdown PLUS the Pro-required line as a clear
-addition, never a replacement, every number correctly `.rq-num`. All
-non-negotiables re-confirmed clean across the WHOLE slice, not just the
-two fixes: byte-identical/achromatic CSS between the two synced copies,
-no red/green anywhere (severity badges, swap alert, retire confirm,
-timeout state, `proRequired` state), no XP/gamification language on
-promote/demote/retire, no currency P&L, no stray notification triggers.
-Retire confirmation confirmed genuinely one-way (no reactivate path
-exists anywhere in the codebase, grep-confirmed). The chooser-bypass UX
-gap confirmed already tracked in this ledger (item 5 above), not lost.
-Spec fidelity confirmed, with one honest non-defect note: §6.1's own
-reference markup has no explicit standalone rule-list block, so the "one
-sentence, one tappable severity" list framing this slice built is a
-reasonable extrapolation from story 1.1's own authoring-screen framing
-applied to a browsing context — documented as such in `RuleList.tsx`'s
-own header comment, not presented as a literal markup match that doesn't
-exist in the spec.
+**Module 04 is NOT fully complete, but is functionally complete for
+everything genuinely in its own reach today.** Everything not built is
+either (a) blocked on a module later in the build order (10c/Module 05,
+1.5-1.7/Module 03, proactive offering/Module 06) — correctly deferred,
+not a gap to chase now — or (b) Slice 10f, newly tracked above, small and
+buildable. **Recommendation: build Slice 10f next** (closes the one
+real, currently-open, unblocked gap), **then move to Module 08
+(onboarding)** per AGENTS.md's own build order pairing "Module 04 +
+Module 08" as one phase — the remaining Module-04-only work (10c, 1.5-
+1.7) is genuinely blocked on Modules 05/03 and shouldn't hold up Module
+08 any longer.
 
-**Module 04 Slice 10e is now fully DONE (2026-08-31)** — full coder →
-tester (found 2 real bugs) → coder fix → tester (adversarial
-re-verification, both fixes hold) → security-reviewer (4/4) → qa gate
-sequence passed. This closes the real, previously-untracked gap Slice
-10d part 2's own QA pass surfaced: Slice 7's `promoteRule`/`demoteRule`/
-`retireRule` now have a real UI, five weeks after they were built
-backend-only with their UI explicitly deferred.
-
-**[HISTORICAL — how Slice 10e was originally found, kept for record; see
-the "Module 04 Slice 10e is now fully DONE" paragraph above for its
-current, accurate status.]** This gap was found by Slice 10d part 2's own
-QA pass: Slice 7 (2026-08-25) built `promoteRule`/`demoteRule`/
-`retireRule` as backend-only, explicitly deferring their UI — that UI was
-never built, and nothing in the ledger was tracking it as outstanding
-until QA's own scope trace caught it (grep-confirmed at the time: those
-three functions were called nowhere in `app/` except their own
-definitions/tests). Full original reasoning in the phase-status table's
-Slice 10d part 2 entry (search "Module 04 scope gap").
 
 **→ Slice 10d part 2 — INDEPENDENT TESTER VERIFICATION DONE (2026-08-31).
 Overall: PASS, no functional or security regression found. `npm run
@@ -6845,6 +6681,45 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-08-31 — **Module 04 full spec-coverage re-check (against
+  `retrospeq-design-system/modules/04-rulebook-and-evaluation.md`'s
+  complete story list) found two real gaps, logged rather than declared
+  "done" without checking.** See "AT A GLANCE" at the top of "Current
+  task" for the full write-up; summarized here for the decision log's own
+  record. (1) **Story 2.5's UI half — editing an existing rule's
+  threshold — has zero UI anywhere despite `editRule` being fully built/
+  tested/security-reviewed since Slice 2 (2026-08-19).** Not blocked on
+  anything external, unlike discovery (10c/Module 05) or strategy-scoped
+  rules (1.5-1.7/Module 03) — both Slice 10b's and Slice 10e's own coder
+  dispatches independently scoped it out as future work without either
+  claiming a slice number, the same untracked-gap pattern that let
+  promote/demote/retire's UI sit missing for 5 weeks before Slice 10d
+  part 2's QA pass caught it. Given its own number, **Slice 10f**, so it
+  doesn't repeat that pattern a second time.
+- 2026-08-31 — **`lib/privacy/export.ts` is stale and does not meet §14's
+  export requirement — flagged, not silently dropped, and deliberately
+  NOT claimed as a Module 04 slice.** `buildExportBundle`'s own header
+  comment still says "Module 02 isn't built" though Module 02 has been
+  done since 2026-08-23; it exports only `profile`/`tradingAccounts`/
+  `subscription`/`mfa` today — zero trade data, zero Module 04 data
+  (rules/versions/evaluations/overrides/adherence), directly
+  contradicting §14's "Included in export as rules, versions,
+  evaluations and overrides." Independently verified this is specifically
+  an EXPORT gap, not an erasure one: every Module 04 table has `user_id
+  references retrospeq.profiles(id) on delete cascade` (confirmed in
+  `supabase/migrations/20260823020000_rulebook_schema.sql`), and
+  `rule_evaluations`'s own immutability trigger already special-cases
+  `retrospeq.erasure_in_progress` specifically to let erasure delete a
+  row it would otherwise protect forever — erasure was clearly built
+  deliberately and is genuinely comprehensive; export just never got the
+  same follow-through as the codebase grew. Not given a Module 04 slice
+  number since `export.ts` is Module 01's own file (the privacy/export
+  feature) — this needs a dedicated dispatch against that file/module
+  whenever it's picked up, not folded into Module 04's own slice
+  numbering. Per AGENTS.md's "never fake it, always flag it": this is
+  exactly the kind of real, currently-unmet, cross-module gap that
+  shouldn't be left to silently disappear once Module 04's own UI slices
+  are done.
 - 2026-08-31 — **Slice 10d part 2 (adherence display) puts "current week"
   on the SAME plain-UTC-date convention `promotion-eligibility.ts`'s
   `recentBreakWindowStart` already established, not a per-account
