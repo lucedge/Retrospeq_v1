@@ -92,6 +92,52 @@ export async function fetchAccountSyncTiers(userId: string): Promise<string[]> {
   });
 }
 
+/**
+ * The CURRENT (most recent, non-superseded) version's rendered sentence for
+ * a rule the caller owns — Module 04 §5.6 UI, Slice 10d part 2's own
+ * attribution line ("Your risk cap accounts for 6 of the 14 soft breaks").
+ * `adherence_weekly.top_break_rule_id` is deliberately NAME-AGNOSTIC
+ * (`adherence-repository.ts`'s own header: "stores only the id — never the
+ * rule's rendered sentence or name... resolving that id to display text is
+ * a later read-side join") — this is that join, now that a screen actually
+ * needs it.
+ *
+ * **Known, documented simplification**: this resolves to the rule's
+ * CURRENT wording, not necessarily the wording that was actually in effect
+ * during the week being displayed. `rule_evaluations` itself DOES retain
+ * the exact `rule_version` live at each evaluation (the FK this table's own
+ * migration comment describes), but `adherence_weekly` — the materialised
+ * cache this screen reads, per its own "never compute from raw evaluations
+ * at read time" contract — only stores `top_break_rule_id`, not a version.
+ * Re-deriving the exact historical wording would mean joining back through
+ * raw `rule_evaluations` at read time, which is exactly the performance/
+ * trust posture `adherence_weekly` exists to avoid (§3.1, §12's "< 500ms
+ * per week" budget is for the MATERIALISED read, not a live re-join). A
+ * trader who edited a rule's threshold since the displayed week will see
+ * the attribution line naming that rule by its CURRENT phrasing — a minor,
+ * honest imprecision (the rule identity is exactly right; only the
+ * rendered number in the sentence could be stale), not a fabricated fact.
+ * Worth revisiting if Module 06's weekly review ever needs
+ * historically-exact wording.
+ *
+ * `null` when the rule id no longer resolves for this user (should not
+ * happen in practice — rules are never deleted, only retired, and
+ * `rule_versions` rows are append-only/immutable — but a display-only read
+ * degrades honestly rather than throwing if it somehow does).
+ */
+export async function fetchRuleRenderedText(userId: string, ruleId: string): Promise<string | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ rendered: string }>(
+      `select rv.rendered
+         from retrospeq.rules r
+         join retrospeq.rule_versions rv on rv.rule_id = r.id and rv.version = r.current_version
+        where r.id = $1 and r.user_id = $2`,
+      [ruleId, userId],
+    );
+    return res.rows[0]?.rendered ?? null;
+  });
+}
+
 // ---------------------------------------------------------------------
 // createRule's write
 // ---------------------------------------------------------------------

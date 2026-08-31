@@ -42,6 +42,7 @@ const {
   fetchRuleForOverrideMock,
   insertRuleOverrideMock,
   getAmbientAccountStateMock,
+  getAdherenceDisplayForUserMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -64,6 +65,7 @@ const {
   fetchRuleForOverrideMock: vi.fn(),
   insertRuleOverrideMock: vi.fn(),
   getAmbientAccountStateMock: vi.fn(),
+  getAdherenceDisplayForUserMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -124,10 +126,22 @@ vi.mock('@/lib/rules/ambient-state', async (importOriginal) => {
     getAmbientAccountState: getAmbientAccountStateMock,
   };
 });
+vi.mock('@/lib/rules/adherence-display', () => ({
+  getAdherenceDisplayForUser: getAdherenceDisplayForUserMock,
+}));
 vi.mock('server-only', () => ({}));
 
-const { createRule, editRule, previewRule, promoteRule, demoteRule, retireRule, recordOverride, fetchAmbientState } =
-  await import('../actions');
+const {
+  createRule,
+  editRule,
+  previewRule,
+  promoteRule,
+  demoteRule,
+  retireRule,
+  recordOverride,
+  fetchAmbientState,
+  fetchAdherenceDisplay,
+} = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleCreateCapExceededError, RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import(
   '@/lib/rules/rules-repository'
@@ -160,6 +174,7 @@ beforeEach(() => {
   fetchRuleForOverrideMock.mockReset();
   insertRuleOverrideMock.mockReset();
   getAmbientAccountStateMock.mockReset();
+  getAdherenceDisplayForUserMock.mockReset();
 });
 
 describe('createRule', () => {
@@ -1005,5 +1020,67 @@ describe('fetchAmbientState', () => {
     const result = await fetchAmbientState(undefined as unknown as string);
     expect(result.error?.code).toBe('RULE_AMBIENT_INVALID_INPUT');
     expect(getAmbientAccountStateMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// fetchAdherenceDisplay — Module 04 §5.6 UI, Slice 10d part 2
+// ---------------------------------------------------------------------
+
+describe('fetchAdherenceDisplay', () => {
+  function fakeReadyDisplay() {
+    return {
+      status: 'ready' as const,
+      weekStart: '2026-08-10',
+      hard: { followed: 34, total: 34 },
+      soft: { followed: 88, total: 102 },
+      priorSoft: { followed: 81, total: 99 },
+      attribution: {
+        ruleId: 'rule-1',
+        severity: 'soft' as const,
+        count: 6,
+        ofBreaks: 14,
+        rendered: 'Never risk more than 1.0% per trade.',
+      },
+    };
+  }
+
+  it('succeeds and passes the caller\'s session-derived userId (never a client-supplied one — this action takes no arguments at all) straight through to getAdherenceDisplayForUser', async () => {
+    getAdherenceDisplayForUserMock.mockResolvedValue(fakeReadyDisplay());
+
+    const result = await fetchAdherenceDisplay();
+
+    expect(result.success).toBe(true);
+    expect(result.display).toEqual(fakeReadyDisplay());
+    expect(getAdherenceDisplayForUserMock).toHaveBeenCalledWith(FAKE_USER.id);
+    expect(enforceRateLimitMock).toHaveBeenCalledWith('adherenceDisplay', expect.anything(), FAKE_USER.id);
+  });
+
+  it('passes through the honest insufficient_history state unchanged (never coerced into an error)', async () => {
+    getAdherenceDisplayForUserMock.mockResolvedValue({ status: 'insufficient_history' });
+    const result = await fetchAdherenceDisplay();
+    expect(result.success).toBe(true);
+    expect(result.display).toEqual({ status: 'insufficient_history' });
+  });
+
+  it('maps an unexpected read failure to a retryable RULE_ADHERENCE_INTERNAL, never a raw error', async () => {
+    getAdherenceDisplayForUserMock.mockRejectedValue(new Error('connection reset'));
+    const result = await fetchAdherenceDisplay();
+    expect(result.error?.code).toBe('RULE_ADHERENCE_INTERNAL');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('is rate-limited independently of the other rule actions (RULE_RATE_LIMITED on exceed), before any read', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('adherenceDisplay', 'ip:1.2.3.4', 3600));
+    const result = await fetchAdherenceDisplay();
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(getAdherenceDisplayForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing session the same way every other action in this file does', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: new Error('no session') });
+    const result = await fetchAdherenceDisplay();
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(getAdherenceDisplayForUserMock).not.toHaveBeenCalled();
   });
 });

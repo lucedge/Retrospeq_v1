@@ -396,6 +396,25 @@ export const RATE_LIMITS = {
     ip: { limit: 120, windowSeconds: 60 },
     email: { limit: 80, windowSeconds: 60 },
   },
+  /**
+   * Module 04 §5.6 UI — Slice 10d part 2's adherence display
+   * (`app/(app)/rules/page.tsx`). Read-only end to end
+   * (`lib/rules/adherence-display.ts`'s own contract: "never writes
+   * anything"), fetched once per page LOAD — unlike `ambientAccountState`
+   * (re-fetched on every account switch, a genuinely bursty interactive
+   * pattern), this screen has no client-side re-fetch trigger at all today
+   * (no week picker, no account switcher), so a real trader session would
+   * only ever hit this a handful of times per hour even browsing back and
+   * forth. Given an hourly window rather than `ambientAccountState`'s
+   * 60-second one, but still a real, non-trivial budget (a trader
+   * legitimately reloading the page, or a future week-picker interaction,
+   * should never feel throttled) rather than the tightest scope in this
+   * file.
+   */
+  adherenceDisplay: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

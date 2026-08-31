@@ -51,6 +51,7 @@ import {
   insertRuleOverride,
 } from '@/lib/rules/rule-overrides-repository';
 import { AmbientAccountNotFoundError, getAmbientAccountState, type AmbientAccountState } from '@/lib/rules/ambient-state';
+import { getAdherenceDisplayForUser, type AdherenceDisplay } from '@/lib/rules/adherence-display';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -988,6 +989,47 @@ export async function fetchAmbientState(accountId: string): Promise<AmbientState
     console.error('[rules/actions:fetchAmbientState] read failed:', err);
     return {
       error: { code: 'RULE_AMBIENT_INTERNAL', user_message: 'Account state is unavailable right now. Please try again.', retryable: true },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// fetchAdherenceDisplay — Module 04 §5.6 UI, Slice 10d part 2
+//
+// Thin Server Action wrapper around `lib/rules/adherence-display.ts`'s
+// `getAdherenceDisplayForUser` — session-derived `userId` ONLY, no
+// parameters at all (matching this file's own "no client-supplied userId
+// ever" convention, and reflecting that this composition has nothing else
+// for a caller to legitimately vary: no account/week picker exists in this
+// slice's own scope). `app/(app)/rules/page.tsx` calls this directly, on
+// the server, during its own render (no client round trip needed for the
+// FIRST paint — there is no client interactivity on this screen at all
+// today, unlike `fetchAmbientState`'s "re-fetch on account switch" reason
+// for existing) — this action exists so a future client-driven trigger
+// (e.g. Module 06's own weekly-review week picker) has a ready-made,
+// already-rate-limited, already-session-scoped entry point without a new
+// wrapper needing to be invented then, matching this file's established
+// "backend function first, ready for a future screen to call" precedent
+// (`createRule`/`editRule`/`promoteRule`'s own doc comments).
+// ---------------------------------------------------------------------
+
+export interface AdherenceDisplayActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  display?: AdherenceDisplay;
+}
+
+export async function fetchAdherenceDisplay(): Promise<AdherenceDisplayActionResult> {
+  const user = await requireSessionAndRateLimit('adherenceDisplay');
+  if (isErrorState(user)) return user;
+
+  try {
+    const display = await getAdherenceDisplayForUser(user.id);
+    return { success: true, display };
+  } catch (err) {
+    console.error('[rules/actions:fetchAdherenceDisplay] read failed:', err);
+    return {
+      error: { code: 'RULE_ADHERENCE_INTERNAL', user_message: 'Adherence is unavailable right now. Please try again.', retryable: true },
     };
   }
 }

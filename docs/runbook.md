@@ -737,6 +737,23 @@ the ONLY way a trader's `adherence_weekly` row gets refreshed — a week
 with zero further confirmations after a prior recompute simply keeps its
 last-computed numbers (not wrong, just not re-touched).
 
+**Slice 10d part 2 (§5.6 UI, `app/(app)/rules/page.tsx`) is the FIRST UI
+surface that actually reads this table** — before it, a silently-stale or
+never-created row was invisible (nothing rendered it). As of this slice, a
+stuck recompute now has a directly visible consequence: a trader would see
+`insufficient_history` ("not enough data yet") for a week that should
+genuinely have real numbers, or a `soft`/`hard` fraction that stopped
+updating after a real confirmation. This does not change the underlying
+failure mode or its self-healing behaviour (still: the NEXT successful
+confirmation in that week recomputes the FULL week, not a delta) — it
+raises the real-world stakes of noticing it, the same way Slice 10d part
+1's addition of a live caller raised the stakes of `rule_overrides`'
+silent-failure entry below. `lib/rules/adherence-display.ts`'s own
+composition adds no new failure mode of its own (it is read-only, and a
+read failure there maps to a generic retryable error, never a fabricated
+number) — this note is scoped entirely to the pre-existing recompute gap
+above becoming user-visible for the first time.
+
 **How to check:** grep application logs for `[adherence] recompute failed
 for user` — every occurrence names the affected `user_id`/`week_start`
 directly. A quick live check for a specific trader/week: compare

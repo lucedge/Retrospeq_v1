@@ -15,6 +15,7 @@ import {
   fetchAccountSyncTiers,
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
+  fetchRuleRenderedText,
   insertRuleAndVersion,
   RuleCreateCapExceededError,
   RuleEditConflictError,
@@ -342,6 +343,65 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
     expect(tiers.sort()).toEqual(['t0', 't1', 't2'].sort());
     expect(tiers).toHaveLength(3);
   });
+
+  // -----------------------------------------------------------------
+  // fetchRuleRenderedText — Module 04 §5.6 UI, Slice 10d part 2's
+  // adherence-attribution join (adherence-repository.ts's own
+  // `top_break_rule_id` is deliberately name-agnostic; this is the read
+  // side that resolves an id to display text).
+  // -----------------------------------------------------------------
+
+  it('fetchRuleRenderedText returns the CURRENT (post-edit) version\'s rendered text, not a superseded one', async () => {
+    const created = await insertRuleAndVersion({
+      userId: user.id,
+      operandId: 'risk_pct',
+      op: 'lte',
+      value: 5,
+      scope: 'global',
+      scopeId: null,
+      evaluation: 'pre_entry',
+      rendered: 'Never risk more than 5% per trade.',
+      capLimit: null,
+    });
+
+    expect(await fetchRuleRenderedText(user.id, created.ruleId)).toBe('Never risk more than 5% per trade.');
+
+    await applyRuleEdit(user.id, created.ruleId, 1, 'risk_pct', 'lte', 2.5, 'Never risk more than 2.5% per trade.');
+
+    // The join is on rules.current_version, not "the first version ever
+    // written" -- an edit must be reflected immediately.
+    expect(await fetchRuleRenderedText(user.id, created.ruleId)).toBe('Never risk more than 2.5% per trade.');
+  });
+
+  it(
+    'fetchRuleRenderedText returns null for a nonexistent rule id, and null (not another user\'s text) for a rule owned by someone else',
+    async () => {
+      const otherUser = await createTestAuthUser(env!, 'rules-repo-other');
+      try {
+        const otherRule = await insertRuleAndVersion({
+          userId: otherUser.id,
+          operandId: 'risk_pct',
+          op: 'lte',
+          value: 1,
+          scope: 'global',
+          scopeId: null,
+          evaluation: 'pre_entry',
+          rendered: "Someone else's rule -- must never leak to user.id's own read.",
+          capLimit: null,
+        });
+
+        expect(await fetchRuleRenderedText(user.id, '00000000-0000-7000-8000-000000000000')).toBeNull();
+        expect(await fetchRuleRenderedText(user.id, otherRule.ruleId)).toBeNull();
+      } finally {
+        await db.query('begin');
+        await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
+        await db.query('delete from retrospeq.rules where user_id = $1', [otherUser.id]);
+        await db.query('commit');
+        await deleteTestAuthUser(env!, otherUser.id).catch(() => {});
+      }
+    },
+    15_000,
+  );
 });
 
 /**

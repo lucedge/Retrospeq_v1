@@ -183,3 +183,44 @@
   box-shadow: inset 0 0 0 1.5px var(--rq-ink);
 }
 .ambient__cell[data-state="breach"] .ambient__value { font-weight: var(--rq-weight-bold); }
+
+/* ---------- Adherence ----------
+   Module 04 §5.6 / §6.1's own reference markup names this markup directly
+   (`.adherence`, `.adherence__hard`, `.adherence__soft`,
+   `.adherence__attribution`) but, like `.ambient` above before its own
+   Slice 10d part 1 addition, no rule ever shipped the CSS for it -- added
+   here, not invented independently of the spec that already named it
+   (Slice 10d part 2).
+
+   TWO NUMBERS, NEVER BLENDED (AGENTS.md; retrospeq-design-decisions.md §6,
+   "A weighted blend hides exactly what should be visible"): hard and soft
+   each get their own paragraph, never a combined percentage, and nothing
+   here computes one from the other.
+
+   The hard/soft distinction the product needs a trader to feel -- "a risk
+   breach doesn't read like a skipped checkbox" (story 3.3) -- is carried by
+   WEIGHT AND ORDER ONLY, same device `.ambient__cell[data-state]` already
+   established: hard rules are few and meant to read as heavier and first
+   (a rare deviation should be loud), soft is lighter and second, and the
+   attribution line -- when present -- is the lightest weight of the three
+   and reads as a caption on the soft number, not a verdict of its own.
+   Neither fraction is styled as "good" or "bad" relative to the other --
+   there is no --color-success/--color-danger pair anywhere in this system
+   and this component does not invent one. */
+.adherence { display: flex; flex-direction: column; gap: var(--rq-space-2); }
+.adherence h2 {
+  font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight); margin: 0;
+}
+.adherence__hard {
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-bold);
+  color: var(--rq-ink); margin: 0;
+}
+.adherence__soft {
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-regular);
+  color: var(--rq-ink-soft); margin: 0;
+}
+.adherence__attribution {
+  font-size: var(--rq-text-sm); font-weight: var(--rq-weight-regular);
+  color: var(--rq-ink-faint); margin: 0;
+}
