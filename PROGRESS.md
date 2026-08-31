@@ -39,11 +39,82 @@ trader exceed the documented 3-rule cap, a pre-existing gap in
 same `pg_advisory_xact_lock` pattern Slice 7 already established for a
 different cap, then security-reviewed (5/5) and qa'd (PASS, one
 non-blocking follow-up: `RuleEditor.tsx`'s entitlement-count header goes
-stale within a session, fix pending — see below). **The active/next task
-is that quick stale-header fix, then Slice 10c (discovery, story 1.3)**,
-per the "Next" paragraph further down this section. Slice 10d (ambient
-strip + adherence display) remains after that. Nothing else is
-blocked or mid-flight.
+stale within a session, fixed same day, QA-confirmed — see the entry
+immediately below). **The active/next task is Module 04 Slice 10d — the
+ambient strip (§5.9 UI) + adherence display (§5.6 UI)**, chosen ahead of
+Slice 10c (discovery) since it's fully unblocked by already-built backend
+work while 10c likely needs Module 05 groundwork — see the "Next"
+paragraph further down this section for the full reasoning. Nothing else
+is blocked or
+mid-flight.
+
+**→ `RuleEditor.tsx` stale entitlement-count header — FIXED (2026-08-31,
+this entry).** QA's non-blocking Slice 10b finding: "Rule slots: N of M
+used" was a one-time `canForUser` snapshot passed down from `page.tsx`
+(a Server Component) and never refreshed client-side, so it could show a
+contradictory pair on screen (a stale "2 of 3" next to a correct, freshly
+server-confirmed "you're at your limit" rejection) once a trader stayed
+on `/rules/new` across more than one submission in the same session (e.g.
+"Write another rule," which resets the form without a page reload).
+**Fix**: the entitlement summary moved from a raw prop read into local
+component state (`useState(initialEntitlement)`), self-updated after
+every real `createRule` response — incremented by one (capped at `limit`)
+on success, pinned to `used = limit` / `allowed = false` on an
+`ENTITLEMENT_LIMIT` rejection — using the same `formatUsageFraction`
+helper `page.tsx` already used server-side. Purely a display correction;
+`insertRuleAndVersion`'s server-side guarded INSERT (Slice 10b's own
+`pg_advisory_xact_lock` fix) is untouched and remains the sole real
+enforcement. **`GuidedFrontDoor.tsx` (Slice 10a) checked for the same bug
+and found NOT to have it**: that screen also reads its `entitlement` prop
+as a load-time snapshot and never refreshes it either, but it structurally
+never re-renders an entitlement header after a successful create in the
+same session — a partial-or-full success always moves it straight to a
+terminal `done` state (no entitlement display there at all), and the only
+path that returns to the `choosing` screen (`anyFailed && !anySucceeded`)
+is one where nothing actually succeeded, so the stale count is still
+accurate in that case. No change made there; reasoning left in this entry
+rather than silently expanding scope.
+Verified: (1) a standalone Playwright script drove the exact QA
+repro (submit rule #3, "Write another rule," attempt #4) against a live
+dev server + live Supabase project — screenshots
+(`tmp/dev-screenshots/stale-header-fix-after-rule-1.png`,
+`...-attempt-4-blocked.png`, both `Read` back) confirm the header now
+reads "1 of 3" immediately after an ordinary successful create with no
+reload, and "3 of 3" consistently paired with the at-limit message and a
+genuinely disabled "Add rule" button at attempt #4 — no more
+contradictory pair. (2) A new E2E regression test added to
+`e2e/rules-general-editor.spec.ts` (`"entitlement header self-updates
+client-side after a successful create AND after a cap rejection..."`)
+encodes this exact scenario; it passed cleanly on the first full run of
+the four targeted rule-editor/guided-front-door E2E spec files this
+session (12/15 passed, all 3 failures pre-existing/unrelated —
+`RULE_UNSATISFIABLE` independent-verify, the guided front door's
+"flagged" independent-verify, and "decline entirely," none of them
+touching this file). (3) `tsc --noEmit`, `eslint .` (0 errors, the same
+19 pre-existing warnings), and `npm run build` all re-run clean after the
+fix. **Honest caveat, not swept under the rug**: subsequent re-runs of
+the same E2E suite *within this same dispatch* (repeated for extra
+confidence) degraded and eventually failed outright — root-caused, not
+assumed, by inspecting `error-context.md`'s captured DOM snapshot, which
+showed the app's own `RULE_RATE_LIMITED` alert ("Too many attempts.
+Please wait a few minutes and try again."). `lib/rate-limit/http.ts`'s
+own header confirms local dev has no reverse proxy, so `getClientIp()`
+falls back to one fixed key and "all local traffic shares one bucket" —
+this dispatch's own repeated manual reproduction script plus several
+full-suite re-runs, all from one machine in a short window, cumulatively
+tripped `createRule`'s real, DB-backed (not in-memory, confirmed via
+`lib/rate-limit/limiter.ts` — a dev-server restart does not reset it),
+1-hour-window per-IP rate limit — a known, documented characteristic of
+this repo's local dev setup (that file's own comment: "acceptable there,
+never true in any real deployment"), not a regression from this fix.
+Flagged here rather than either hiding it or falsely claiming a fully
+green final re-run; the evidence above (clean first run + scripted
+screenshot proof + clean tsc/eslint/build) already establishes the fix is
+correct — no code changed as a result of the rate-limit finding, and no
+new ADR/runbook entry needed (a UI-state bug fix, not a new alerting
+condition or a 00-foundation convention deviation). Not yet reviewed by
+`retrospeq-qa` for sign-off on this specific fix (per this repo's own
+convention, that call belongs to qa/security-reviewer, not the coder).
 
 **→ Module 04 Slice 10a — TESTER independent verification (2026-08-29,
 this entry) — PASS, no real bug found.** Dispatched specifically to
@@ -668,13 +739,52 @@ calls (`createRule`/`insertRuleAndVersion`), so this fix closes the same
 exposure for both slices at once — Slice 10a needed no changes of its own
 and its own suites were re-confirmed passing throughout.
 
-**Next (quick follow-up, not its own numbered sub-slice): fix
-`RuleEditor.tsx`'s stale entitlement-count header** (self-update after a
-successful create or a `RuleCreateCapExceededError`, per qa's finding
-above), THEN **Module 04 Slice 10c — discovery (story 1.3)**, then **10d —
-the ambient strip (§5.9 UI) + adherence display (§5.6 UI)**, per the
+**→ Quick follow-up DONE (2026-08-31): `RuleEditor.tsx`'s stale
+entitlement-count header fixed.** The "Rule slots: N of M used" summary
+moved to local client state — increments `used` (capped at `limit`) on a
+successful `createRule`, pins `used = limit` on an `ENTITLEMENT_LIMIT`
+rejection — rather than trusting the page-load-time snapshot for the
+entire client session. Purely a display fix: `lib/rules/rules-repository.ts`
+and the server-side `pg_advisory_xact_lock` cap enforcement are untouched
+(confirmed via `git diff --stat`, this diff is `RuleEditor.tsx` + the e2e
+spec only). `GuidedFrontDoor.tsx` (Slice 10a) was checked and confirmed to
+NOT share this bug (different state machine, no entitlement re-render
+after success in that flow) — correctly left unchanged, no unnecessary
+edit made there. A full security-reviewer pass was deliberately skipped
+for this one (pure UI-state change, no new write path, no security
+surface — orchestrator judgment call, logged here per 00-foundation §12).
+QA PASS (6/6): screenshot-verified the self-updated "3 of 3" state is
+visually identical to a true server-confirmed at-cap state, `.rq-num`
+still wraps the count, no visual regression elsewhere, no red/green
+introduced, the new regression test (`e2e/rules-general-editor.spec.ts`)
+confirmed genuinely meaningful (asserts header text at every transition
+point plus a DB-level row-count check, not just click-throughs).
+**Operational note for future dispatches**: this session's own repeated
+E2E runs against `/rules/new` tripped `createRule`'s real DB-backed
+1-hour rate limit (not in-memory — a dev-server restart does not reset
+it); both the coder and qa hit this, correctly recognized it as expected
+infra behavior rather than a regression, and either waited out the window
+or used a fresh test user. If dispatching more E2E runs against `rules/`
+soon, expect the window may still be recovering.
+
+**Next: Module 04 Slice 10d — the ambient strip (§5.9 UI) + adherence
+display (§5.6 UI).** Chosen ahead of Slice 10c (discovery, story 1.3)
+because it is fully unblocked by existing backend work (Slice 8's
+`getAmbientAccountState`/`recordOverride`, Slice 6's
+`adherence-repository.ts` — both already built, tested, and
+security-reviewed; 10d only needs to render what they already compute),
+whereas 10c's "ranked detections drawn from your own behaviour" (story
+1.3's evidence like "Moving stops 14 times") plausibly needs
+pattern-detection logic that doesn't exist yet — that's Module 05
+(Analytics & Findings) territory, not started (Phase 3). 10d also covers
+two of AGENTS.md's own repeatedly-named non-negotiables directly ("gauges/
+ambient strip are always visible, never appear-on-threshold"; "adherence
+earns no XP, ever" — this is the first UI surface where that rule has
+visible teeth, since it's the first screen actually DISPLAYING an
+adherence number). Slice 10c is deferred, not dropped — picked up after
+10d, or sooner if Module 05 groundwork happens to land first. See the
 "Next: Module 04 Slice 10" paragraph further down this section for the
-full original scope breakdown.
+full original §6 scope breakdown.
 
 **→ Module 04 Slice 9 — `operand_distributions` extended to
 `daily_loss_pct`/`consecutive_losses` — DONE (2026-08-29).** Full coder →

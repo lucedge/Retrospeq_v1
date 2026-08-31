@@ -6,6 +6,7 @@ import { Decimal } from 'decimal.js';
 import { getOperand, type OperandCatalogueEntry, type OperandGroup } from '@/lib/rules/operand-catalogue';
 import { soleAuthorableOp } from '@/lib/rules/editable-operands';
 import { renderSentence } from '@/lib/rules/render-sentence';
+import { formatUsageFraction } from '@/lib/entitlements/messages';
 import { createRule, previewRule, type PreviewRuleActionState } from '../actions';
 
 /**
@@ -65,6 +66,19 @@ import { createRule, previewRule, type PreviewRuleActionState } from '../actions
  *   `user_message` — no bespoke UI per code beyond that, since nothing
  *   else in §10's error table has a reference markup of its own for a
  *   `scope: 'global'`-only screen.
+ * - Entitlement display self-updates after every `createRule` response
+ *   (bug fix, post-Slice-10b-QA): the "Rule slots: N of M used" header
+ *   started life as `page.tsx`'s one-time `canForUser` snapshot, which
+ *   goes stale the moment a trader stays on this screen across more than
+ *   one submission (e.g. "Write another rule" resets the form without a
+ *   page reload). It is now local component state, incremented on a
+ *   successful create and pinned to `used = limit` on an `ENTITLEMENT_LIMIT`
+ *   rejection — mirrors `GuidedFrontDoor.tsx`'s own care around this
+ *   value, though that screen never re-renders its entitlement header
+ *   after a successful create in the same session (it moves straight to a
+ *   terminal done/skipped state instead), so it did not carry this exact
+ *   bug. Purely a display correction — the actual cap enforcement remains
+ *   entirely server-side in `insertRuleAndVersion`'s guarded INSERT.
  */
 
 const GROUP_LABELS: Record<OperandGroup, string> = {
@@ -118,12 +132,32 @@ function boundsMidpointDefault(bounds: { min: number; max: number; step: number 
 
 type Phase = 'editing' | 'submitting' | 'done';
 
-export function RuleEditor({ operandIds, entitlement }: { operandIds: string[]; entitlement: EntitlementSummary }) {
+export function RuleEditor({
+  operandIds,
+  entitlement: initialEntitlement,
+}: {
+  operandIds: string[];
+  entitlement: EntitlementSummary;
+}) {
   const [phase, setPhase] = useState<Phase>('editing');
   const [selectedOperandId, setSelectedOperandId] = useState<string>('');
   const [value, setValue] = useState<number>(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [doneRendered, setDoneRendered] = useState<string | null>(null);
+  // `page.tsx`'s `canForUser` snapshot is only ever correct at the moment
+  // the Server Component rendered -- this component can stay mounted
+  // across many sequential `createRule` calls in one session (the "Write
+  // another rule" reset below does NOT remount the page, so the initial
+  // prop would otherwise go stale). Self-updated below after every real
+  // `createRule` response (success or `ENTITLEMENT_LIMIT` rejection) so
+  // the "Rule slots: N of M used" header and the at-cap message always
+  // reflect the ACTUAL server-confirmed state, never the page-load
+  // snapshot alone. The server-side cap enforcement itself
+  // (`insertRuleAndVersion`'s guarded INSERT, Slice 10b's own
+  // `pg_advisory_xact_lock` fix) is untouched by this -- this is purely a
+  // client-side display correction downstream of that already-authoritative
+  // response.
+  const [entitlement, setEntitlement] = useState<EntitlementSummary>(initialEntitlement);
 
   const operandsByGroup = useMemo(() => {
     const groups = new Map<OperandGroup, OperandCatalogueEntry[]>();
@@ -242,9 +276,33 @@ export function RuleEditor({ operandIds, entitlement }: { operandIds: string[]; 
             const submittedValue = selectedOperand.type === 'bool' ? true : value;
             const result = await createRule({ operandId: selectedOperand.id, op, value: submittedValue, scope: 'global' });
             if (result.success && result.rule) {
+              // Self-derived from the fact this call just succeeded --
+              // `RuleActionState`'s success branch carries no entitlement
+              // snapshot of its own (see this file's own header), so
+              // "one more rule now exists" is the one fact this response
+              // actually proves. Capped at `limit` defensively (never
+              // displayed above the real ceiling even if some other path
+              // already put this trader over it).
+              setEntitlement((prev) => {
+                if (prev.limit === null) return prev; // unlimited plan -- nothing to track
+                const used = Math.min(prev.used + 1, prev.limit);
+                return { ...prev, used, allowed: used < prev.limit, usageFraction: formatUsageFraction(used, prev.limit) };
+              });
               setDoneRendered(result.rule.rendered);
               setPhase('done');
             } else {
+              if (result.error?.code === 'ENTITLEMENT_LIMIT') {
+                // The server just confirmed this trader is AT the cap right
+                // now (either the fast pre-check or the atomic race-loser
+                // path -- both map to this same code) -- reflect that
+                // exactly (`used = limit`) rather than leaving whatever
+                // stale number was on screen before this attempt.
+                setEntitlement((prev) =>
+                  prev.limit === null
+                    ? prev
+                    : { ...prev, used: prev.limit, allowed: false, usageFraction: formatUsageFraction(prev.limit, prev.limit) },
+                );
+              }
               setSubmitError(result.error?.user_message ?? 'Something went wrong saving this rule. Please try again.');
               setPhase('editing');
             }

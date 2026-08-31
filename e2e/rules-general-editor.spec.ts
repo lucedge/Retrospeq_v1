@@ -191,6 +191,60 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     expect(rows.rows[0].op).toBe('is_true');
   });
 
+  test('entitlement header self-updates client-side after a successful create AND after a cap rejection, without a page reload (regression test for the Slice 10b QA-reported stale-header bug)', async ({
+    page,
+  }) => {
+    const user = await createConfirmedUser('editor-header-selfupdate');
+    cleanupUserIds.push(user.id);
+
+    await loginAs(page, user.email);
+    await page.goto('/rules/new');
+
+    // Clean slate -- "0 of 3 used".
+    await expect(page.getByText('Rule slots:', { exact: false })).toContainText('0 of 3');
+
+    // Create rule #1 through the real UI and confirm the header updates to
+    // "1 of 3" WITHOUT a page reload -- the ordinary (non-error) path.
+    await page.selectOption('#operand-picker', 'risk_pct');
+    await page.getByRole('button', { name: 'Add rule' }).click();
+    await expect(page.getByText('Rule added')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Write another rule' }).click();
+    await expect(page.getByText('Rule slots:', { exact: false })).toContainText('1 of 3');
+
+    // Fast-forward to "2 of 3" server-side (one already exists from above),
+    // then submit rule #3 through the UI -- header should now read "3 of 3"
+    // the moment "Write another rule" is clicked again, still with no
+    // page reload.
+    await insertActiveGlobalRule(user.id, 'hold_seconds', 'Never hold a position longer than 60 seconds.');
+    await page.reload();
+    await expect(page.getByText('Rule slots:', { exact: false })).toContainText('2 of 3');
+    await page.selectOption('#operand-picker', 'weekly_review_completed');
+    await page.getByRole('button', { name: 'Add rule' }).click();
+    await expect(page.getByText('Rule added')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Write another rule' }).click();
+
+    // The bug this regression test targets: at this exact point (no reload
+    // since rule #3 succeeded), the header must read "3 of 3" -- never the
+    // stale "2 of 3" pre-existing at page load -- and the at-limit message
+    // must already be showing, consistent with that header, even before
+    // any operand for a would-be rule #4 is chosen.
+    await expect(page.getByText('Rule slots:', { exact: false })).toContainText('3 of 3');
+    await expect(page.getByText("You're already at your rule limit", { exact: false })).toBeVisible();
+
+    // Selecting an operand for the would-be rule #4 must show the submit
+    // control genuinely disabled -- no contradictory "N of M" header next
+    // to a control that still looks live.
+    await page.selectOption('#operand-picker', 'risk_pct');
+    await expect(page.getByRole('button', { name: 'Add rule' })).toBeDisabled();
+    await expect(page.getByText('Rule slots:', { exact: false })).toContainText('3 of 3');
+
+    await page.screenshot({ path: 'tmp/dev-screenshots/rule-editor-e2e-header-selfupdate.png', fullPage: true });
+
+    // Still exactly 3 rows -- no fourth rule slipped through.
+    const rows = await db.query('select count(*)::int as n from retrospeq.rules where user_id = $1', [user.id]);
+    expect(rows.rows[0].n).toBe(3);
+  });
+
   test('failure path: a trader already at the free-tier rule cap sees an honest message and the submit control is genuinely disabled', async ({
     page,
   }) => {
