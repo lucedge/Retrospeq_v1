@@ -66,6 +66,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           Retrospeq
         </Link>
         <nav className="flex items-center gap-3">
+          {/* Module 08 (Onboarding & Home) §7.5's nav order: "Home ·
+              Trades · Rulebook · Performance." This dispatch adds Home
+              only — Rulebook/Performance stay their current `/rules`/
+              `/plan` labels, not yet renamed, since neither module fully
+              matches those tab concepts today. */}
+          <Link href="/dashboard" className="rq-sub underline">
+            Home
+          </Link>
           <Link href="/trades" className="rq-sub underline">
             Trades
           </Link>

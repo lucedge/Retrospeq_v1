@@ -41,7 +41,7 @@ describe('resolveOnboardingDestination', () => {
     expect(resolveOnboardingDestination('history_imported', 'manual')).toBe('/rules/start');
   });
 
-  it('rules_calibrated / first_closeout / fields_introduced / complete -> /rules, regardless of path', () => {
+  it('rules_calibrated / first_closeout / fields_introduced / complete -> /dashboard, regardless of path', () => {
     const postCalibrationStages: OnboardingStage[] = [
       'rules_calibrated',
       'first_closeout',
@@ -50,7 +50,7 @@ describe('resolveOnboardingDestination', () => {
     ];
     for (const stage of postCalibrationStages) {
       for (const path of ALL_PATHS) {
-        expect(resolveOnboardingDestination(stage, path)).toBe('/rules');
+        expect(resolveOnboardingDestination(stage, path)).toBe('/dashboard');
       }
     }
   });

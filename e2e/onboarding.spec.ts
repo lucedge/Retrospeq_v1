@@ -143,7 +143,7 @@ test.describe('Onboarding sequence + router (Module 08 §5.1/§5.6/§9, Slice 08
     await expect(page.locator('h1')).toHaveText('Connect your trading account');
   });
 
-  test('broker path: account_connected -> history_imported reveals the honest Hook fallback with the real trade count -> calibration (declined) advances to rules_calibrated -> a later visit lands on /rules', async ({
+  test('broker path: account_connected -> history_imported reveals the honest Hook fallback with the real trade count -> calibration (declined) advances to rules_calibrated -> a later visit lands on /dashboard', async ({
     page,
   }) => {
     const user = await createConfirmedUser('onboarding-broker-flow');
@@ -213,10 +213,10 @@ test.describe('Onboarding sequence + router (Module 08 §5.1/§5.6/§9, Slice 08
       .toBe('rules_calibrated');
 
     // Step 7 (real): a later visit lands a rules_calibrated-stage trader
-    // on /rules (no real dashboard exists yet — see lib/onboarding/router.ts's
-    // own header for the reasoning).
+    // on /dashboard — Module 08's own dashboard dispatch, see
+    // lib/onboarding/router.ts's own header.
     await page.goto('/');
-    await page.waitForURL('**/rules', { timeout: 10_000 });
+    await page.waitForURL('**/dashboard', { timeout: 10_000 });
   });
 
   test('manual path: connects for real with no credential, skips account_connected and the Hook screen entirely, and lands straight on /rules/start', async ({

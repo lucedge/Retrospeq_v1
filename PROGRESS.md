@@ -43,16 +43,38 @@ decision-log entry. `lib/privacy/export.ts`'s staleness gap (also found
 deliberately not built as Module 04 work since it's Module 01's own
 file.** **Module 08 Slice 08a (onboarding schema) is fully DONE. Slice 08b
 (the onboarding router + honest-fallback Hook screen + stage-advancement
-wiring into connect/sync/calibration) is CODER-PASS DONE (2026-09-01),
-NOT yet independently tested/security-reviewed/QA'd** — see the matching
-2026-09-01 entry below (search "Module 08 Slice 08b") for full detail,
-including a real cross-cutting fix (eleven pre-existing E2E files'
-shared `loginAs` helper needed a one-line `waitForURL` pattern change
-once `/` started redirecting) and a genuine, pre-existing, NON-Slice-08b
-bug found while regression-checking that fix (`rules-guided-front-door
-.spec.ts`'s "core flow" test can hang after its first sequential
-`createRule` call — confirmed via `git stash` isolation to predate this
-slice entirely, logged in `docs/runbook.md`, not fixed here).**
+wiring into connect/sync/calibration) has passed CODER + INDEPENDENT
+TESTER + SECURITY-REVIEWER (7/7) — NOT yet QA'd, so still not marked
+"done."** See the matching 2026-09-01 entries below (search "Module 08
+Slice 08b") for full detail, including a real cross-cutting fix (eleven
+pre-existing E2E files' shared `loginAs` helper needed a one-line
+`waitForURL` pattern change once `/` started redirecting) and a
+corrected, non-Slice-08b timing finding (`rules-guided-front-door
+.spec.ts`'s "core flow" test runs right at Playwright's 30s default
+timeout under real network latency, NOT a hang — logged in
+`docs/runbook.md`, not fixed here, out of this dispatch's own scope).
+**The dashboard sub-slice (§7/§8 — "Trades to close"/"Clear", plus a
+minimal honest indicator for "Position open"; "Review ready" remains
+out of reach, blocked on Module 06) is now FULLY DONE (2026-09-02)** —
+full coder → tester → security-reviewer (7/7) → qa gate sequence passed,
+independent verification found NO real bug (unusual for this session —
+the first Module 04/08 slice where that happened) though real fresh
+coverage was still added. See the matching entry below (search "Module
+08 dashboard") for the full scope reasoning, including why the earlier
+"3-state" kickoff framing narrowed further on closer investigation, and
+a real previously-latent `TradeRow.server_day` type-lie bug found and
+fixed at its shared source while building this. **This closes Module
+08's entire currently-buildable scope** — everything else remaining
+(the real Hook finding, the default strategy, field introduction, the
+"Review ready" dashboard state, the streak stat) is confirmed genuinely
+blocked on Modules 03/05/06/07, none of which exist yet, per the
+blocker analysis further down this section. **Module 08 Slice 08a and
+08b are also both fully DONE** (full gate sequences passed, real bugs
+found and fixed on both — see their own entries below). **Next: Phase 3
+— Module 03 (Field Registry & Strategy) + Module 05 (Analytics &
+Findings)**, per AGENTS.md's own build order. Read both full specs
+before any code, the same discipline every module before this one has
+followed.
 
 **Module 08 (Onboarding & Home) is now starting — read the full spec
 (`retrospeq-design-system/modules/08-onboarding-and-home.md`) before any
@@ -538,6 +560,256 @@ The 11-file `waitForURL` E2E change confirmed to only mean "left
 invalid-credentials test spot-checked and confirmed untouched. Standard
 non-negotiables clean, no `rule_evaluations`/XP/compound-rule
 interaction, all SQL parameterized.
+
+**→ Module 08 dashboard (§7/§8), a DEGRADED, honestly-scoped TWO-real-
+state dashboard ("Trades to close" / "Clear", plus a minimal honest
+indicator for "Position open") — CODER PASS DONE (2026-09-01), not yet
+independently tested/security-reviewed/QA'd.** Per this dispatch's own
+scope (narrower than the kickoff blocker analysis's earlier "3-state"
+framing): "Position open" is NOT built as a full §7.1 card — that needs a
+live current-R figure (no price-feed infra anywhere in this repo) and a
+captured `conviction` value (Module 03, doesn't exist), confirmed by
+direct investigation, not assumed. "Review ready" remains fully out of
+reach (Module 06). What IS built: `lib/dashboard/dashboard-state.ts`'s
+pure `resolveDashboardKind(hasOpenPosition, hasTradesToCloseToday)` (total
+and deterministic across all 4 boolean combinations, §7.1's own ranking
+applied to this narrower 3-kind space) + `lib/dashboard/dashboard
+-repository.ts`'s `getDashboardStateForUser` (composes Module 02's already
+-built `listOpenTrades`/`listClosedUnconfirmedTrades`/`listTradingAccounts`
+— reused, not reimplemented; "today" is computed PER ACCOUNT via the
+already-established `computeServerDay(now, account.day_rollover)`
+convention `lib/rules/ambient-state.ts` already uses, not a new
+definition, since a trader's accounts can genuinely disagree about what
+day it is) + `app/(app)/dashboard/page.tsx` (new dedicated route).
+
+**The open-position edge case, decided and documented per this dispatch's
+own explicit instruction**: a trader with a genuine open position gets a
+MINIMAL, HONEST indicator (instrument, direction, age, and real
+`risk_pct` — the same real/deferred split `app/(app)/trades/page.tsx`'s
+own `OpenPositionCard` already established for this identical row shape)
+— never silently shown "Clear" (which would be a real product-correctness
+bug, a trader reading "Nothing to close out" while a position is
+genuinely live) and never a full fabricated card. `resolveDashboardKind`
+still ranks `open` above `closeout` per §7.1 even though this dispatch
+doesn't build the full open card.
+
+**Streak and the quiet projection line are honestly omitted, confirmed
+not faked**: §7's own Clear-state markup shows "Logging streak: 12 weeks"
+and "Next finding in about 8 trades on this setup" — both need modules
+that don't exist (streak: Module 07; the projection: Module 05).
+`unlock_state.weeks_active` was deliberately NOT reused as a streak
+stand-in, per that column's own header warning against exactly this
+confusion (Slice 08a). No honest equivalent for the projection line was
+found, so it is simply absent, not replaced with a fabricated one — the
+Clear state renders the headline, an honest sub-line, and Module 04's
+already-built, already-tested `AdherenceSection` (reused verbatim via
+the existing `fetchAdherenceDisplay` Server Action, not re-derived).
+
+**Graceful degradation (§12 `DASH_STATE_UNRESOLVED`) built and proven**:
+every read in `getDashboardStateForUser` runs inside one try/catch;
+any failure degrades to `{ kind: 'clear', syncDegraded: true }` (an
+honest "Still syncing…" note), never a crashed page or a false "Nothing
+to close out." — proven via a deterministic mocked unit test (a rejected
+promise), not just reasoned about. True infra-fault-injected E2E was
+judged impractical without dedicated tooling (this repo's other "forced
+failure" proofs are all unit/live-DB-level too, never Playwright fault
+injection) — flagged plainly here rather than silently skipped.
+
+**→ Module 08 dashboard sub-slice — INDEPENDENT TESTER VERIFICATION DONE
+(2026-09-01). PASS on every one of the 8 dispatched checks, no functional
+bug found this time — the coder's own ranking/degrade/omission logic held
+under fresh adversarial fixtures the coder's own suite didn't use.**
+
+1. **Ranking re-derivation, fresh adversarial fixtures (own file, kept —
+   not deleted — as real added coverage):
+   `lib/dashboard/__tests__/dashboard-repository.independent-verify.live.test.ts`,
+   3 live-DB tests.** Same-account open+closeout-today with fresh
+   instruments/risk values: `open` wins. **Cross-account fixture the
+   coder's own tests never built**: open position on account A,
+   unconfirmed-closed trade today on a *different* account B, same user —
+   `open` still correctly wins system-wide (the resolver doesn't need to
+   know about accounts at all; the repository already flattens
+   `openTrades.length > 0` across every account before ranking, confirmed
+   by direct DB read of the closed trade's real `account_id`, not just
+   trusted). Third fixture (no open position, closeout trades on two
+   different accounts): resolves `closeout` with `target: null` (correctly
+   refuses to guess which account/day to deep-link to). All 3 passed.
+2. **`server_day` fix ripple-check, whole-codebase grep — PASS, no other
+   latent caller found.** Traced every `.server_day` read/select across
+   the repo: `TRADE_COLUMNS`/`TradeRow` (now fixed, consumed by
+   `trades-repository.ts` and `app/(app)/trades/actions.ts`/`page.tsx`,
+   neither of which ever formats/compares `.server_day` directly, so no
+   downstream bug existed even before the fix — confirmed by grep, zero
+   `.server_day` references in either file); `freeze-evaluations.ts`,
+   `distributions-repository.ts` (both call sites), `cross-trade-operand
+   -values.ts` (all 3 queries), `unlock-state-repository.ts` — every one
+   already independently cast `server_day::text`, confirmed by reading
+   each query text directly, not assumed from the PROGRESS.md claim.
+   `confirm.ts`'s `ConfirmDayTradeRow` query uses `server_day` only in a
+   `WHERE` clause (never selects/returns it), and `split-join.ts`'s
+   `JoinTradeRow` doesn't select `server_day` at all — neither has a type
+   to mismatch. No gap found.
+3. **Open-position minimal indicator — PASS, independently re-screenshot,
+   not just re-read the coder's own PNG.** Re-ran the coder's own E2E test
+   (`e2e/dashboard.spec.ts` "Open position") against a fresh dev server
+   and re-captured `tmp/dev-screenshots/dashboard-open.png` from scratch
+   (age field differs from the coder's own capture — 6h 18m vs. 6h 5m —
+   confirming a genuinely independent render, not a stale file). Confirmed:
+   no "N/A"/blank placeholder anywhere (grepped the dashboard code
+   directly — `currentR`/`conviction` never appear in any JSX, only in
+   header comments explaining the deliberate omission); single `Risk`
+   stat, real value; "Nothing to do until it closes." reads as
+   intentional, not broken; layout (`.open-position` card, single stat,
+   no button) is structurally distinct from both `trades/page.tsx`'s own
+   `OpenPositionCard` (same real/deferred field split, but different
+   container class and different page/nav context — confirmed the two
+   never render on the same route) and from this dashboard's own
+   `closeout` (list + `.rq-btn`) and `clear` (adherence section, no card)
+   states, independently re-screenshotted in the same pass. CSS confirmed
+   achromatic (`--rq-ink`/`--rq-surface`/`--rq-line` only, no
+   success/danger pair) in both the source and synced `public/` copies.
+4. **Determinism/totality — re-ran the coder's own fast-check property
+   test (5/5 green) AND added a fresh adversarial check of my own**: a
+   throwaway test calling `resolveDashboardKind` with non-boolean runtime
+   values (`0`, `1`, `''`, `null`, `undefined`, `NaN`, `[]`, `{}` in all 64
+   pairings) bypassing TypeScript's compile-time boolean constraint —
+   every call still returned one of exactly `open`/`closeout`/`clear`,
+   confirming the ranking is genuinely total even against a hostile
+   runtime caller, not just well-typed inputs. Deleted after running (not
+   shipped — pure throwaway robustness check, not a documented contract).
+5. **Graceful degradation — re-ran the coder's own mocked test AND added 3
+   of my own** (throwaway, deleted after running): failing
+   `listClosedUnconfirmedTrades` alone, failing `listTradingAccounts`
+   alone, and — the sharpest case — a real open position present in the
+   data BUT `listTradingAccounts` rejecting mid-composition. All three
+   degrade to `{ kind: 'clear', syncDegraded: true }`, never a half-
+   composed state, confirming the single try/catch around the whole
+   `Promise.all` composition is genuinely the only exit path, not
+   incidentally correct for the one failure mode the coder's own test
+   happened to cover. Did not attempt true fault-injected E2E — concur
+   with the coder's own judgment that this is impractical without
+   dedicated tooling and consistent with every other "forced failure"
+   proof in this repo being unit/live-DB-level.
+6. **Streak/projection absence — grepped `app/(app)/dashboard` and
+   `lib/dashboard` directly for `weeks_active`/`streak`/"next finding"**:
+   present only in header comments explaining the deliberate omission,
+   zero JSX/render-path references. Confirmed absent, not just claimed.
+7. **Full test re-run, not trusted from the coder's report**: targeted
+   `lib/dashboard`+`lib/onboarding`+`app/(app)/dashboard` — 11 files, 70
+   passed/1 skipped (documented `autoConfirmStaleTrades` infra gap), all
+   green including my own 2 new adversarial files before their deletion/
+   retention. `e2e/dashboard.spec.ts` (all 4 tests) and `e2e/onboarding
+   .spec.ts` (all 3, confirming the router's `/dashboard` destination
+   change didn't regress the onboarding flow) both re-run fully green
+   against a fresh dev server. Broader `lib/ingestion` (22 files) and
+   `lib/rules`+`app/(app)` (55 files) sweeps: 9 and 7 failures
+   respectively, **every one matching this session's own already-
+   documented pre-existing `autoConfirmStaleTrades`-backlog live-DB
+   timeout pattern by exact file name** (`confirm.live.test.ts`,
+   `manual-entry.live.test.ts`, `split-join.live.test.ts`,
+   `sync.live.test.ts`, `trades-repository.live.test.ts`,
+   `adherence-repository.live.test.ts`, `freeze-evaluations.live.test.ts`,
+   `severity-lifecycle.live.test.ts`) — none touch dashboard/onboarding
+   code, confirmed by name against files this dispatch's own diff scope
+   touched. `corrections.live.test.ts` (the file most directly exercising
+   the `server_day` fix) passed clean, 4/4. `npx tsc --noEmit` clean,
+   `npx eslint .` clean (0 errors, the same 19 pre-existing warnings),
+   `npm run build` passed clean (6+GB free memory checked first, dev
+   server killed before building — no OOM this time).
+8. **Memory hygiene**: checked before starting (no orphaned node
+   processes), killed the dev server's full process tree before running
+   `npm run build`, confirmed zero `node.exe`/`esbuild.exe` processes
+   remain at the end of this dispatch.
+
+**Net verdict: PASS overall.** No functional/security/design-system gap
+found in this sub-slice. Kept `dashboard-repository.independent-verify
+.live.test.ts` (3 tests) as permanent added coverage — it's the only file
+in this slice that actually proves the cross-account ranking case, which
+the coder's own suite never exercised. Not yet security-reviewed or
+QA'd — this was a tester-only independent-verification pass per this
+dispatch's own scope.
+
+**Route/nav wiring**: `lib/onboarding/router.ts`'s final branch
+(`rules_calibrated`/`first_closeout`/`fields_introduced`/`complete`) now
+points at `/dashboard` instead of the `/rules` placeholder Slice 08b's own
+header explicitly flagged as temporary ("a future real-dashboard slice has
+an unambiguous single call site to redirect from instead" — this is that
+slice); `app/(app)/layout.tsx` gained a "Home" nav entry (§7.5's tab
+order) pointing at `/dashboard`. `/` itself stays a pure redirector,
+unchanged in shape.
+
+**A real, previously-latent production bug found and fixed, not worked
+around**: `lib/ingestion/corrections.ts`'s shared `TRADE_COLUMNS` selected
+`trades.server_day` (a Postgres `date` column) with NO `::text` cast,
+while `TradeRow.server_day` was typed `string` — node-pg's default `date`
+parser actually returns a `Date` object, parsed via LOCAL time components
+("Force YYYY-MM-DD dates to be parsed as local time"), a genuine type lie
+that went unnoticed because no consumer before this dispatch ever compared
+`.server_day` for equality (every other file that needed a real string —
+`confirm.ts`, `cross-trade-operand-values.ts`, `distributions-repository
+.ts`, `unlock-state-repository.ts` — had already independently discovered
+this same landmine and already cast `server_day::text`). Caught by a live-
+DB test failure (a `Date` object never `===` a computed `'YYYY-MM-DD'`
+string), not a guess. Fixed at the shared source (`TRADE_COLUMNS` itself
+now casts `server_day::text as server_day`), not patched around locally —
+every current and future caller of `listOpenTrades`/
+`listClosedUnconfirmedTrades`/`listConfirmedTrades`/`listTradesForAccountDay`
+/`toggleNotADecision` now gets the type its own signature already claimed.
+Re-verified: `lib/ingestion/__tests__/corrections.live.test.ts` (4/4) and
+`lib/ingestion/__tests__/trades-repository.live.test.ts` (10/11 — the one
+failure, an RLS-isolation test timing out at its own tight 5000ms budget,
+independently reproduced BEFORE this change too via `git stash`, confirmed
+pre-existing and unrelated) both re-run clean; the full mocked
+`app/(app)/trades` suite (67/67) and `app/(app)/rules` suites unaffected
+(mocks never exercise the real type parser).
+
+New tests: `lib/dashboard/__tests__/dashboard-state.test.ts` (5, incl. a
+fast-check totality/determinism property), `dashboard-repository.test.ts`
+(7 mocked, incl. a genuinely adversarial two-account-different-rollover
+"today disagrees per account" fixture), `dashboard-repository.live.test.ts`
+(3, real Postgres, RLS-enforced via `withUserConnection`), a 4-test
+Playwright E2E file (`e2e/dashboard.spec.ts`: real closeout-to-confirm
+round trip through the ALREADY-BUILT close-out screen via a real deep
+link, real adherence numbers in Clear, the open-position honest indicator,
+the Home nav link) — all green on first real run against the live dev
+server. `lib/onboarding/__tests__/router.test.ts` and `e2e/onboarding
+.spec.ts` updated for the new `/dashboard` destination (both re-run
+clean). Screenshots self-checked (`tmp/dev-screenshots/dashboard-
+{closeout,clear,open}.png`): no red/green anywhere, exactly one primary
+`.rq-btn` on `closeout` and zero on `open`/`clear` (per §7.1's own table),
+`.rq-num` on every numeric readout, no currency/R-multiple on Clear or
+closeout (only the deferred `open` state's real `risk_pct` shows a
+number, per Module 02's own already-established precedent for that exact
+field). `tsc --noEmit`/`npx eslint .` both clean. **Full `npx vitest run`:
+1742 passed / 19 failed / 15 skipped (1776 total, 150 files)** — every one
+of the 19 failures is in a pre-existing live-DB test file this dispatch
+never touched (`confirm.live`, `manual-entry.live`, `split-join.live`,
+`sync.live`, `trades-repository.live`, `trades-freeze-trigger.live`,
+`adherence-repository.live`, `freeze-evaluations.live`,
+`severity-lifecycle.live`, `severity-lifecycle.independent-verification
+.live`), all timeout/deadlock-shaped under the same "1776 tests in one
+pass contends the shared dev/test Supabase project" pattern this session
+has already documented repeatedly (ADR 0002) — none in `lib/dashboard`,
+`app/(app)/dashboard`, or any file this dispatch modified beyond the
+`server_day::text` fix, which was independently re-verified clean via
+`git stash` isolation (see the matching decision-log entry). `npm run
+build` PASSED CLEAN (dev server killed first, ~6.8GB free, well above
+this session's own documented OOM threshold) — `/dashboard` appears as a
+real dynamic route in the build output alongside every other module's
+existing routes.
+
+New CSS (`.dash`/`.dash__*`/`.stat`/`.open-position*`), named directly by
+§7/§8's own reference markup but never shipped before this slice, same
+"add what the spec already named, don't invent" precedent every prior
+Module 04 UI slice (`.hook`/`.ambient`/`.adherence`/`.alert`) established
+— synced to both `retrospeq-design-system/brand/css/components.css` and
+`public/brand/css/components.css`. No migration (no schema change — reuses
+Module 02/04's existing tables verbatim). No ADR (route/CSS-precedent
+choices, documented in-file, not a 00-foundation convention deviation).
+`docs/runbook.md` gained one new entry, "Dashboard state resolution
+failing (`DASH_STATE_UNRESOLVED`)." **Not yet independently tested/
+security-reviewed/QA'd — do not mark this dashboard sub-slice or Module 08
+"done."**
 
 **→ Slice 10f (story 2.5's edit-a-threshold UI) — CODER PASS DONE
 (2026-09-01).** Closes the real, previously-untracked gap this same
@@ -7725,6 +7997,43 @@ Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
   open / Trades to close / Clear) lands; no code change needed to this
   decision itself when that happens, only the router's own destination
   for the terminal stages.
+- 2026-09-01 — **The Module 08 dashboard sub-slice supersedes Slice 08b's
+  own `/rules` terminal-stage placeholder, exactly as that earlier
+  decision-log entry (immediately above) predicted it eventually would.**
+  `lib/onboarding/router.ts`'s final branch now returns `/dashboard`
+  instead of `/rules`; `app/(app)/dashboard/page.tsx` is the real
+  destination. Reconciles the kickoff blocker analysis's own "3-state"
+  framing (§ "Current task," 2026-09-01) against what was actually built:
+  on closer investigation, "Position open" needed data this repo
+  genuinely does not have (a live price feed for current-R, Module 03's
+  conviction capture), so the dashboard ships as `open`/`closeout`/`clear`
+  with `open` reduced to a minimal honest indicator rather than a full
+  §7.1 card — narrower than "3-state" implied, but every state is real,
+  not a placeholder. No code change needed to THIS entry going forward;
+  a future "Position open" full-card slice or a Module-06-unblocked
+  "Review ready" slice would each get their own decision-log entry.
+- 2026-09-01 — **Fixed a real, previously-latent type lie: `TradeRow.
+  server_day` was declared `string` but was actually a `Date` object at
+  runtime.** `lib/ingestion/corrections.ts`'s shared `TRADE_COLUMNS`
+  selected `trades.server_day` (a Postgres `date` column) with no
+  `::text` cast — node-pg's default `date` parser returns a real `Date`,
+  constructed from LOCAL time components, not a string. Every other file
+  in this repo that needed `server_day` as a real string had already
+  independently discovered this and cast it (`confirm.ts`, `cross-trade-
+  operand-values.ts`, `distributions-repository.ts`, `unlock-state-
+  repository.ts`) — `corrections.ts`'s shared `TRADE_COLUMNS` was the one
+  remaining place that never got the same fix, invisible until now because
+  no consumer of `trades-repository.ts`'s reads ever compared `.server_day`
+  for equality before the dashboard sub-slice's own live-DB test caught it
+  directly (a `Date` object never `===` a computed `'YYYY-MM-DD'` string).
+  Fixed at the shared source (`server_day::text as server_day`), matching
+  the repo-wide convention exactly, rather than a local workaround in the
+  new caller — every current and future consumer of `TRADE_COLUMNS` now
+  gets the type its own signature already claimed. Re-verified via
+  `git stash` that the failure reproduced identically on the OLD code (not
+  a regression introduced by this fix), and that `corrections.live.test.ts`
+  /`trades-repository.live.test.ts`/the mocked `app/(app)/trades` suite all
+  stayed green after.
 - 2026-09-01 — **Module 08 Slice 08a (`onboarding_state`/`unlock_state`
   schema + unlock-counter wiring) DONE — coder pass, not yet tester/
   security-reviewer/qa reviewed.** Pure backend plumbing per this slice's

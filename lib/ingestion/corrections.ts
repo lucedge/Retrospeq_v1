@@ -92,8 +92,30 @@ export interface TradeRow {
  * reuse the exact same column list rather than maintaining a second,
  * driftable copy — one `trades` SELECT shape, not two.
  */
+/**
+ * `server_day::text` — a real bug fix (Module 08 dashboard dispatch,
+ * 2026-09-01), not a stylistic choice. `TradeRow.server_day` has always
+ * been TYPED as `string`, but `trades.server_day` is a Postgres `date`
+ * column, and node-pg's default type parser for `date` (OID 1082,
+ * `postgres-date`'s own `getDate()` path, "Force YYYY-MM-DD dates to be
+ * parsed as local time") returns a real `Date` object, not a string —
+ * WITHOUT the cast, every caller of `TRADE_COLUMNS` was silently getting a
+ * `Date` at runtime while the type system claimed `string`. This went
+ * unnoticed because no consumer before this fix ever compared
+ * `.server_day` for equality or formatted it directly (`lib/ingestion/
+ * confirm.ts`, `lib/rules/cross-trade-operand-values.ts`,
+ * `lib/rules/distributions-repository.ts`, and `lib/onboarding/
+ * unlock-state-repository.ts` all independently discovered this same
+ * landmine already and already cast `server_day::text` in their OWN raw
+ * SQL — this is that same established, repo-wide convention applied here,
+ * closing the one remaining place that never got it). Found because
+ * `lib/dashboard/dashboard-repository.ts` is the first caller of THIS
+ * file's `TRADE_COLUMNS` to compare `.server_day` against a computed
+ * `YYYY-MM-DD` string — a live-DB test failure (a Date object never
+ * `===` a string) caught it directly, not a guess.
+ */
 export const TRADE_COLUMNS = `
-  id, user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
+  id, user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day::text as server_day, status,
   entry_price_avg, exit_price_avg, peak_volume, initial_stop, risk_pct, initial_risk_pct, r_multiple,
   realized_pnl, currency, hold_seconds, outcome, strategy_id, strategy_version,
   grouping_confidence, grouping_signals, grouping_source, ambiguity_resolved_at,

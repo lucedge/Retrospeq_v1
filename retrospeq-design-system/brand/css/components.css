@@ -304,3 +304,79 @@
 }
 .hook__contrast { font-size: var(--rq-text-base); color: var(--rq-ink-soft); margin: 0; }
 .hook__meta { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); margin: 0; }
+
+/* ---------- Dashboard ----------
+   Module 08 (Onboarding & Home) §7/§8's own reference markup names this
+   markup directly (`.dash[data-state]`, `.dash__day`, `.dash__headline`,
+   `.dash__sub`, `.dash__stats`/`.stat`, `.dash__trades`, `.dash__quiet`,
+   `.open-position`, `.open-position__head`, `.open-position__facts`) but,
+   like `.hook`/`.ambient`/`.adherence`/`.alert` before their own
+   additions, no rule ever shipped the CSS for it -- added here, not
+   invented independently of the spec that already named it.
+
+   THIS DISPATCH builds only two of §7.1's four states in full
+   (`closeout`/`clear`) plus a minimal indicator for `open` -- see
+   `app/(app)/dashboard/page.tsx`'s own header for the full scope
+   reasoning. `data-state` is still applied for all three so a future
+   Module-06-unblocked "Review ready" state (`data-state="review"`) has an
+   unambiguous existing convention to extend, not a new one to invent.
+
+   One headline, one sub-line, one quiet line -- never three competing
+   pieces of emphasis on one screen (§7.4, "one insight maximum, usually
+   zero"). No red/green anywhere: the headline/sub/quiet hierarchy is
+   carried by size and weight only, same device every other component in
+   this file uses -- there is still no --color-success/--color-danger pair
+   in this system and this component does not invent one. */
+.dash { display: flex; flex-direction: column; gap: var(--rq-space-4); }
+.dash__day {
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-xs);
+  letter-spacing: var(--rq-track-label); text-transform: uppercase;
+  color: var(--rq-ink-faint); margin: 0;
+}
+.dash__headline {
+  font-size: var(--rq-text-2xl); font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight); line-height: var(--rq-leading-tight);
+  margin: 0;
+}
+.dash__sub { font-size: var(--rq-text-base); color: var(--rq-ink-soft); margin: 0; }
+.dash__quiet { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); margin: 0; }
+.dash__stats { display: flex; flex-wrap: wrap; gap: var(--rq-space-6); }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat__label {
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--rq-ink-faint);
+}
+.stat__value {
+  font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--rq-text-md); font-weight: var(--rq-weight-medium); color: var(--rq-ink);
+}
+.dash__trades {
+  display: flex; flex-direction: column; gap: var(--rq-space-3);
+  list-style: none; margin: 0; padding: 0;
+}
+.dash__trades > li {
+  display: flex; align-items: center; gap: var(--rq-space-3);
+  padding: var(--rq-space-2) 0;
+  border-bottom: 1px solid var(--rq-line);
+}
+.dash__trades .instrument { font-weight: var(--rq-weight-medium); }
+.dash__trades .dir { color: var(--rq-ink-soft); font-size: var(--rq-text-sm); }
+.dash__trades time { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; color: var(--rq-ink-faint); }
+.open-position {
+  border-radius: var(--rq-radius-lg);
+  background: var(--rq-surface);
+  padding: var(--rq-space-3) var(--rq-space-4);
+  display: flex; flex-direction: column; gap: var(--rq-space-2);
+}
+.open-position__head { display: flex; align-items: center; justify-content: space-between; gap: var(--rq-space-3); }
+.open-position__head .instrument { font-weight: var(--rq-weight-medium); }
+.open-position__facts { display: flex; gap: var(--rq-space-4); margin: 0; }
+.open-position__facts div { display: flex; flex-direction: column; gap: 2px; }
+.open-position__facts dt {
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--rq-ink-faint);
+}
+.open-position__facts dd {
+  font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--rq-text-base); color: var(--rq-ink); margin: 0;
+}

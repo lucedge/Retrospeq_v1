@@ -37,14 +37,15 @@ import type { OnboardingPath, OnboardingStage } from './onboarding-state-reposit
  *   `history_imported` for exactly this reason, and this router completes
  *   that shortcut by skipping the Hook screen entirely for that path.
  * - `rules_calibrated` / `first_closeout` / `fields_introduced` /
- *   `complete` -> `/rules`. §7's real dashboard/home screen does not exist
- *   yet (a separate future Module 08 sub-slice, out of this dispatch's
- *   scope) — `/rules` is the most substantial, genuinely useful screen a
- *   completed-onboarding trader can land on today (Module 04's rule list,
- *   adherence display, and severity controls all already ship there,
- *   Slices 10d/10e) rather than a bare, less informative screen like
- *   `/trades/manual-entry`. Documented here so a future real-dashboard
- *   slice has an unambiguous single call site to redirect from instead.
+ *   `complete` -> `/dashboard`. §7's real dashboard now exists (this
+ *   entry updated by the dashboard dispatch itself, per the note this
+ *   comment used to carry: "a future real-dashboard slice has an
+ *   unambiguous single call site to redirect from instead" — this is that
+ *   slice). See `app/(app)/dashboard/page.tsx`'s own header for exactly
+ *   which of §7.1's four states this dispatch builds (`open`/`closeout`/
+ *   `clear`, not the Module-06-blocked `Review ready`) and for why the
+ *   dashboard is its own dedicated route rather than composed inline into
+ *   `/` itself.
  */
 export function resolveOnboardingDestination(stage: OnboardingStage, path: OnboardingPath): string {
   switch (stage) {
@@ -58,7 +59,7 @@ export function resolveOnboardingDestination(stage: OnboardingStage, path: Onboa
     case 'first_closeout':
     case 'fields_introduced':
     case 'complete':
-      return '/rules';
+      return '/dashboard';
     default: {
       // Exhaustiveness guard -- `OnboardingStage` is a closed seven-value
       // union (§4); this branch is structurally unreachable for any value

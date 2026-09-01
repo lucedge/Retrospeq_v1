@@ -1067,3 +1067,44 @@ drop a found issue, as a small, well-understood, quick fix for a future
 dispatch — NOT a deep investigation, per the correction above.
 **Action:** none taken; PROGRESS.md's "Infra gaps"/decision log carries
 the pointer to this entry.
+
+## Dashboard state resolution failing (`DASH_STATE_UNRESOLVED`)
+
+**Source:** Module 08 (Onboarding & Home) §7/§12 — the dashboard dispatch
+(2026-09-01). Owning code: `lib/dashboard/dashboard-repository.ts`'s
+`getDashboardStateForUser`, the sole read behind `app/(app)/dashboard
+/page.tsx` — the app's home screen for any trader past onboarding
+calibration (`lib/onboarding/router.ts` sends `rules_calibrated` and every
+later stage here).
+
+**What this means operationally:** §12's own error table names
+`DASH_STATE_UNRESOLVED` ("Data unavailable" -> "Show Clear with a quiet
+sync indicator. Never an error screen on home") and §7.2 calls this "the
+single most load-bearing non-negotiable for this specific screen." Every
+read `getDashboardStateForUser` issues (`listOpenTrades`,
+`listClosedUnconfirmedTrades`, `listTradingAccounts`) runs inside one
+try/catch; ANY failure — a transient connection error, an RLS
+misconfiguration, anything — degrades to `{ kind: 'clear', syncDegraded:
+true }` rather than throwing past this function. `app/(app)/dashboard
+/page.tsx` renders that as the Clear state's honest "Still syncing — this
+may not reflect your latest activity." note instead of "Your day is
+clear." — never a crashed page, and critically, never the false-positive
+"Nothing to close out." headline a trader could otherwise mistake for a
+genuinely clear day.
+
+**How to check:** grep application logs for `[dashboard]
+getDashboardStateForUser read failed` — every occurrence includes the
+underlying error via `console.error`'s second argument. A trader reporting
+"my dashboard says still syncing" (rather than a hard error, since none is
+ever shown) is the user-facing symptom.
+
+**Action:** a single occurrence for one trader is very likely a transient
+DB blip — no action needed, the next page load re-resolves normally
+(nothing is cached or written by this read; it is fully stateless per
+request). Investigate only if this appears across many traders at once
+(a genuine Supabase/RLS/connectivity incident) or repeatedly for the SAME
+trader (worth checking that trader's `trading_accounts.day_rollover`
+values parse cleanly — `lib/ingestion/server-day.ts`'s `computeServerDay`
+throws loudly, not silently, on a malformed rollover string, which this
+function's own try/catch would swallow into a `syncDegraded: true` Clear
+render rather than surface directly).
