@@ -28,6 +28,7 @@ import { computeServerDay } from './server-day';
 import { matchArmEvent, type ArmDirection, type CandidateEntryFill } from './arm-matching';
 import { lockPreEntryCaptures } from './trade-captures';
 import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
+import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -1155,6 +1156,32 @@ export async function runSync(
   }
 
   const result = await writeSyncOutcome(account, options.trigger, windowFrom, windowTo, fills, lastWindowTo === null);
+
+  // Module 08 (Onboarding & Home) §5.1 step 3 -- Slice 08b: reaching this
+  // line at all means `writeSyncOutcome` committed a real (`ok`/`partial`,
+  // never `failed` -- a failed adapter/credential attempt already returned
+  // above before this call) sync run, which IS the "history imported"
+  // milestone for a broker-path trader. Best-effort, non-blocking, same
+  // "never turn a genuinely successful sync into a reported failure"
+  // posture as the `operand_distributions` recompute immediately below —
+  // see `advanceOnboardingStageBestEffort`'s own header. No `path`
+  // override here (unlike `app/(app)/accounts/actions.ts`'s connect-time
+  // calls): a resync of an already-connected broker account should never
+  // silently flip a trader's recorded `path` away from whatever it was
+  // truthfully set to at connect time.
+  try {
+    await advanceOnboardingStageBestEffort(account.user_id, 'history_imported');
+  } catch (err) {
+    // `advanceOnboardingStageBestEffort` itself never throws (it swallows
+    // every failure internally) -- this catch exists only as a structural
+    // guard should that contract ever change, matching this file's own
+    // "never let a side effect fail the primary flow" posture rather than
+    // trusting the callee's contract silently.
+    console.error(
+      `[sync] onboarding_state advance failed unexpectedly after sync for user ${account.user_id} (syncRunId ${result.syncRunId}):`,
+      err,
+    );
+  }
 
   // Module 04 §12: "operand_distributions recompute nightly and on demand
   // after a sync — this is what keeps preview interactive." Nightly is

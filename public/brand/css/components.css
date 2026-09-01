@@ -271,3 +271,36 @@
   display: flex; align-items: center; gap: var(--rq-space-2);
   font-size: var(--rq-text-base); cursor: pointer;
 }
+
+/* ---------- Hook (cold-start) ----------
+   Module 08 (Onboarding & Home) §5.2/§8's own reference markup names this
+   markup directly (`.hook`, `.hook--none`, `.hook__eyebrow`,
+   `.hook__statement`, `.hook__contrast`, `.hook__meta`) but, like
+   `.ambient`/`.adherence`/`.alert` before their own additions, no rule
+   ever shipped the CSS for it -- added here, not invented independently
+   of the spec.
+
+   Slice 08b builds ONLY the honest-fallback variant (`.hook--none`) --
+   never the real-finding path (needs a Module 05 analytic that does not
+   exist, see the route's own header comment). The two markup blocks §8
+   shows differ STRUCTURALLY, not by a CSS modifier: the real-finding
+   version has an eyebrow line and a meta attribution line the honest
+   fallback omits entirely, so `.hook--none` itself carries no distinct
+   rule of its own here -- there is nothing to style differently yet, only
+   elements this dispatch never renders. Applied to the markup anyway
+   (never silently dropped) so a future Module 05 slice building the
+   real-finding variant has an unambiguous, already-spec-matching hook to
+   style differently if one turns out to be needed. */
+.hook { display: flex; flex-direction: column; gap: var(--rq-space-3); }
+.hook__eyebrow {
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-xs);
+  font-weight: var(--rq-weight-regular); letter-spacing: var(--rq-track-label);
+  text-transform: uppercase; color: var(--rq-ink-faint); margin: 0;
+}
+.hook__statement {
+  font-size: var(--rq-text-2xl); font-weight: var(--rq-weight-bold);
+  letter-spacing: var(--rq-track-tight); line-height: var(--rq-leading-tight);
+  text-wrap: balance; margin: 0;
+}
+.hook__contrast { font-size: var(--rq-text-base); color: var(--rq-ink-soft); margin: 0; }
+.hook__meta { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); margin: 0; }

@@ -118,6 +118,18 @@ vi.mock('@/lib/broker/envelope-encryption', async (importOriginal) => {
 vi.mock('@/lib/entitlements/service', () => ({
   canForUser: canForUserMock,
 }));
+// Module 08 (Onboarding & Home) §5.1/§5.6 -- Slice 08b's stage-advancement
+// wiring. Mocked so this file's own tests can assert exactly what
+// `connectAccount`/`connectManualAccount` pass through, without needing a
+// live `onboarding_state` row — live behaviour of
+// `advanceOnboardingStageBestEffort` itself is
+// `lib/onboarding/__tests__/onboarding-state-repository.test.ts`'s job.
+const { advanceOnboardingStageBestEffortMock } = vi.hoisted(() => ({
+  advanceOnboardingStageBestEffortMock: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/onboarding/onboarding-state-repository', () => ({
+  advanceOnboardingStageBestEffort: advanceOnboardingStageBestEffortMock,
+}));
 vi.mock('server-only', () => ({}));
 
 const { connectAccount, disconnectAccount, updateAccountSettings } = await import('../actions');
@@ -171,6 +183,7 @@ beforeEach(() => {
     unwrapDataKey: unwrapDataKeyMock,
   }));
   canForUserMock.mockReset().mockResolvedValue({ allowed: true, reason: 'ok', limit: 1, used: 0 });
+  advanceOnboardingStageBestEffortMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe('connectAccount', () => {
@@ -208,6 +221,33 @@ describe('connectAccount', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/accounts');
   });
 
+  it('Module 08 §5.6: manual platform jumps onboarding straight to history_imported/manual, skipping account_connected entirely', async () => {
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.success).toBe(true);
+    expect(advanceOnboardingStageBestEffortMock).toHaveBeenCalledWith('user-aaaa-1111', 'history_imported', {
+      path: 'manual',
+    });
+  });
+
+  it('Module 08: a failing onboarding-stage advance never turns a successful manual connect into a reported failure', async () => {
+    // advanceOnboardingStageBestEffort's REAL contract is "never throws" —
+    // this simulates a violation of that contract (a defensive
+    // `.catch()` at the call site, matching this file's own
+    // `deleteTradingAccount(...).catch(...)` precedent) to prove the
+    // connect action itself still reports success even if that contract
+    // is ever broken.
+    advanceOnboardingStageBestEffortMock.mockRejectedValueOnce(new Error('should never happen, but just in case'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.success).toBe(true);
+    expect(insertTradingAccountMock).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('credentialed happy path: fixture adapter succeeds, writes both rows, never leaks the plaintext credential', async () => {
     const result = await connectAccount(
       undefined,
@@ -230,6 +270,64 @@ describe('connectAccount', () => {
       'a-real-investor-password',
     );
     expect(JSON.stringify(result)).not.toContain('a-real-investor-password');
+  });
+
+  it('Module 08 §5.1: a successful credentialed connect advances onboarding to account_connected/broker', async () => {
+    await connectAccount(
+      undefined,
+      formData({
+        platform: 'mt5',
+        server: 'ICMarketsSC-Live02',
+        login: '12345',
+        credential: 'a-real-investor-password',
+      }),
+    );
+
+    expect(advanceOnboardingStageBestEffortMock).toHaveBeenCalledWith(FAKE_USER.id, 'account_connected', {
+      path: 'broker',
+    });
+  });
+
+  it('Module 08: onboarding stage is NOT advanced when the connect attempt itself is rejected (master-credential rejection)', async () => {
+    await connectAccount(
+      undefined,
+      formData({
+        platform: 'mt5',
+        server: 'ICMarketsSC-Live02',
+        login: '12345',
+        credential: 'this-is-my-master-password',
+      }),
+    );
+
+    expect(advanceOnboardingStageBestEffortMock).not.toHaveBeenCalled();
+  });
+
+  // Independent verification (Slice 08b QA dispatch, 2026-09-01): the
+  // coder's own suite only forces `advanceOnboardingStageBestEffort` to
+  // reject for the MANUAL path (see the "never turns a successful manual
+  // connect into a reported failure" test above) — the CREDENTIALED path
+  // has its own, separate `.catch()` call site in `connectAccount` and was
+  // never independently exercised the same way. Closing that gap here
+  // rather than trusting the manual-path coverage to stand in for it.
+  it('independent verify: a failing onboarding-stage advance never turns a successful CREDENTIALED connect into a reported failure, and the real rows are still written', async () => {
+    advanceOnboardingStageBestEffortMock.mockRejectedValueOnce(new Error('should never happen, but just in case'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await connectAccount(
+      undefined,
+      formData({
+        platform: 'mt5',
+        server: 'ICMarketsSC-Live02',
+        login: '12345',
+        credential: 'a-real-investor-password',
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(insertTradingAccountMock).toHaveBeenCalledTimes(1);
+    expect(insertAccountCredentialMock).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   it('master-credential rejection: CONNECT_CREDENTIAL_TOO_PERMISSIVE, zero DB writes — Module 01 §8 "100% accuracy" weight', async () => {

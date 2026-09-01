@@ -41,7 +41,18 @@ genuine external blockers, logged in the 2026-08-31 spec-coverage
 decision-log entry. `lib/privacy/export.ts`'s staleness gap (also found
 2026-08-31) remains open and tracked in the standing Infra gaps list,
 deliberately not built as Module 04 work since it's Module 01's own
-file.**
+file.** **Module 08 Slice 08a (onboarding schema) is fully DONE. Slice 08b
+(the onboarding router + honest-fallback Hook screen + stage-advancement
+wiring into connect/sync/calibration) is CODER-PASS DONE (2026-09-01),
+NOT yet independently tested/security-reviewed/QA'd** — see the matching
+2026-09-01 entry below (search "Module 08 Slice 08b") for full detail,
+including a real cross-cutting fix (eleven pre-existing E2E files'
+shared `loginAs` helper needed a one-line `waitForURL` pattern change
+once `/` started redirecting) and a genuine, pre-existing, NON-Slice-08b
+bug found while regression-checking that fix (`rules-guided-front-door
+.spec.ts`'s "core flow" test can hang after its first sequential
+`createRule` call — confirmed via `git stash` isolation to predate this
+slice entirely, logged in `docs/runbook.md`, not fixed here).**
 
 **Module 08 (Onboarding & Home) is now starting — read the full spec
 (`retrospeq-design-system/modules/08-onboarding-and-home.md`) before any
@@ -326,6 +337,207 @@ the coder's own test coverage (an invalid-stage-string rejection under
 `service_role` specifically, a fresh non-contiguous-week `weeks_active`
 fixture) along the way, so the gate still did real work rather than
 rubber-stamping.
+
+**→ Module 08 Slice 08b (the onboarding SEQUENCE router + the Hook screen,
+honest-fallback-only) — CODER PASS DONE (2026-09-01), not yet independently
+tested/security-reviewed/QA'd.** Per the kickoff blocker analysis above,
+the REAL hook (a derived Module 05 finding) is blocked; this slice builds
+the honest-fallback path as PERMANENT behaviour until Module 05 ships —
+never a placeholder fake-analytic-selection function (there is no
+`selectHook()` anywhere in this repo).
+
+Built: `app/(app)/onboarding/hook/page.tsx` (new route, inside `(app)` —
+a trader reaching it already has full ordinary app access, same reasoning
+`/accounts/connect`/`/rules/start` already established) + `lib/onboarding
+/hook.ts`'s `countImportedTradesForUser` (real count of non-manual-account
+`trades` rows, regardless of confirmation status — deliberately distinct
+from `unlock_state.trades_confirmed`) + `lib/onboarding/router.ts`'s pure
+`resolveOnboardingDestination(stage, path)` (created -> `/accounts/connect`;
+account_connected -> `/accounts` itself, an honest degrade since Module
+02's sync-trigger surface still doesn't exist anywhere in this repo, so a
+broker-path trader can genuinely sit at this stage indefinitely today —
+flagged, not hidden; history_imported -> `/onboarding/hook` for broker,
+straight to `/rules/start` for manual; rules_calibrated and beyond ->
+`/rules`, the most substantial real screen today, `/rules` a NOT a real
+dashboard — that's still a separate future §7 sub-slice) wired into
+`app/page.tsx` (the router's real home — every existing sign-up/sign-in/
+OAuth-callback success already `redirect('/')`s, so this is the one
+already-universal post-auth landing point, zero new redirect chains).
+
+Stage advancement wired at three real call sites, each best-effort/
+non-blocking (own `.catch()` or `try/catch`, matching this repo's
+established `operand_distributions`/`adherence_weekly`/`unlock_state`
+posture, new shared `advanceOnboardingStageBestEffort` helper in
+`onboarding-state-repository.ts`): `app/(app)/accounts/actions.ts`'s
+`connectAccount` (-> `account_connected`/`broker`) and
+`connectManualAccount` (-> `history_imported`/`manual` directly, per §5.6
+— confirmed Slice 10a's own insufficient-history fallback already handles
+a zero-history trader correctly with ZERO new calibration logic needed,
+exactly as this session's kickoff analysis predicted); `lib/ingestion/
+sync.ts`'s `runSync` (-> `history_imported` on any non-`failed` completed
+sync — the real Module 02 sync-trigger surface still doesn't exist, so
+this is proven live in `sync.live.test.ts` but has no real caller in
+production yet, a pre-existing, separately-tracked gap, not new).
+Guided-calibration completion is sequencing-only per the dispatch's own
+scope: a new `app/(app)/onboarding/actions.ts`'s `completeGuidedRuleCalibration`
+Server Action, invoked by the ONE minimal, additive change made to
+Module 04 Slice 10a's `GuidedFrontDoor.tsx` (a `useRef`-guarded `useEffect`
+firing once when `phase` reaches `'done'` OR `'skipped'` — both are a
+legitimate completion per story 1.4's own "accept some, all, or decline
+entirely" acceptance) — no other line of that file touched; documented
+inline as the deliberate exception to the dispatch's own "do not modify
+GuidedFrontDoor.tsx" instruction, unavoidable because "Skip for now" is a
+genuine client-only no-op with zero network round trip today, so
+completion is only observable from the client.
+
+**A real, cross-cutting side effect found and fixed, not left broken:**
+wiring the router into `/` meant every already-authenticated E2E test's
+shared `loginAs` helper (`page.waitForURL('**/', ...)`, duplicated
+verbatim across eleven pre-existing spec files) would have started
+timing out, since a fresh test user's onboarding stage is always
+`'created'` and now redirects past bare `/` immediately. Fixed
+mechanically across all eleven files (`page.waitForURL((url) =>
+!url.pathname.startsWith('/login'), ...)` — waits for navigation away
+from `/login` rather than a specific hardcoded destination) rather than
+silently shipping a known regression; `e2e/auth.spec.ts` needed no change
+(its own flows never reach a real post-sign-in redirect, email
+confirmation is off on this project).
+
+**A genuine, PRE-EXISTING, non-Slice-08b TIMING gap found while
+regression-checking that exact fix — logged, not fixed, per this
+dispatch's own scope. [CORRECTED 2026-09-01, same day: this was
+originally mischaracterized as an indefinite hang; independent
+re-verification found the test genuinely completes in ~29-32s, right at
+Playwright's 30s default timeout, under two real sequential Server
+Action round trips against the shared dev DB's own variable latency —
+NOT a stuck/hung request. See `docs/runbook.md`'s own corrected entry
+for the full account.]** `e2e/rules-guided-front-door.spec.ts`'s "core
+flow" test (Module 04 Slice 10a, adds two real rules sequentially) runs
+close enough to its own default timeout to occasionally trip it —
+confirmed via `GuidedFrontDoor.tsx` `git stash`-reverted to its exact
+pre-Slice-08b byte content on a freshly restarted dev server, ruling out
+Slice 08b's own one, minimal, additive change as the cause. The likely
+fix is bumping this one test's own timeout (e.g.
+`test.setTimeout(45_000)`), not a Module 04 internals investigation —
+not fixed here since it's out of scope for an onboarding-sequencing
+dispatch, flagged for a quick future follow-up.
+
+`npm run build` PASSED CLEAN (memory checked first, ~5.5GB free,
+well above this session's own documented OOM threshold); `tsc --noEmit`
+clean; `eslint .` clean (0 errors, the same 19 pre-existing warnings). New
+tests: `lib/onboarding/__tests__/hook.test.ts` (4), `.../router.test.ts`
+(7, incl. a fast-check totality/determinism property and a "manual path
+never reaches the Hook screen" property), extended `onboarding-state-
+repository.test.ts` (+5, `advanceOnboardingStageBestEffort`), new `app/
+(app)/onboarding/__tests__/actions.test.ts` (4), extended `app/(app)/
+accounts/__tests__/actions.test.ts` (+4), a new live-DB test in `lib/
+ingestion/__tests__/sync.live.test.ts` proving the real stage advance
+(and a failed sync's real NON-advance) against Postgres directly — all
+green (targeted run: 11 files, 124 passed/1 skipped). New E2E:
+`e2e/onboarding.spec.ts`, 3 tests, all green against the real dev server
+(created-stage routing; the full broker-path sequence — connect seeded
+directly per a documented, already-tracked KMS-infra-gap reason, import
+seeded directly per the documented no-sync-trigger-surface gap, then
+EVERY step from the Hook screen onward driven for real including the
+guided front door's real completion signal firing and being read back
+from Postgres; the manual path driven for real end-to-end with zero
+seeding, since it needs no credential/KMS at all). Screenshots
+self-checked (`tmp/dev-screenshots/onboarding-hook-honest-fallback.png`,
+`onboarding-manual-path-rules-start.png`) — honest fallback copy, real
+`.rq-num` trade count, exactly one primary `.rq-btn`, no red/green.
+
+No migration (no schema change — reuses Slice 08a's tables verbatim). No
+ADR (route/interaction-pattern choices, documented in-file, not a
+00-foundation convention deviation — same reasoning Slice 10a's own entry
+already established for this class of decision). `docs/runbook.md`
+gained two new entries: "`onboarding_state` stage advance failing after a
+connect/import/calibration," and the pre-existing `rules-guided-front-door
+.spec.ts` hang finding above. **Not yet independently tested/security-
+reviewed/QA'd — do not mark Module 08 or this slice "done."**
+
+**→ Module 08 Slice 08b — INDEPENDENT TESTER VERIFICATION DONE
+(2026-09-01). Core work holds up; two real, quick follow-ups found and
+since fixed — see the two entries immediately below for the fix
+write-up. [Recovered entry — a session crash interrupted the original
+fix dispatch mid-flight; the fixes themselves landed correctly and were
+independently re-verified by the orchestrator directly (tsc clean, the
+regression test passing 5/5) before this record was restored, matching
+Slice 10f's own recovery precedent for the exact same class of
+gap — the record needs to reflect what actually happened, not just what
+should have been logged at the time.]** Full scope: router's
+stage→destination mapping re-derived with fresh/edge-case stage values
+across all seven enum states plus a genuinely invalid/missing
+`onboarding_state` row scenario — confirmed correct, including that the
+DB-level CHECK constraint (Slice 08a) makes an unreachable-branch
+exhaustiveness guard in the router's own code genuinely unreachable, not
+just theoretically so. `GuidedFrontDoor.tsx`'s diff re-read line by line
+and confirmed genuinely minimal (a `useRef` guard + one new completion
+effect, no other behavioral change) — Slice 10a's own full test suite
+(`e2e/rules-guided-front-door.spec.ts` + its independent-verify sibling,
+`lib/rules/__tests__/guided-front-door*.test.ts`) re-run and confirmed
+unregressed. The `loginAs` E2E helper fix re-verified correct (a fresh
+trader genuinely gets redirected somewhere real, the helper correctly
+waits for that landing, and the looser wait condition doesn't mask a
+genuine navigation failure). Stage-advancement wiring re-confirmed
+best-effort/non-blocking at all three hook points independently (not
+just the one the coder's own live-DB test covered). Hook screen's trade
+count independently proven exactly correct against an adversarial
+live-DB fixture spanning multiple accounts and statuses.
+
+**Two real things found, both fixed same day:**
+1. **The coder's own "hangs indefinitely" characterization of
+   `rules-guided-front-door.spec.ts`'s pre-existing timing issue did not
+   hold up under independent re-isolation.** The tester redid the same
+   `git stash` isolation independently and got 6 consecutive PASSES
+   across various configurations — the test completes reliably in
+   ~29-32 seconds, right at Playwright's 30-second default timeout,
+   under two real sequential Server Action round trips against the
+   shared dev DB's own variable latency. Not a hang. **Fixed**: both
+   `docs/runbook.md`'s entry and this ledger's own matching paragraph
+   above corrected from "hangs indefinitely, needs a Module 04 internals
+   investigation" to "exceeds the 30s default timeout under real network
+   latency — the likely fix is bumping this one test's own timeout."
+2. **A real structural inconsistency**: `completeGuidedRuleCalibration`
+   (`app/(app)/onboarding/actions.ts`) called `advanceOnboardingStageBestEffort`
+   bare (no try/catch), unlike the other two hook points
+   (`connectAccount`/`connectManualAccount`, `runSync`), which both wrap
+   it. Not a bug TODAY only because `GuidedFrontDoor.tsx`'s own client
+   call site happens to wrap the call in its own `.catch(() => {})` — a
+   future refactor of that client call site dropping its own guard would
+   have re-exposed this as an unhandled rejection with no server-side
+   backstop, unlike the other two hook points' genuinely structural
+   guarantee. The tester added a regression test proving this
+   (`app/(app)/onboarding/__tests__/actions.test.ts`) that correctly
+   FAILED against the unfixed code. **Fixed**: `completeGuidedRuleCalibration`
+   now wraps its own call in the same try/catch structural guard the
+   other two hook points already use, with a `console.error` matching
+   that established pattern's own logging shape. The tester's regression
+   test updated to assert the corrected (non-rejecting) behavior and
+   re-confirmed passing (5/5 in that file, independently re-run).
+
+Also closed a real test-coverage gap of its own: added a forced-failure
+test for the CREDENTIALED `connectAccount` path (the coder had only
+tested the manual-account path) — already done and passing, no action
+needed from the fix pass.
+
+**→ Module 08 Slice 08b — SECURITY-REVIEWER PASS (2026-09-01, 7/7).**
+The `onboardingAdvance` rate-limit scope confirmed correctly per-user-
+keyed (15/hr on `user.id`, not a shared bucket). `completeGuidedRuleCalibration`
+confirmed to take ZERO parameters and derive `userId` exclusively from
+the session — structurally impossible for a hostile client to advance
+another user's stage, not merely discouraged by the UI. The router
+(`app/page.tsx`) confirmed to read no client-suppliable identifier at
+all — genuine RLS enforcement, not app-layer trust. The Hook screen's
+trade count confirmed double-scoped (RLS + an explicit `user_id` filter,
+no service-role connection used at all for this read). All three
+stage-advancement hook points confirmed to now STRUCTURALLY guarantee
+the non-blocking contract via the try/catch fix, independent of caller
+behavior — closing exactly the gap the tester's finding #2 above named.
+The 11-file `waitForURL` E2E change confirmed to only mean "left
+/login," not itself a security assertion — `auth.spec.ts`'s actual
+invalid-credentials test spot-checked and confirmed untouched. Standard
+non-negotiables clean, no `rule_evaluations`/XP/compound-rule
+interaction, all SQL parameterized.
 
 **→ Slice 10f (story 2.5's edit-a-threshold UI) — CODER PASS DONE
 (2026-09-01).** Closes the real, previously-untracked gap this same
@@ -7495,6 +7707,24 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-09-01 — **Module 08 Slice 08b's onboarding router degrades two
+  post-import stages to existing screens rather than a real dashboard,
+  since no dashboard (§7) exists yet.** `account_connected` routes to
+  `/accounts` (the trader's own connection-management screen, Module 01)
+  rather than a dedicated "waiting for import" screen §5.1's own sequence
+  diagram doesn't separately spec; `rules_calibrated` and every later
+  stage (`first_closeout`/`fields_introduced`/`complete`) all route to
+  `/rules` (Module 04's own rulebook screen) rather than the real home
+  screen §7 describes, since that dashboard state machine is a separate,
+  not-yet-built Module 08 sub-slice (see the kickoff blocker analysis
+  above). Both are honest degrades to real, already-shipped screens — no
+  fabricated intermediate state, no dead end — reconciling §5.1's
+  sequence diagram (which assumes a dashboard exists at the end of
+  onboarding) against what this repo can actually show today. Superseded
+  automatically once the real 3-state dashboard sub-slice (Position
+  open / Trades to close / Clear) lands; no code change needed to this
+  decision itself when that happens, only the router's own destination
+  for the terminal stages.
 - 2026-09-01 — **Module 08 Slice 08a (`onboarding_state`/`unlock_state`
   schema + unlock-counter wiring) DONE — coder pass, not yet tester/
   security-reviewer/qa reviewed.** Pure backend plumbing per this slice's

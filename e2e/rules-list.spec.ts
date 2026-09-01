@@ -83,7 +83,11 @@ test.describe('Rule list, severity lifecycle, and the hard-cap swap (Module 04 s
     await page.fill('#email', email);
     await page.fill('#password', TEST_PASSWORD);
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL('**/', { timeout: 10_000 });
+    // Module 08 (Onboarding & Home) Slice 08b: post-sign-in `/` now
+    // redirects onward per a fresh trader's onboarding stage (see
+    // `lib/onboarding/router.ts`) rather than rendering bare `/` — waits
+    // for navigation away from `/login` instead of a specific destination.
+    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 });
   }
 
   async function seedGlobalRule(

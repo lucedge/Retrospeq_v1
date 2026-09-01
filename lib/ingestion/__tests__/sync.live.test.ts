@@ -385,6 +385,60 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
   );
 
   it(
+    'Module 08 (Onboarding & Home) §5.1 -- Slice 08b: a successful sync advances onboarding_state.stage to history_imported for real, a failed sync does NOT',
+    async () => {
+      if (!env) return;
+      const { input } = loadFixture('simple_daytrades');
+      const user = await createTestAuthUser(env, 'sync-live-onboarding-wiring');
+      cleanupUserIds.push(user.id);
+
+      // handle_new_user (Module 08 Slice 08a) creates a fresh
+      // onboarding_state row at 'created' the instant this test user's
+      // auth.users row exists -- sanity-check that starting point before
+      // asserting the advance.
+      const before = await db.query<{ stage: string; path: string }>(
+        'select stage, path from retrospeq.onboarding_state where user_id = $1',
+        [user.id],
+      );
+      expect(before.rows[0]).toEqual({ stage: 'created', path: 'broker' });
+
+      const connectedAt = new Date(earliestFilledAt(input.fills).getTime() - 24 * 3600 * 1000);
+      const { accountId, masterKeyProvider } = await seedAccountWithCredential(db, user.id, input.account, connectedAt);
+
+      const { createFixtureBrokerAdapter } = await import('@/lib/broker/fixture-adapter');
+      const { runSync } = await import('../sync');
+
+      // A FAILED sync attempt first -- must NOT advance onboarding_state
+      // at all (no real import happened).
+      const failedAdapter = createFixtureBrokerAdapter({ behavior: 'auth_failed' });
+      const failedResult = await runSync(accountId, failedAdapter, { trigger: 'connect', masterKeyProvider });
+      expect(failedResult.skipped).toBe(false);
+      if (!failedResult.skipped) expect(failedResult.status).toBe('failed');
+      const afterFailed = await db.query<{ stage: string }>(
+        'select stage from retrospeq.onboarding_state where user_id = $1',
+        [user.id],
+      );
+      expect(afterFailed.rows[0]!.stage).toBe('created');
+
+      // A genuinely successful sync -- advances to history_imported, path
+      // untouched (stays 'broker', never overridden by this call site).
+      const okAdapter = createFixtureBrokerAdapter({
+        behavior: 'connect_ok',
+        fills: input.fills as unknown as Parameters<typeof createFixtureBrokerAdapter>[0]['fills'],
+      });
+      const result = await runSync(accountId, okAdapter, { trigger: 'connect', masterKeyProvider });
+      expect(result.skipped).toBe(false);
+
+      const after = await db.query<{ stage: string; path: string }>(
+        'select stage, path from retrospeq.onboarding_state where user_id = $1',
+        [user.id],
+      );
+      expect(after.rows[0]).toEqual({ stage: 'history_imported', path: 'broker' });
+    },
+    20_000,
+  );
+
+  it(
     'falls back to trading_accounts.created_at as the sync baseline when connected_at is null (header judgment call #2\'s documented fallback, exercised for real)',
     async () => {
       if (!env) return;

@@ -6,6 +6,7 @@ import { Decimal } from 'decimal.js';
 import type { GuidedRuleSeed } from '@/lib/rules/guided-front-door';
 import { renderSentence } from '@/lib/rules/render-sentence';
 import { createRule, previewRule, type PreviewRuleActionState } from '../actions';
+import { completeGuidedRuleCalibration } from '../../onboarding/actions';
 
 /**
  * Module 04 §5.10 / §6.1's guided front door, client half. The Server
@@ -101,6 +102,30 @@ export function GuidedFrontDoor({
   const [cards, setCards] = useState<CardState[]>(() => seeds.map(initialCardState));
   const [phase, setPhase] = useState<'choosing' | 'submitting' | 'done' | 'skipped'>('choosing');
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Module 08 (Onboarding & Home) §5.1/§5.3 -- Slice 08b's ONLY change to
+  // this file: a minimal, additive completion signal, sequencing only.
+  // Neither the seeding, preview, entitlement, nor create-rule mechanics
+  // above are touched. "Accepted some/all" (phase 'done') and "declined
+  // entirely" (phase 'skipped') are BOTH a legitimate, complete finish of
+  // this step (§5.10/story 1.4) -- the fire-and-forget call below never
+  // blocks or alters what the trader sees on either screen; a failure is
+  // swallowed by `completeGuidedRuleCalibration` itself (best-effort, see
+  // that file's own header). The ref guards against firing twice (React
+  // Strict Mode's double-invoke, or any other re-render once `phase` is
+  // already settled) -- deliberately a simple "fire once ever" boolean
+  // latch, not a value-comparison ref, so it doesn't repeat the invocation-
+  // count-ref bug Slice 10d part 1 already found and documented elsewhere
+  // in this codebase.
+  const onboardingNotifiedRef = useRef(false);
+  useEffect(() => {
+    if ((phase === 'done' || phase === 'skipped') && !onboardingNotifiedRef.current) {
+      onboardingNotifiedRef.current = true;
+      completeGuidedRuleCalibration().catch(() => {
+        // Best-effort — see this component's own comment above.
+      });
+    }
+  }, [phase]);
 
   const selectedCount = cards.filter((c) => c.selected && !c.added).length;
   const addedCount = cards.filter((c) => c.added).length;

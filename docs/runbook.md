@@ -949,3 +949,121 @@ currently unreliable against this shared project until the backlog is
 addressed — `unlock-state-repository.live.test.ts`'s own analogous test
 is `it.skip`-ped with this exact reasoning inline, rather than left
 flaky or silently deleted.
+
+## `onboarding_state` stage advance failing after a connect/import/calibration
+
+**Source:** Module 08 (Onboarding & Home) §5.1/§5.3/§5.6 — Slice 08b. Owning
+code: `lib/onboarding/onboarding-state-repository.ts`'s
+`advanceOnboardingStageBestEffort`, called from three real sites, each a
+side effect of some OTHER already-successful trader action, never the
+primary operation itself:
+
+- `app/(app)/accounts/actions.ts`'s `connectAccount` (a successful
+  credentialed connect -> `account_connected`/`broker`) and
+  `connectManualAccount` (-> `history_imported`/`manual`, skipping
+  `account_connected` entirely per §5.6).
+- `lib/ingestion/sync.ts`'s `runSync` (a completed, non-`failed` sync run
+  -> `history_imported`).
+- `app/(app)/onboarding/actions.ts`'s `completeGuidedRuleCalibration` (the
+  guided three-rule front door, Module 04 Slice 10a, reporting it has
+  finished — accepted some/all/none — -> `rules_calibrated`).
+
+**What this means operationally:** matches this file's `unlock_state`/
+`adherence_weekly`/`operand_distributions` entries' posture exactly — a
+failure here must never turn the real, already-committed operation (the
+connect, the sync, the rule-calibration choice) into a reported failure.
+Every call site above wraps `advanceOnboardingStageBestEffort` in either
+its own `.catch()` (the two `accounts/actions.ts` call sites, matching that
+file's existing `deleteTradingAccount(...).catch(...)` cleanup-call
+precedent) or a structural `try/catch` (`sync.ts`, matching that file's own
+"never let a side effect fail the primary flow" posture) — belt-and-braces
+on top of `advanceOnboardingStageBestEffort` itself already never
+throwing. The only trace of a genuinely unexpected failure is a
+`console.error` line prefixed `[onboarding] advanceOnboardingStage(...)
+failed unexpectedly` (from inside `advanceOnboardingStageBestEffort`
+itself) or, for the two `accounts/actions.ts` call sites specifically, an
+additional `[connectAccount]`/`[connectManualAccount] onboarding stage
+advance failed unexpectedly` line from their own `.catch()`.
+
+A genuine `OnboardingStageRegressionError`/`OnboardingStateNotFoundError`
+is deliberately NOT logged as an error at all — it is the EXPECTED,
+silently-swallowed shape for a trader who is already past the target stage
+(e.g. connecting a SECOND broker account long after onboarding has
+completed), not a bug.
+
+**Left unaddressed**, a trader's `onboarding_state.stage` silently stops
+advancing at whatever it last successfully reached — the onboarding router
+(`lib/onboarding/router.ts`, read from `app/page.tsx` on every fresh
+sign-in) keeps routing that trader to the SAME step (e.g. re-showing the
+Hook screen, or the guided front door) rather than progressing them, which
+fails safe (an honest repeat of an already-completed step) rather than
+unsafe (never silently skips a step that never actually happened).
+
+**How to check:** grep application logs for `[onboarding]
+advanceOnboardingStage(` — every occurrence names the affected `user_id`
+and target stage directly. A quick live check for a specific trader:
+compare `onboarding_state.stage`/`updated_at` against the real event that
+should have advanced it (a `trading_accounts.connected_at`, a
+`sync_runs.finished_at`, or the trader's own report of having just
+finished `/rules/start`).
+
+**Action:** same self-healing shape as this file's other best-effort
+recompute entries — `advanceOnboardingStage`'s own forward-only,
+idempotent-for-same-stage design means the NEXT successful call for that
+user (the next connect, the next sync, revisiting `/rules/start`) simply
+picks up from wherever the row actually sits, no backlog, no lost data.
+Investigate only if the SAME trader fails repeatedly, or if the error
+appears across many traders at once (likely a `retrospeq.onboarding_state`
+schema/connectivity issue, or the DB trigger itself — see that table's own
+migration header — misbehaving broadly).
+
+## Pre-existing, non-Slice-08b timing gap found while E2E-verifying Slice 08b: `rules-guided-front-door.spec.ts`'s "core flow" test runs right at the edge of Playwright's default 30s timeout
+
+**Source:** discovered 2026-09-01 while independently re-running Module 04
+Slice 10a's own already-shipped `e2e/rules-guided-front-door.spec.ts`
+end-to-end as part of Slice 08b's own regression check for a one-line
+`waitForURL` pattern fix that dispatch required across eleven E2E files
+(see PROGRESS.md's matching decision-log entry) — NOT a Slice 08b code
+defect.
+
+**[CORRECTED 2026-09-01, same day]** — this entry originally described the
+test as hanging "indefinitely," based on one round of isolation testing
+that happened not to catch a genuine completion within the test's own
+30-second window. **Independent re-verification (Slice 08b's own tester
+gate) redid the same isolation and got a different, more precise
+result: the test is NOT hanging.** Six consecutive runs across multiple
+configurations completed reliably in **~29-32 seconds** — right at, and
+occasionally just past, Playwright's 30-second DEFAULT test timeout. The
+test does exactly two sequential REAL Server Action round trips
+(`GuidedFrontDoor.tsx`'s own `handleAddSelected` calls `createRule`
+sequentially by design, per that function's own header comment) against
+the shared dev Supabase project, which this repo's own other runbook
+entries already document as having variable, sometimes-elevated latency
+under this session's own heavy concurrent dispatch volume. Two real
+network round trips plus the surrounding test setup/teardown genuinely
+needing 29-32 seconds is consistent with that documented latency
+characteristic, not a stuck/hung request.
+
+**What this actually is:** a test whose own timeout budget (Playwright's
+30s default) has too little headroom over its own real, expected
+duration under this shared project's current latency — not a code bug in
+`createRule`/`GuidedFrontDoor.tsx`/the advisory-lock cap-enforcement
+machinery. The original hypothesis in this entry (a stuck second
+sequential `createRule` call, possibly related to Slice 10b/7's
+advisory-lock machinery) is WITHDRAWN — six clean completions with no
+hang is inconsistent with a genuine deadlock/stuck-promise class of bug.
+
+**The likely fix, for whoever picks this up**: bump this ONE test's own
+timeout (e.g. `test.setTimeout(45_000)` inside the test itself, or via
+that spec file's own `test.describe.configure({ timeout: ... })`) rather
+than investigating Module 04 internals — there is no internals bug to
+find here.
+
+**Why this is logged but not fixed here:** out of scope for Slice 08b
+(which must not modify `GuidedFrontDoor.tsx`'s create-rule mechanics, and
+this is a Module 04 E2E timeout tuning, not an onboarding-sequencing
+concern). Logged here, per AGENTS.md's "never fake it"/never silently
+drop a found issue, as a small, well-understood, quick fix for a future
+dispatch — NOT a deep investigation, per the correction above.
+**Action:** none taken; PROGRESS.md's "Infra gaps"/decision log carries
+the pointer to this entry.

@@ -96,7 +96,13 @@ test.describe('Adherence display (Module 04 §5.6, /rules)', () => {
     await page.fill('#email', email);
     await page.fill('#password', TEST_PASSWORD);
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL('**/', { timeout: 10_000 });
+    // Module 08 (Onboarding & Home) Slice 08b: a fresh trader's onboarding
+    // stage is 'created', so post-sign-in `/` now redirects onward (per
+    // the new onboarding router, `lib/onboarding/router.ts`) rather than
+    // rendering bare `/` itself — waits for navigation AWAY from `/login`
+    // instead of a specific destination, since this spec's own next line
+    // navigates elsewhere explicitly regardless of where sign-in landed.
+    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 });
   }
 
   async function seedGlobalRule(

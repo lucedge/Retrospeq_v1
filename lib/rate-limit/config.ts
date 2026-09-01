@@ -447,6 +447,21 @@ export const RATE_LIMITS = {
     ip: { limit: 60, windowSeconds: 3600 },
     email: { limit: 40, windowSeconds: 3600 },
   },
+  /**
+   * Module 08 (Onboarding & Home) §5.1/§5.3 -- Slice 08b's
+   * `app/(app)/onboarding/actions.ts`'s `completeGuidedRuleCalibration`.
+   * Fires at most once per trader in ordinary use (a one-time onboarding
+   * sequencing signal, not a repeatable interactive action), but a
+   * returning trader revisiting `/rules/start` after onboarding has
+   * already completed calls it again harmlessly (an idempotent no-op via
+   * `advanceOnboardingStageBestEffort`) — given `editRule`/`promoteRule`'s
+   * moderate budget rather than `previewRule`'s tight interactive one,
+   * since this is a discrete state transition, not a slider drag.
+   */
+  onboardingAdvance: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

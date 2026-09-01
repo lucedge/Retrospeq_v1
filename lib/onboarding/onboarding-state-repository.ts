@@ -317,3 +317,42 @@ export async function advanceOnboardingStage(
     return mapRow(row);
   });
 }
+
+/**
+ * Module 08 §5.1/§5.3 -- Slice 08b's shared best-effort wrapper around
+ * `advanceOnboardingStage`, for every call site that is a side effect of
+ * some OTHER already-successful operation (a broker connect, a completed
+ * sync/import, a rule-calibration flow finishing) rather than the trader's
+ * own primary request. Matches this repo's established
+ * `operand_distributions`/`adherence_weekly`/`unlock_state` posture
+ * exactly: a failure here must NEVER turn the real, already-committed
+ * operation into a reported failure.
+ *
+ * A genuine `OnboardingStageRegressionError`/`OnboardingStateNotFoundError`
+ * is treated as an EXPECTED, benign no-op here, not a bug to log loudly --
+ * for example, connecting a SECOND broker account long after onboarding
+ * has already completed legitimately tries to move a `complete`-stage
+ * trader "back" to `account_connected`, which this function correctly
+ * swallows silently rather than reporting as a failure. Only a genuinely
+ * unexpected exception is logged (`docs/runbook.md`'s matching new entry,
+ * "onboarding_state advance failing after a connect/import/calibration").
+ */
+export async function advanceOnboardingStageBestEffort(
+  userId: string,
+  targetStage: OnboardingStage,
+  extra: AdvanceOnboardingStageExtra = {},
+): Promise<void> {
+  try {
+    await advanceOnboardingStage(userId, targetStage, extra);
+  } catch (err) {
+    if (err instanceof OnboardingStageRegressionError || err instanceof OnboardingStateNotFoundError) {
+      return;
+    }
+    console.error(
+      `[onboarding] advanceOnboardingStage(${userId}, "${targetStage}") failed unexpectedly -- onboarding_state ` +
+        `will read stale until the next successful call (Module 08 §4; docs/runbook.md "onboarding_state advance ` +
+        `failing after a connect/import/calibration"):`,
+      err,
+    );
+  }
+}

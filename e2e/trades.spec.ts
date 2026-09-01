@@ -159,7 +159,11 @@ test.describe('Trades list screen (Module 02 §5.1/§5.2)', () => {
     await page.fill('#email', email);
     await page.fill('#password', TEST_PASSWORD);
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL('**/', { timeout: 10_000 });
+    // Module 08 (Onboarding & Home) Slice 08b: post-sign-in `/` now
+    // redirects onward per a fresh trader's onboarding stage (see
+    // `lib/onboarding/router.ts`) rather than rendering bare `/` — waits
+    // for navigation away from `/login` instead of a specific destination.
+    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 });
   }
 
   test('empty state: a brand-new account with zero trades renders an honest "not enough data yet" message, not a fake/empty-looking table', async ({

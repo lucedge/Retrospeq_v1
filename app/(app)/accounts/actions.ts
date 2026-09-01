@@ -43,6 +43,7 @@ import {
 } from '@/lib/broker/accounts-repository';
 import { canForUser } from '@/lib/entitlements/service';
 import { accountConnectLimitMessage } from '@/lib/entitlements/messages';
+import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
 
 /**
  * Module 01 stories 2.x — the Server Action layer wiring `lib/broker/connect.ts`'s
@@ -348,6 +349,21 @@ export async function connectAccount(
     };
   }
 
+  // Module 08 (Onboarding & Home) §5.1 step 2 -- Slice 08b: a successful
+  // credentialed connect IS the "account connected" milestone. Best-effort,
+  // non-blocking (see `advanceOnboardingStageBestEffort`'s own header) —
+  // a stuck/erroring onboarding_state advance must never turn this
+  // already-committed connect into a reported failure, and a genuine
+  // regression (e.g. a trader connecting a SECOND broker account long
+  // after onboarding has completed) is an expected, silently-swallowed
+  // no-op there, not a bug. `.catch()` here is a structural guard should
+  // that "never throws" contract ever change, matching this file's own
+  // `deleteTradingAccount(...).catch(...)` cleanup-call precedent above —
+  // never trusted silently.
+  await advanceOnboardingStageBestEffort(user.id, 'account_connected', { path: 'broker' }).catch((err) => {
+    console.error('[connectAccount] onboarding stage advance failed unexpectedly:', err);
+  });
+
   revalidatePath('/accounts');
   return { success: true, capabilities: result.capabilities };
 }
@@ -378,6 +394,22 @@ async function connectManualAccount(userId: string): Promise<AccountActionState>
       },
     };
   }
+
+  // Module 08 (Onboarding & Home) §5.6 -- Slice 08b: the manual path has
+  // no broker connection to verify and no history to import (§5.6: "No
+  // history means no calibration, so rules start at conservative
+  // defaults. The ladder is identical, shifted right"), so a manual
+  // account jumps straight from `created` to `history_imported`,
+  // deliberately skipping the `account_connected` stage entirely — this
+  // repo's onboarding router (`lib/onboarding/router.ts`) reads
+  // `history_imported` + `path === 'manual'` as "go straight to
+  // `/rules/start`, no Hook screen" for exactly this reason. Best-effort,
+  // non-blocking — see `advanceOnboardingStageBestEffort`'s own header.
+  // `.catch()` is a structural guard, same reasoning as `connectAccount`'s
+  // identical call above.
+  await advanceOnboardingStageBestEffort(userId, 'history_imported', { path: 'manual' }).catch((err) => {
+    console.error('[connectManualAccount] onboarding stage advance failed unexpectedly:', err);
+  });
 
   revalidatePath('/accounts');
   return {

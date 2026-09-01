@@ -240,3 +240,59 @@ describe('onboarding-state-repository — property: stage only advances, never r
     );
   });
 });
+
+// ---------------------------------------------------------------------
+// advanceOnboardingStageBestEffort -- Slice 08b. Never throws, matching
+// `operand_distributions`/`adherence_weekly`/`unlock_state`'s own
+// established best-effort posture.
+// ---------------------------------------------------------------------
+
+describe('advanceOnboardingStageBestEffort', () => {
+  it('advances the stage for real on the happy path', async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [stateRow({ stage: 'created' })] })
+      .mockResolvedValueOnce({ rows: [stateRow({ stage: 'account_connected' })] })
+      .mockResolvedValueOnce({ rows: [] });
+    const { advanceOnboardingStageBestEffort } = await import('../onboarding-state-repository');
+    await expect(advanceOnboardingStageBestEffort('user-1', 'account_connected')).resolves.toBeUndefined();
+    expect(queryMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('swallows a genuine regression silently (e.g. connecting a second account long after onboarding completed) -- never throws, never logs as an error', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [stateRow({ stage: 'complete' })] });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { advanceOnboardingStageBestEffort } = await import('../onboarding-state-repository');
+    await expect(advanceOnboardingStageBestEffort('user-1', 'account_connected')).resolves.toBeUndefined();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('swallows OnboardingStateNotFoundError silently -- never throws, never logs as an error', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { advanceOnboardingStageBestEffort } = await import('../onboarding-state-repository');
+    await expect(advanceOnboardingStageBestEffort('user-1', 'account_connected')).resolves.toBeUndefined();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('logs loudly (but still never throws) for a genuinely unexpected error', async () => {
+    queryMock.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { advanceOnboardingStageBestEffort } = await import('../onboarding-state-repository');
+    await expect(advanceOnboardingStageBestEffort('user-1', 'account_connected')).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+
+  it('passes extra fields (e.g. path) straight through to advanceOnboardingStage', async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [stateRow({ stage: 'created' })] })
+      .mockResolvedValueOnce({ rows: [stateRow({ stage: 'history_imported', path: 'manual' })] })
+      .mockResolvedValueOnce({ rows: [] });
+    const { advanceOnboardingStageBestEffort } = await import('../onboarding-state-repository');
+    await advanceOnboardingStageBestEffort('user-1', 'history_imported', { path: 'manual' });
+    const [, updateParams] = queryMock.mock.calls[1];
+    expect(updateParams[2]).toBe('manual');
+  });
+});
