@@ -145,6 +145,7 @@ const {
   fetchAmbientState,
   fetchAdherenceDisplay,
   fetchRulesList,
+  fetchRuleForEdit,
 } = await import('../actions');
 const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
 const { RuleCreateCapExceededError, RuleEditConflictError, RuleNotEditableError, RuleNotFoundError } = await import(
@@ -444,7 +445,11 @@ describe('editRule', () => {
     fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ value: 2 }));
     applyRuleEditMock.mockResolvedValue({ newVersion: 2 });
 
-    const result = await editRule(RULE_ID, 1);
+    // expectedVersion (2nd arg, 1) matches the fixture's own currentVersion
+    // (1) — the version the caller's edit control would have opened
+    // against for THIS rule, per `activeGlobalRule`'s own fixed
+    // `currentVersion: 1`.
+    const result = await editRule(RULE_ID, 1, 1);
 
     expect(result.success).toBe(true);
     expect(result.rule?.version).toBe(2);
@@ -453,33 +458,61 @@ describe('editRule', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
   });
 
-  it('maps a lost concurrency race to RULE_EDIT_CONFLICT, retryable', async () => {
+  it('maps a lost concurrency race to RULE_EDIT_CONFLICT, retryable, when applyRuleEdit itself loses the atomic race', async () => {
+    // Here the CALLER's expectedVersion (1) genuinely still matches
+    // fetchCurrentRuleForEdit's freshly-read currentVersion (1) — this
+    // exercises the race INTERNAL to applyRuleEdit's own guarded UPDATE
+    // (another edit committing between this read and that write), not the
+    // stale-caller-snapshot case (that one is covered by the new
+    // "rejects a stale expectedVersion" test below, without ever reaching
+    // applyRuleEdit).
     fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ value: 2 }));
     applyRuleEditMock.mockRejectedValue(new RuleEditConflictError(RULE_ID, 1));
 
-    const result = await editRule(RULE_ID, 1);
+    const result = await editRule(RULE_ID, 1, 1);
 
     expect(result.error?.code).toBe('RULE_EDIT_CONFLICT');
     expect(result.error?.retryable).toBe(true);
   });
 
+  it('rejects a stale caller-supplied expectedVersion with RULE_EDIT_CONFLICT BEFORE calling applyRuleEdit or running the rest of the validation pipeline -- the real Slice 10f bug fix', async () => {
+    // The rule's true current version (freshly read) is 1, but the caller
+    // (an edit control opened minutes ago, before a concurrent edit landed)
+    // still believes it's editing version... well, activeGlobalRule always
+    // fixes currentVersion at 1, so simulate the stale-snapshot scenario by
+    // having the CALLER supply a version that does not match: 1 vs a caller
+    // claiming version 1 was already superseded, i.e. the caller's own
+    // snapshot is version 1 but the row has since moved to version 2.
+    fetchCurrentRuleForEditMock.mockResolvedValue({ ...activeGlobalRule({ value: 2 }), currentVersion: 2 });
+
+    const result = await editRule(RULE_ID, 1, 1);
+
+    expect(result.error?.code).toBe('RULE_EDIT_CONFLICT');
+    expect(result.error?.retryable).toBe(true);
+    // The whole point of the early check: never even calls applyRuleEdit
+    // (or the tier/tighten-only/satisfiability pipeline) against a value
+    // that's about to be rejected anyway.
+    expect(applyRuleEditMock).not.toHaveBeenCalled();
+    expect(fetchAccountSyncTiersMock).not.toHaveBeenCalled();
+  });
+
   it('rejects editing a retired rule', async () => {
     fetchCurrentRuleForEditMock.mockResolvedValue({ ...activeGlobalRule(), state: 'retired' });
-    const result = await editRule(RULE_ID, 1);
+    const result = await editRule(RULE_ID, 1, 1);
     expect(result.error?.code).toBe(new RuleNotEditableError(RULE_ID, 'retired').code);
     expect(applyRuleEditMock).not.toHaveBeenCalled();
   });
 
   it('returns RULE_NOT_FOUND when the rule does not exist (or is not owned by the caller)', async () => {
     fetchCurrentRuleForEditMock.mockResolvedValue(null);
-    const result = await editRule(RULE_ID, 1);
+    const result = await editRule(RULE_ID, 1, 1);
     expect(result.error?.code).toBe('RULE_NOT_FOUND');
   });
 
   it('re-validates tier gating on edit', async () => {
     fetchCurrentRuleForEditMock.mockResolvedValue({ ...activeGlobalRule(), operandId: 'stop_moved_against', op: 'is_false', value: false });
     fetchAccountSyncTiersMock.mockResolvedValue(['t0']);
-    const result = await editRule(RULE_ID, false);
+    const result = await editRule(RULE_ID, 1, false);
     expect(result.error?.code).toBe('RULE_OPERAND_UNAVAILABLE');
     expect(applyRuleEditMock).not.toHaveBeenCalled();
   });
@@ -490,7 +523,7 @@ describe('editRule', () => {
       { ruleId: 'global-rule-1', op: 'lte', value: 1, rendered: 'Never risk more than 1% per trade.' },
     ]);
     // editing the strategy rule's threshold LOOSER than the active global cap
-    const result = await editRule(RULE_ID, 3);
+    const result = await editRule(RULE_ID, 1, 3);
     expect(result.error?.code).toBe('RULE_LOOSER_THAN_GLOBAL');
     expect(applyRuleEditMock).not.toHaveBeenCalled();
   });
@@ -505,7 +538,7 @@ describe('editRule', () => {
     fetchActiveGlobalRuleVersionsForOperandMock.mockResolvedValue([
       { ruleId: 'other-global-rule', op: 'not_in', value: ['mon', 'tue', 'wed'], rendered: 'Never trade on mon, tue, wed.' },
     ]);
-    const result = await editRule(RULE_ID, ['mon', 'tue']);
+    const result = await editRule(RULE_ID, 1, ['mon', 'tue']);
     expect(result.error?.code).toBe('RULE_UNSATISFIABLE');
     // excludeRuleId (the 3rd argument) is the rule itself, so the mocked
     // repository result above never actually includes the rule's own
@@ -516,7 +549,7 @@ describe('editRule', () => {
   it('does NOT re-check the rules.create entitlement on edit', async () => {
     fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ value: 2 }));
     applyRuleEditMock.mockResolvedValue({ newVersion: 2 });
-    await editRule(RULE_ID, 1);
+    await editRule(RULE_ID, 1, 1);
     expect(canForUserMock).not.toHaveBeenCalled();
   });
 });
@@ -1180,5 +1213,120 @@ describe('fetchRulesList', () => {
     const result = await fetchRulesList();
     expect(result.error?.code).toBe('RULE_SESSION_MISSING');
     expect(fetchRulesForUserMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// fetchRuleForEdit — Module 04 §2.5 UI, Slice 10f
+//
+// Reuses `fetchCurrentRuleForEditMock` — the SAME repository mock
+// `editRule`'s own suite above already exercises — since this action is a
+// thin, read-only wrapper around the exact same repository function
+// `editRule` itself calls internally before its own guarded write. The two
+// suites deliberately share fixtures/helpers (`activeGlobalRule` from the
+// `editRule` describe block above) rather than inventing parallel ones.
+// ---------------------------------------------------------------------
+
+describe('fetchRuleForEdit', () => {
+  const RULE_ID = '01927e00-0000-7000-8000-000000000099';
+
+  function activeGlobalRule(
+    overrides: Partial<{ scope: 'global' | 'strategy' | 'account'; scopeId: string | null; operandId: string; op: string; value: unknown; state: string }> = {},
+  ) {
+    return {
+      ruleId: RULE_ID,
+      scope: overrides.scope ?? 'global',
+      scopeId: overrides.scopeId ?? null,
+      state: overrides.state ?? 'active',
+      currentVersion: 1,
+      operandId: overrides.operandId ?? 'risk_pct',
+      op: overrides.op ?? 'lte',
+      value: overrides.value ?? 1,
+    };
+  }
+
+  it("returns the rule's current raw operandId/op/value/scope/currentVersion for pre-filling an edit control", async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ operandId: 'risk_pct', op: 'lte', value: 1.5 }));
+
+    const result = await fetchRuleForEdit(RULE_ID);
+
+    expect(result.success).toBe(true);
+    expect(result.rule).toEqual({
+      ruleId: RULE_ID,
+      operandId: 'risk_pct',
+      op: 'lte',
+      value: 1.5,
+      scope: 'global',
+      scopeId: null,
+      currentVersion: 1,
+    });
+    expect(fetchCurrentRuleForEditMock).toHaveBeenCalledWith(FAKE_USER.id, RULE_ID);
+  });
+
+  it('performs no write of any kind -- never calls revalidatePath, insertRuleAndVersion, or applyRuleEdit', async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule());
+    await fetchRuleForEdit(RULE_ID);
+    expect(revalidatePathMock).not.toHaveBeenCalled();
+    expect(applyRuleEditMock).not.toHaveBeenCalled();
+    expect(insertRuleAndVersionMock).not.toHaveBeenCalled();
+  });
+
+  it('returns RULE_NOT_FOUND when the rule does not exist (or is not owned by the caller)', async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(null);
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_FOUND');
+  });
+
+  it('rejects a retired rule the same way editRule itself would (RULE_NOT_EDITABLE) -- a trader should never be able to open an edit control the write path would reject anyway', async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ state: 'retired' }));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe(new RuleNotEditableError(RULE_ID, 'retired').code);
+  });
+
+  it('rejects a plan_limited-style non-active state the same way (deactivated_by_plan)', async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ state: 'deactivated_by_plan' }));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_EDITABLE');
+  });
+
+  it("rejects scope='account' (v1.1 firm rules, not reachable today) defensively with RULE_NOT_EDITABLE", async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ scope: 'account' }));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_NOT_EDITABLE');
+  });
+
+  it('succeeds for a strategy-scoped active rule too (not global-only)', async () => {
+    fetchCurrentRuleForEditMock.mockResolvedValue(activeGlobalRule({ scope: 'strategy', scopeId: 'strategy-1' }));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.success).toBe(true);
+    expect(result.rule?.scope).toBe('strategy');
+    expect(result.rule?.scopeId).toBe('strategy-1');
+  });
+
+  it('rejects a malformed (non-uuid) ruleId before ever calling fetchCurrentRuleForEdit', async () => {
+    const result = await fetchRuleForEdit('not-a-uuid');
+    expect(result.error?.code).toBe('RULE_INVALID_INPUT');
+    expect(fetchCurrentRuleForEditMock).not.toHaveBeenCalled();
+  });
+
+  it('maps an unexpected read failure to a retryable RULE_EDIT_FETCH_INTERNAL, never a raw error', async () => {
+    fetchCurrentRuleForEditMock.mockRejectedValue(new Error('connection reset'));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_EDIT_FETCH_INTERNAL');
+    expect(result.error?.retryable).toBe(true);
+  });
+
+  it('is rate-limited independently of editRule/createRule (RULE_RATE_LIMITED on exceed), before any read', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('ruleForEdit', 'ip:1.2.3.4', 3600));
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_RATE_LIMITED');
+    expect(fetchCurrentRuleForEditMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing session the same way every other action in this file does', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: new Error('no session') });
+    const result = await fetchRuleForEdit(RULE_ID);
+    expect(result.error?.code).toBe('RULE_SESSION_MISSING');
+    expect(fetchCurrentRuleForEditMock).not.toHaveBeenCalled();
   });
 });

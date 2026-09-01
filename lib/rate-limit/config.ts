@@ -428,6 +428,25 @@ export const RATE_LIMITS = {
     ip: { limit: 90, windowSeconds: 3600 },
     email: { limit: 60, windowSeconds: 3600 },
   },
+  /**
+   * Module 04 §2.5 UI, Slice 10f — `app/(app)/rules/actions.ts`'s
+   * `fetchRuleForEdit`, the read that pre-fills the edit-a-threshold
+   * control with a rule's CURRENT raw `value`/`op` (§6.1's `.rule-editor`
+   * reference markup, opened inline from `RuleList.tsx`). Read-only end to
+   * end (`fetchCurrentRuleForEdit` writes nothing) — not as bursty as
+   * `previewRule`'s per-keystroke slider drag, but plausibly opened/closed
+   * a handful of times in one rulebook-browsing session (a trader opening
+   * Edit on two or three different rules while deciding what to change),
+   * closer to `recordOverride`/`writeTradeCapture`'s "loose, not
+   * credential- or destruction-shaped, several times per sitting is
+   * normal" reasoning than to `ruleList`/`adherenceDisplay`'s "once per
+   * page load" cadence — reuses that exact budget rather than inventing a
+   * fourth near-identical number.
+   */
+  ruleForEdit: {
+    ip: { limit: 60, windowSeconds: 3600 },
+    email: { limit: 40, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

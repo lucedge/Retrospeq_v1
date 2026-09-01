@@ -3,9 +3,11 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import type { RuleListItem } from '@/lib/rules/rules-repository';
+import { getOperand } from '@/lib/rules/operand-catalogue';
 import type { PromotionEligibilityDetail, PromotionIneligibilityReason } from '@/lib/rules/promotion-eligibility';
 import { promoteRule, demoteRule, retireRule } from './actions';
 import { withTimeout, ActionTimeoutError } from './with-timeout';
+import { EditRuleControl } from './EditRuleControl';
 
 /**
  * Module 04 (Rulebook & Evaluation) story 1.1 / §6.1's own reference
@@ -139,7 +141,47 @@ import { withTimeout, ActionTimeoutError } from './with-timeout';
  *   either" case. No promote/demote controls anywhere in that section —
  *   story 2.4's "retire only... no pause" means a retired rule is a dead
  *   end, and this UI does not pretend otherwise.
+ *
+ * STORY 2.5 ADDITION (Slice 10f, 2026-08-31/09-01) — "changing a threshold
+ * not to rewrite history." An "Edit" action alongside promote/demote/retire
+ * on every ACTIVE row whose operand has a real numeric threshold (see
+ * `isThresholdEditable` below) — the row's OWN "expand a section inline"
+ * shell (the same device the swap chooser / retire-confirm already use)
+ * now also has a THIRD mutually-exclusive expansion state, `editing`.
+ * Opening Edit on a row closes that row's own swap-chooser/retire-confirm
+ * (and vice versa) — a trader should never see two of the three at once
+ * for the SAME rule. Two different rows can still show two different
+ * expansions at once (the retire-confirm/swap-chooser precedent this file's
+ * own header already documents as an acknowledged, non-blocking edge case
+ * for "one .rq-btn per view" — Edit's own primary "Save" button carries the
+ * identical caveat, not a new one). All actual value validation
+ * (structural, tighten-only, satisfiability, the version-conflict race) is
+ * `editRule`'s own job (`app/(app)/rules/actions.ts`, built and
+ * security-reviewed since Slice 2) — this component only decides WHEN to
+ * show the control and reflects its typed result; see `EditRuleControl.tsx`
+ * for the control itself.
  */
+
+/**
+ * Whether a rule's operand has a genuine numeric threshold to adjust — the
+ * gate for showing the "Edit" action at all. Mirrors
+ * `editable-operands.ts`'s own `EDITABLE_OPERAND_TYPES` reasoning (`bool`
+ * operands have no `{value}` placeholder in their phrasing at all, so
+ * "editing" one is not a meaningful action — see `EditRuleControl.tsx`'s
+ * own header) but is intentionally NOT a call into that server-only-facing
+ * module: this is a pure, client-safe read of the SAME static catalogue
+ * (`operand-catalogue.ts`, no `server-only` import, the same file
+ * `RuleEditor.tsx`'s own `getOperand` calls already read directly), scoped
+ * to exactly the one property this component needs (a bounded numeric
+ * type), not a full re-derivation of `editable-operands.ts`'s tier/
+ * single-operator gating (irrelevant here — `op` is fixed on edit, §2.5,
+ * never chosen fresh the way it is on create).
+ */
+function isThresholdEditable(operandId: string): boolean {
+  const operand = getOperand(operandId);
+  if (!operand) return false;
+  return (operand.type === 'number' || operand.type === 'duration' || operand.type === 'rating') && !!operand.bounds;
+}
 
 interface HardEntitlementSummary {
   allowed: boolean;
@@ -157,6 +199,11 @@ interface RowState {
   swapBusy: boolean;
   swapError: string | null;
   confirmingRetire: boolean;
+  /** Story 2.5, Slice 10f — see this file's own header, "STORY 2.5
+   *  ADDITION". Mutually exclusive with `hardCapChooser`/`confirmingRetire`
+   *  for THIS row (enforced by the handlers below, which clear the other
+   *  two whenever one opens). */
+  editing: boolean;
 }
 
 function initialRowState(rule: RuleListItem): RowState {
@@ -170,6 +217,7 @@ function initialRowState(rule: RuleListItem): RowState {
     swapBusy: false,
     swapError: null,
     confirmingRetire: false,
+    editing: false,
   };
 }
 
@@ -348,6 +396,33 @@ export function RuleList({
     } catch (err) {
       patchRow(ruleId, { busy: false, confirmingRetire: false, error: messageForCaughtError(err) });
     }
+  }
+
+  /**
+   * Story 2.5, Slice 10f — see this file's own header ("STORY 2.5
+   * ADDITION") for the mutual-exclusion reasoning. Opening Edit closes
+   * this SAME row's swap-chooser/retire-confirm if either happened to be
+   * open; `EditRuleControl.tsx` owns everything else about the edit
+   * interaction itself (its own fetch/preview/submit lifecycle).
+   */
+  function handleEditClick(ruleId: string) {
+    patchRow(ruleId, { editing: true, error: null, hardCapChooser: null, swapSelectedRuleId: null, swapError: null, confirmingRetire: false });
+  }
+
+  function handleEditCancel(ruleId: string) {
+    patchRow(ruleId, { editing: false });
+  }
+
+  /**
+   * `EditRuleControl`'s own `onSaved` — the ONLY place this component
+   * merges a successful edit's server-confirmed `rendered`/`version` back
+   * into `rule` state, per this slice's own dispatch ("the row's displayed
+   * `rendered` sentence... must update WITHOUT a full page reload"). Closes
+   * the edit control on success — there is nothing further to show inline;
+   * the row itself now reads the new sentence.
+   */
+  function handleEditSaved(ruleId: string, patch: { rendered: string; version: number }) {
+    patchRule(ruleId, { editing: false }, { rendered: patch.rendered });
   }
 
   function handleSwapSelect(originalRuleId: string, demoteRuleId: string) {
@@ -529,6 +604,9 @@ export function RuleList({
             onSwapSelect={(demoteRuleId) => handleSwapSelect(row.rule.ruleId, demoteRuleId)}
             onSwap={() => row.swapSelectedRuleId && handleSwap(row.rule.ruleId, row.swapSelectedRuleId)}
             onKeepSoft={() => handleKeepSoft(row.rule.ruleId)}
+            onEditClick={() => handleEditClick(row.rule.ruleId)}
+            onEditCancel={() => handleEditCancel(row.rule.ruleId)}
+            onEditSaved={(patch) => handleEditSaved(row.rule.ruleId, patch)}
           />
         ))}
       </ul>
@@ -567,6 +645,9 @@ function RuleRow({
   onSwapSelect,
   onSwap,
   onKeepSoft,
+  onEditClick,
+  onEditCancel,
+  onEditSaved,
 }: {
   row: RowState;
   onPromote: () => void;
@@ -577,11 +658,14 @@ function RuleRow({
   onSwapSelect: (demoteRuleId: string) => void;
   onSwap: () => void;
   onKeepSoft: () => void;
+  onEditClick: () => void;
+  onEditCancel: () => void;
+  onEditSaved: (patch: { rendered: string; version: number }) => void;
 }) {
   const { rule } = row;
 
   return (
-    <li>
+    <li data-testid={`rule-row-${rule.ruleId}`}>
       <section className="rq-card flex flex-col gap-3" aria-label={rule.rendered}>
         <div className="flex items-start justify-between gap-3">
           <p className="rule-sentence rq-body flex-1">{rule.rendered}</p>
@@ -663,7 +747,9 @@ function RuleRow({
           </div>
         )}
 
-        {row.confirmingRetire ? (
+        {row.editing ? (
+          <EditRuleControl rule={rule} onCancel={onEditCancel} onSaved={onEditSaved} />
+        ) : row.confirmingRetire ? (
           <div className="rq-well flex flex-col gap-2">
             <p className="rq-sub">
               Retiring stops this rule from being evaluated going forward. Past evaluations stay exactly as they
@@ -680,6 +766,14 @@ function RuleRow({
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
+            {/* Story 2.5, Slice 10f — only offered when the operand has a
+                real numeric threshold to change; see `isThresholdEditable`'s
+                own header for why a bool operand never gets this button. */}
+            {isThresholdEditable(rule.operandId) && (
+              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onEditClick}>
+                Edit
+              </button>
+            )}
             {rule.severity === 'soft' ? (
               <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onPromote}>
                 {row.busy ? 'Promoting…' : 'Promote to hard'}

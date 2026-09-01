@@ -388,13 +388,47 @@ export async function createRule(input: CreateRuleInput): Promise<RuleActionStat
  * rule invalid (e.g. loosening a strategy rule past its governing global
  * rule, or moving a global rule's threshold into contradiction with
  * another active global rule).
+ *
+ * BUG FIX (Slice 10f, independent-tester finding, 2026-09-01 — see
+ * PROGRESS.md's "Slice 10f — INDEPENDENT TESTER VERIFICATION" entry):
+ * `expectedVersion` is now a REQUIRED parameter supplied by the CALLER
+ * (the version `fetchRuleForEdit` returned when the edit control was
+ * first opened), not re-derived from the fresh `fetchCurrentRuleForEdit`
+ * call a few lines below. The original implementation took no
+ * `expectedVersion` argument at all and passed `current.currentVersion`
+ * — read FRESH milliseconds earlier IN THIS SAME FUNCTION CALL — straight
+ * into `applyRuleEdit`'s own optimistic-concurrency guard. That guard
+ * (`rules-repository.ts`'s `applyRuleEdit`, a real atomic guarded UPDATE)
+ * was and is correctly built; the bug was entirely here, in what value
+ * this function fed it. Because the "expected version" was always read
+ * moments before the write, it could only ever go stale within this
+ * function's own execution (sub-second), never across the REAL window
+ * that matters — the trader's edit control sitting open for minutes while
+ * someone else (another tab, another device, a collaborator) edits the
+ * same rule. Reproduced live: open Edit at v1 (value 1.0) -> a concurrent
+ * process commits v1->v2 (value 3.0) -> the original trader saves their
+ * own stale edit (1.2) -> the old code returned `success: true` and
+ * silently overwrote v2 with v3, with zero signal anything had changed.
+ * `RULE_EDIT_CONFLICT` existed and was reachable in tests, but never in
+ * the real scenario it was built to catch. Now: the CALLER's snapshot
+ * version is threaded all the way through to `applyRuleEdit`, so a stale
+ * edit is rejected for real, and a fresh, cheap early check below
+ * (`current.currentVersion !== expectedVersion`) surfaces that rejection
+ * before running the rest of the (more expensive) validation pipeline
+ * against a value that would be discarded anyway — `applyRuleEdit`'s own
+ * atomic guarded UPDATE remains the true, unbypassable enforcement point
+ * regardless of this early check.
  */
-export async function editRule(ruleId: string, newValue: unknown): Promise<RuleActionState> {
+export async function editRule(ruleId: string, expectedVersion: number, newValue: unknown): Promise<RuleActionState> {
   const user = await requireSessionAndRateLimit('editRule');
   if (isErrorState(user)) return user;
 
   const parsedRuleId = z.uuid().safeParse(ruleId);
   if (!parsedRuleId.success) {
+    return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+  const parsedExpectedVersion = z.number().int().positive().safeParse(expectedVersion);
+  if (!parsedExpectedVersion.success) {
     return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
   }
 
@@ -426,6 +460,28 @@ export async function editRule(ruleId: string, newValue: unknown): Promise<RuleA
     // failing loudly here rather than silently proceeding is the correct
     // posture if it ever is.
     return { error: { code: 'RULE_NOT_EDITABLE', user_message: 'This rule cannot be edited here.', retryable: false } };
+  }
+
+  // Optimistic-concurrency short-circuit — see this function's own header
+  // comment above for the bug this closes. `current.currentVersion` is
+  // the FRESHEST version (just read above); `parsedExpectedVersion.data`
+  // is what the CALLER's edit control opened against. A mismatch means
+  // someone else changed this rule since the trader's snapshot was taken
+  // — reject now, before spending a round of tier/tighten-only/
+  // satisfiability validation on a `newValue` that would be rejected by
+  // `applyRuleEdit`'s own guarded UPDATE anyway. This is an optimization,
+  // not the real enforcement point — `applyRuleEdit` re-checks the exact
+  // same condition atomically at write time regardless, so a race that
+  // opens up between this check and that write (vanishingly unlikely,
+  // but not provably impossible) is still caught for real.
+  if (current.currentVersion !== parsedExpectedVersion.data) {
+    return {
+      error: {
+        code: new RuleEditConflictError(current.ruleId, parsedExpectedVersion.data).code,
+        user_message: 'This rule was just changed elsewhere. Please refresh and try again.',
+        retryable: true,
+      },
+    };
   }
 
   let operand: OperandCatalogueEntry;
@@ -495,10 +551,17 @@ export async function editRule(ruleId: string, newValue: unknown): Promise<RuleA
   }
 
   try {
+    // Pass the CALLER-SUPPLIED expected version through, not
+    // `current.currentVersion` (see this function's own header comment —
+    // that was the exact bug). At this point they are guaranteed equal
+    // (the early check above already returned if they weren't), but using
+    // `parsedExpectedVersion.data` keeps the real optimistic-concurrency
+    // precondition explicit rather than silently substituting a freshly
+    // re-read value right before the write.
     const result = await applyRuleEdit(
       user.id,
       current.ruleId,
-      current.currentVersion,
+      parsedExpectedVersion.data,
       current.operandId,
       current.op,
       newValue,
@@ -1104,6 +1167,112 @@ export async function fetchRulesList(): Promise<RulesListActionResult> {
     console.error('[rules/actions:fetchRulesList] read failed:', err);
     return {
       error: { code: 'RULE_LIST_INTERNAL', user_message: 'Your rulebook is unavailable right now. Please try again.', retryable: true },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// fetchRuleForEdit — Module 04 §2.5 UI, Slice 10f
+//
+// Closes a real, previously-untracked gap: `editRule` (above) has been
+// fully built, tested, and security-reviewed since Slice 2 (2026-08-19),
+// but nothing has ever exposed a READ a client could use to pre-fill an
+// edit control with a rule's CURRENT raw `value` — `RuleListItem`
+// (`fetchRulesList` above) carries only `rendered` (the free-text
+// sentence) and `operandId`, never the raw `value`/`op` a stepper needs to
+// start from the right number (parsing a number back out of a sentence
+// like "Never risk more than 1.5% per trade." would be fragile and wrong,
+// per this slice's own dispatch). `fetchCurrentRuleForEdit`
+// (`rules-repository.ts`) has always had exactly this data — it is
+// `editRule`'s own internal pre-write read — but was never itself exposed
+// as a standalone Server Action for a client to call BEFORE submitting an
+// edit. This is that read, thin and read-only, same shape as
+// `fetchAmbientState`/`fetchAdherenceDisplay`/`fetchRulesList` above.
+//
+// VALIDATION: deliberately mirrors `editRule`'s own pre-write guards
+// (not-found -> RULE_NOT_FOUND, non-'active' state -> RULE_NOT_EDITABLE,
+// non-global/strategy scope -> RULE_NOT_EDITABLE) rather than inventing a
+// looser read-only check — a trader should never be able to open an edit
+// control for a rule the write path would reject outright anyway (a
+// retired rule, per §2.4 "no pause anywhere," is lifecycle-final). This
+// performs NO write of its own — no `revalidatePath`, nothing.
+//
+// RESOLVING CATALOGUE METADATA (bounds/type/unit/label): NOT duplicated
+// into this action's own response. `operand-catalogue.ts` has no
+// `server-only` import and is already safely imported directly by a
+// CLIENT component today (`app/(app)/rules/new/RuleEditor.tsx`'s own
+// `getOperand` call, Slice 10b's established precedent) — the client-side
+// edit control below resolves `bounds`/`type`/`unit`/`label` itself via
+// `getOperand(result.rule.operandId)` from the SAME static catalogue file
+// the server validates against, rather than this action re-deriving and
+// re-shipping a second copy of catalogue data over the wire.
+// ---------------------------------------------------------------------
+
+export interface RuleForEditResult {
+  ruleId: string;
+  operandId: string;
+  op: RuleOperator;
+  value: unknown;
+  scope: 'global' | 'strategy';
+  scopeId: string | null;
+  currentVersion: number;
+}
+
+export interface FetchRuleForEditActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  rule?: RuleForEditResult;
+}
+
+export async function fetchRuleForEdit(ruleId: string): Promise<FetchRuleForEditActionResult> {
+  const user = await requireSessionAndRateLimit('ruleForEdit');
+  if (isErrorState(user)) return user;
+
+  const parsedRuleId = z.uuid().safeParse(ruleId);
+  if (!parsedRuleId.success) {
+    return { error: { code: 'RULE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  try {
+    const current = await fetchCurrentRuleForEdit(user.id, parsedRuleId.data);
+    if (!current) {
+      return { error: { code: 'RULE_NOT_FOUND', user_message: "We couldn't find that rule.", retryable: false } };
+    }
+    // Same lifecycle guard as `editRule`'s own — see that function's own
+    // header comment for why this is a distinct code from
+    // `RULE_ALREADY_FROZEN` (that one is about an evaluation, not a rule).
+    if (current.state !== 'active') {
+      const notEditable = new RuleNotEditableError(current.ruleId, current.state);
+      return {
+        error: {
+          code: notEditable.code,
+          user_message: 'This rule has been retired and can no longer be edited.',
+          retryable: false,
+        },
+      };
+    }
+    if (current.scope !== 'global' && current.scope !== 'strategy') {
+      // `scope='account'` (v1.1 firm rules) — not reachable today, same
+      // defensive posture as `editRule`'s own identical check.
+      return { error: { code: 'RULE_NOT_EDITABLE', user_message: 'This rule cannot be edited here.', retryable: false } };
+    }
+
+    return {
+      success: true,
+      rule: {
+        ruleId: current.ruleId,
+        operandId: current.operandId,
+        op: current.op,
+        value: current.value,
+        scope: current.scope,
+        scopeId: current.scopeId,
+        currentVersion: current.currentVersion,
+      },
+    };
+  } catch (err) {
+    console.error('[rules/actions:fetchRuleForEdit] read failed:', err);
+    return {
+      error: { code: 'RULE_EDIT_FETCH_INTERNAL', user_message: 'Something went wrong loading this rule. Please try again.', retryable: true },
     };
   }
 }
