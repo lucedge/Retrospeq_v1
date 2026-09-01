@@ -830,3 +830,122 @@ PROGRESS.md's "Infra gaps"), the fix is straightforward: both
 `observed`, the caught `err`) to attach to a real alerting pipeline
 without any further code change — this is a logging-destination gap, not
 a missing-data gap.
+
+## `unlock_state` recompute failing after a confirmation
+
+**Source:** Module 08 (Onboarding & Home) §4 — Slice 08a — "Gates what the
+app is allowed to show. Recomputed after each confirm." Owning code:
+`lib/onboarding/unlock-state-repository.ts`'s
+`recomputeUnlockStateForConfirmations`, called from
+`lib/ingestion/confirm.ts`'s `confirmDay` and `autoConfirmStaleTrades`,
+both AFTER their own transaction has already committed — the SAME
+best-effort, non-blocking, materialised-cache posture already established
+for `operand_distributions`/`adherence_weekly` (see the two entries
+above, which this one mirrors deliberately rather than inventing a third
+shape for what is, at the data-flow level, the identical kind of table).
+
+**What this means operationally:** a recompute failure must never turn a
+genuinely successful trade confirmation into a reported failure —
+`confirmDay`/`autoConfirmStaleTrades` still return their normal success
+result either way, and `recomputeUnlockStateForConfirmations` itself
+never throws (each user's recompute is individually try/caught). The only
+trace is a `console.error` line prefixed `[onboarding] unlock_state
+recompute failed for user <id>`. Left unaddressed, that trader's
+`unlock_state` row silently goes stale (or, for a brand-new user whose
+`handle_new_user`-created row has never been recomputed, stays at its
+all-zero defaults) — every downstream consumer of the unlock ladder (§6,
+not yet built) would read a trader as having fewer confirmed/captured
+trades or active weeks than they actually do, which fails SAFE (under-
+promising a feature stays hidden a little longer) rather than unsafe
+(never shows a feature early).
+
+**Nightly recompute is NOT built**, same standing gap as the
+`operand_distributions`/`adherence_weekly` entries above (PROGRESS.md
+"Infra gaps," no cron/scheduler infra exists yet). Until it does, a
+confirm/auto-confirm call is the ONLY way a trader's `unlock_state` row
+gets refreshed.
+
+**How to check:** grep application logs for `[onboarding] unlock_state
+recompute failed for user` — every occurrence names the affected
+`user_id` directly. A quick live check for a specific trader: compare
+`unlock_state.computed_at` against that trader's most recent
+`trades.confirmed_at` — a `computed_at` meaningfully older than the
+latest confirmation means either this recompute failed, or (for a trader
+who has never confirmed a trade) it has simply never run past its
+signup-time default.
+
+**Action:** an isolated failure (a transient DB hiccup during the
+recompute's own reads/writes) self-heals on the NEXT successful
+confirmation for that user, since `recomputeUnlockState` always
+recomputes the trader's FULL confirmed-trade history from
+`trades`/`trade_captures`, never an incremental delta — no backlog to
+work through, no lost data. Investigate if the SAME trader fails
+repeatedly across multiple confirmations, or if this error appears across
+many traders at once (likely a `retrospeq.trades`/
+`retrospeq.trade_captures`/`retrospeq.unlock_state` schema or
+connectivity issue affecting the underlying query broadly, worth checking
+before assuming it's isolated).
+
+## `autoConfirmStaleTrades` sweep duration scales with the pending
+stale-trade backlog, not just the calling account
+
+**Source:** discovered during Module 08 Slice 08a's own live-DB test
+authoring (2026-09-01), not a Slice 08a code defect — logged here because
+it is a genuine, previously-unnoticed operational characteristic of
+`lib/ingestion/confirm.ts`'s `autoConfirmStaleTrades` (Module 02 §4.6),
+which BOTH `adherence_weekly` (Module 04 Slice 6) and `unlock_state`
+(Module 08 Slice 08a) now depend on for their own post-commit recompute
+wiring.
+
+**What this means operationally:** `autoConfirmStaleTrades` sweeps EVERY
+stale-eligible trade across EVERY account/user in one call, not just the
+caller's own — and for each candidate it confirms, it runs
+`evaluateAndFreezeTradeRules` (Module 04 Slice 5), which issues its own
+cross-trade queries (`daily_loss_pct`, `consecutive_losses`, etc.) per
+trade. The total cost is therefore roughly `O(pending stale trades ×
+active rules per affected trader)`, not a constant — a large accumulated
+backlog of unconfirmed-and-stale trades (e.g. from many small dev/test
+accounts that were never confirmed, or a genuine production incident that
+prevented confirmations for a while) makes EVERY subsequent
+`autoConfirmStaleTrades` call slower, compounding until the backlog is
+worked down.
+
+**How this was found:** a live-DB test of `unlock_state`'s wiring into
+`autoConfirmStaleTrades` first surfaced a Postgres `statement_timeout`
+("canceling statement due to statement timeout," 2 minutes on this
+shared dev/test project) — root-caused via `pg_stat_activity`/`pg_locks`
+to a LEAKED "idle in transaction" connection from an earlier, manually
+interrupted test run holding a lock across the whole `retrospeq.trades`
+table (cleared via `pg_terminate_backend`, confirmed gone). With that
+lock cleared, a SECOND, independent run still took several minutes —
+confirmed via `pg_stat_activity` polling mid-run to be genuinely
+PROGRESSING (not stuck) — and traced to the 127 stale trades accumulated
+across this repo's own test history (13 distinct real accounts, each
+with a small, unremarkable row count — ruled out as a per-account
+data-volume problem) each paying the full per-trade rule-evaluation cost
+above. The ALREADY-SHIPPED `lib/rules/__tests__/adherence-repository.live
+.test.ts`'s own identically-shaped `autoConfirmStaleTrades` test was
+independently re-run during this same investigation and hit the
+IDENTICAL statement-timeout failure, confirming this is a pre-existing,
+whole-repo-wide characteristic of the current shared dev/test project's
+accumulated backlog, not a regression introduced by Slice 08a.
+
+**Action:** no code fix applied in Slice 08a (out of scope for an
+onboarding-schema dispatch, and risky to touch Module 02's own most
+safety-critical transaction based on a symptom observed only in a
+degraded shared TEST environment). Two independent, lower-risk paths
+worth prioritizing in a future session, tracked in PROGRESS.md's "Infra
+gaps": (1) a one-off cleanup of the shared dev/test project's own
+accumulated stale-trade backlog (most of it almost certainly leftover
+fixtures from past live-DB test runs that were never fully cleaned up,
+not real product data); (2) if this backlog-scaling cost ever matters in
+PRODUCTION (a real incident that delays confirmations for many accounts
+at once), `autoConfirmStaleTrades` sweeping "everyone, unbounded" in a
+single transaction is worth revisiting — e.g. batching or capping the
+sweep size per invocation — but that is a Module 02 performance decision,
+not something this entry prescribes a fix for. Any live-DB test that
+calls the real, unscoped `autoConfirmStaleTrades()` should be treated as
+currently unreliable against this shared project until the backlog is
+addressed — `unlock-state-repository.live.test.ts`'s own analogous test
+is `it.skip`-ped with this exact reasoning inline, rather than left
+flaky or silently deleted.

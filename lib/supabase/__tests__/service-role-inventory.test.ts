@@ -223,6 +223,19 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // actual security review (RLS/scoping/parameterization all confirmed
   // PASS then) — only the allowlist bookkeeping itself was missed.
   'lib/rules/adherence-repository.ts',
+  // Module 08 (Onboarding & Home) §4 — Slice 08a. `unlock_state` is the
+  // SAME class of materialised cache as `adherence_weekly`/
+  // `operand_distributions` above (owner SELECT only, service-role-only
+  // writes, Slice 08a's own migration) — `recomputeUnlockStateForUser`
+  // uses `withServiceRoleConnection` for the identical reason, every
+  // query inside it explicitly scoped to the caller-supplied `userId`
+  // (never trusting RLS to narrow it, since it's bypassed here), matching
+  // `distributions-repository.ts`'s/`adherence-repository.ts`'s own
+  // established convention for this exact table shape. Added to this
+  // allowlist in the same commit that introduces the call, not left for a
+  // future slice to discover missing (per the `adherence-repository.ts`
+  // entry's own cautionary note directly above).
+  'lib/onboarding/unlock-state-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

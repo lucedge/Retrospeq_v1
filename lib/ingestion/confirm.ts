@@ -8,6 +8,7 @@ import {
 } from './sync';
 import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/rules/freeze-evaluations';
 import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-repository';
+import { recomputeUnlockStateForConfirmations } from '@/lib/onboarding/unlock-state-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.6 — "Confirmation and freeze —
@@ -215,6 +216,19 @@ import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-
  * never throws (each `(user_id, week)` pair is individually try/caught and
  * logged); this file never wraps its call in its own additional try/catch
  * for that reason.
+ *
+ * ## `unlock_state` recompute (Module 08 §4, Slice 08a) — SAME shape,
+ * called alongside the adherence recompute above
+ *
+ * Both `confirmDay` and `autoConfirmStaleTrades` also call
+ * `recomputeUnlockStateForConfirmations` (`lib/onboarding/unlock-state-
+ * repository.ts`) AFTER their own transaction has already committed —
+ * identical post-commit, best-effort, never-throws posture to the
+ * `adherence_weekly` call directly above, for the identical reason:
+ * `unlock_state` is a materialised CACHE over already-committed
+ * `trades`/`trade_captures` rows, never itself trust-sensitive. Deduped
+ * by `userId` alone (no week dimension, unlike adherence's own
+ * `(userId, weekStart)` pairs) — see that file's own header.
  */
 
 // ---------------------------------------------------------------------
@@ -498,6 +512,11 @@ export async function confirmDay(
   // always exactly one (user, week) pair.
   if (result.confirmed && result.tradesConfirmed.length > 0 && confirmedUserId) {
     await recomputeAdherenceWeeklyForConfirmations([{ userId: confirmedUserId, serverDay }]);
+    // Post-commit, best-effort unlock_state recompute -- see this file's
+    // header ("unlock_state recompute"). Same gating condition as the
+    // adherence call directly above (only when at least one trade was
+    // actually confirmed).
+    await recomputeUnlockStateForConfirmations([{ userId: confirmedUserId }]);
   }
 
   return result;
@@ -664,6 +683,12 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
   // way it never does for confirmDay's always-single pair.
   if (confirmedForRecompute.length > 0) {
     await recomputeAdherenceWeeklyForConfirmations(confirmedForRecompute);
+    // Post-commit, best-effort unlock_state recompute -- see this file's
+    // header ("unlock_state recompute"). `recomputeUnlockStateForConfirmations`
+    // dedupes by userId alone (no week dimension), so passing the same
+    // `{userId, serverDay}` shape `confirmedForRecompute` already carries
+    // is fine -- only `userId` is ever read from each entry.
+    await recomputeUnlockStateForConfirmations(confirmedForRecompute);
   }
 
   return result;
