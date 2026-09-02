@@ -169,11 +169,18 @@ describe.skipIf(!env)('retrospeq rulebook schema — cross-user isolation and tr
     // deletes that would otherwise trip the trades delete trigger; here
     // it must also stand down rules_forbid_delete /
     // rule_evaluations_forbid_delete for the account-cascade cleanup
-    // below.
+    // below. The final `delete from profiles` (added alongside the two
+    // pre-existing per-table deletes, not replacing them) closes a
+    // separate, newer gap: `20260902010000_field_registry_schema.sql`'s
+    // `fields_forbid_derived_delete` trigger, tripped by
+    // `deleteTestAuthUser`'s own auth.users cascade otherwise -- see
+    // `erasureDeleteProfiles`'s own header in rls-test-helpers.ts for the
+    // full account.
     await db.query('begin');
     await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
     await db.query('delete from retrospeq.trades where user_id = any($1)', [[userA.id, userB.id]]);
     await db.query('delete from retrospeq.rules where user_id = any($1)', [[userA.id, userB.id]]);
+    await db.query('delete from retrospeq.profiles where id = any($1)', [[userA.id, userB.id]]);
     await db.query('commit');
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});

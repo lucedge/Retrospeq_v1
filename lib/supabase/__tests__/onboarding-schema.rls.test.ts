@@ -5,6 +5,7 @@ import {
   connectAsOwner,
   createTestAuthUser,
   deleteTestAuthUser,
+  erasureDeleteProfiles,
   readRlsTestEnv,
   type TestAuthUser,
 } from './rls-test-helpers';
@@ -133,7 +134,19 @@ describe.skipIf(!env)('retrospeq onboarding schema — signup row-pair creation,
 
   afterAll(async () => {
     if (!env) return;
-    await db.query('delete from retrospeq.profiles where id = any($1)', [[userA.id, userB.id]]);
+    // Was a bare `delete from profiles` with no erasure escape hatch --
+    // a real regression this exact statement surfaced (loudly, as a
+    // reported test failure, unlike five sibling RLS test files that
+    // swallowed the same underlying problem silently via
+    // `deleteTestAuthUser`'s own `.catch(() => {})`) once
+    // `20260902010000_field_registry_schema.sql` started seeding 9
+    // `kind = 'derived'` `fields` rows for every user: this delete now
+    // cascades into `fields`, and `fields_forbid_derived_delete` rejects
+    // that cascade outside erasure. Fixed via the shared
+    // `erasureDeleteProfiles` helper -- see its own header for the full
+    // account of why every RLS test file needed the same fix, not just
+    // this one.
+    await erasureDeleteProfiles(db, [userA.id, userB.id]);
     await deleteTestAuthUser(env!, userA.id).catch(() => {});
     await deleteTestAuthUser(env!, userB.id).catch(() => {});
     await db.end();

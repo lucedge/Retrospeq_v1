@@ -252,6 +252,14 @@ describe.skipIf(!env)('retrospeq ingestion schema — cross-user isolation and t
     await db.query('begin');
     await db.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
     await db.query('delete from retrospeq.trades where user_id = any($1)', [[userA.id, userB.id]]);
+    // Also delete profiles directly here (added alongside the trades
+    // pre-delete above, not replacing it) -- closes a separate, newer
+    // gap: `20260902010000_field_registry_schema.sql`'s
+    // `fields_forbid_derived_delete` trigger, which `deleteTestAuthUser`'s
+    // own auth.users cascade would otherwise trip (every test user now
+    // carries 9 derived `fields` rows). See `erasureDeleteProfiles`'s own
+    // header in rls-test-helpers.ts for the full account.
+    await db.query('delete from retrospeq.profiles where id = any($1)', [[userA.id, userB.id]]);
     await db.query('commit');
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});

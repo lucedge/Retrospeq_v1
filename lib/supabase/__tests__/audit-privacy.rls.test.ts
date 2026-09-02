@@ -5,6 +5,7 @@ import {
   connectAsOwner,
   createTestAuthUser,
   deleteTestAuthUser,
+  erasureDeleteProfiles,
   readRlsTestEnv,
   type TestAuthUser,
 } from './rls-test-helpers';
@@ -41,6 +42,10 @@ describe.skipIf(!env)('retrospeq.audit_log / data_requests / erasure_tombstones 
     // cascade and needs no explicit cleanup).
     await db.query("delete from retrospeq.audit_log where action like 'rls_test%' or action = 'service_role_test'").catch(() => {});
     await db.query("delete from retrospeq.erasure_tombstones where email_hash in ('deadbeef', 'service-role-test')").catch(() => {});
+    // Pre-delete profiles via erasureDeleteProfiles first -- see its own
+    // header for why deleteTestAuthUser's own cascade alone is no longer
+    // sufficient (every test user now carries 9 derived `fields` rows).
+    await erasureDeleteProfiles(db, [userA.id, userB.id]);
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});
     await db.end();

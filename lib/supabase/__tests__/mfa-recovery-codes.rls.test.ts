@@ -5,6 +5,7 @@ import {
   connectAsOwner,
   createTestAuthUser,
   deleteTestAuthUser,
+  erasureDeleteProfiles,
   readRlsTestEnv,
   type TestAuthUser,
 } from './rls-test-helpers';
@@ -43,6 +44,9 @@ describe.skipIf(!env)('retrospeq.mfa_recovery_codes — RLS cross-user isolation
 
   afterAll(async () => {
     if (!env) return;
+    // See `erasureDeleteProfiles`'s own header for why this must run
+    // BEFORE `deleteTestAuthUser`, not just rely on that call's cascade.
+    await erasureDeleteProfiles(db, [userA.id, userB.id]);
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});
     await db.end();

@@ -63,6 +63,8 @@ Concretely (`lib/privacy/erasure.ts`'s `executeErasure`):
 a. deleteAllAccountCredentialsForUser(userId)     -- FIRST, alone
 b. deleteAllRecoveryCodes(userId)                 -- explicit
    deleteAllTradingAccountsForUser(userId)        -- explicit
+   deleteAllRulesForUser(userId)                  -- explicit (added 2026-09-02, Module 04 -- see addendum below)
+   deleteAllFieldsForUser(userId)                 -- explicit (added 2026-09-02, Module 03)
    deleteSubscriptionForUser(userId)              -- explicit
 c. unlinkTelemetryPseudonyms(userId)              -- no-op today, see below
 d. recordErasureTombstone(email, requestId)       -- needs the email, still alive
@@ -135,3 +137,97 @@ correlate it back to a still-living account).
   in this ADR or `executeErasure` needs to handle that case today; a
   future slice adding those tables must extend the explicit list above,
   not assume a cascade will handle it.
+
+## Addendum, 2026-09-02: `deleteAllFieldsForUser` — a real critical
+## regression this ADR's own reasoning predicted and caught
+
+Module 03's field-registry migration (`20260902010000_field_registry
+_schema.sql`) added `retrospeq.fields`, seeded per-user at signup with 9
+permanent `kind = 'derived'` rows, and a `BEFORE DELETE` trigger
+(`fields_forbid_derived_delete`) that rejects deleting any of them unless
+`retrospeq.erasure_in_progress` is set on the SAME connection issuing the
+delete. That migration shipped without a matching change to
+`executeErasure` — `fields` was left to the `on delete cascade` from
+`profiles`, relying on the final `auth.admin.deleteUser` call to reach it
+the same way this ADR's own "Context" section describes every other
+cascading table *could* be reached, but explicitly chose not to rely on.
+This was a real, live-verified bug (not hypothetical): because
+`auth.admin.deleteUser` runs through Supabase GoTrue on its OWN, separate
+Postgres connection, GoTrue's own cascade into `fields` never had
+`erasure_in_progress` set — it is a transaction-local flag (`set_config`'s
+third argument), invisible outside the one connection/transaction that
+set it. The result: every real `executeErasure` call failed at its final
+step, for every user, the moment Module 03's migration shipped, because
+every user has 9 permanent derived `fields` rows from the moment they
+sign up.
+
+This is the exact class of problem reason #1 in this ADR's own "Decision"
+section already exists to prevent: ordering and mechanism control belong
+to this codebase's own connection, not to whatever GoTrue's cascade
+happens to do on a connection this codebase has no control over.
+`deleteAllTradingAccountsForUser` (`lib/broker/accounts-repository.ts`)
+had already established the fix for the structurally identical
+`trading_accounts` → `trades` (`forbid_broker_confirmed_trade_delete`)
+case; `deleteAllFieldsForUser` (`lib/fields/fields-repository.ts`, added
+here) applies the exact same fix to `fields` — explicit delete, on this
+app's own connection, `erasure_in_progress` set LOCAL to that same
+transaction, BEFORE `auth.admin.deleteUser()` ever runs. See that
+function's own header comment for the full mechanism explanation.
+
+**Consequence for future slices, stated explicitly so this does not
+recur a third time:** any future migration that adds a `BEFORE DELETE`
+trigger to a table reachable by `profiles`' own cascade chain (grep every
+migration for `before delete` before shipping one) must, in the SAME
+slice, add a matching explicit `deleteAllXForUser` call to
+`executeErasure` and this ADR's own ordered list — a schema-only PR that
+adds such a trigger without touching `lib/privacy/erasure.ts` is exactly
+how this regression happened.
+
+**A separate instance of this same bug class was found while
+investigating this one, deliberately NOT fixed by this addendum at the
+time (out of that fix's own scope, flagged instead of silently patched or
+silently ignored) — now fixed, same day, in its own dedicated follow-up
+(see the second addendum below):** `retrospeq.rules` and
+`retrospeq.rule_evaluations`
+(`20260823030000_rule_evaluations_immutability_trigger.sql`, Module 04,
+shipped 2026-08-23) both have their own `BEFORE DELETE` triggers
+(`rules_forbid_delete`, `rule_evaluations_forbid_delete`) with the
+identical `retrospeq.erasure_in_progress` escape hatch — and
+`executeErasure` had never explicitly deleted either table. Any user with
+at least one authored rule almost certainly had the same
+`auth.admin.deleteUser` failure this addendum just fixed for `fields`,
+undetected because `lib/privacy/__tests__/erasure.live.test.ts` had never
+seeded a `rules` row for its test user.
+
+## Addendum, 2026-09-02 (same day, dedicated follow-up dispatch):
+## `deleteAllRulesForUser` — closing the `rules`/`rule_evaluations`
+## instance of the same regression, flagged (not fixed) above
+
+`lib/rules/rules-repository.ts`'s new `deleteAllRulesForUser` applies the
+exact same fix `deleteAllFieldsForUser` established for `fields`, to
+`rules` and `rule_evaluations`: inside one `withServiceRoleConnection`
+transaction, `retrospeq.erasure_in_progress` is set LOCAL first, then
+`rule_evaluations` (the child) is deleted explicitly by `user_id`,
+followed by `rules` (the parent, which cascades `rule_versions` and
+`rule_overrides` — both verified to carry no `BEFORE DELETE` trigger of
+their own). See that function's own header comment for the full FK
+verification, including why `rule_evaluations` is deleted explicitly
+rather than only relying on its cascade from `rules` (both are correct
+given `set_config`'s transaction-scoped `is_local` semantics — verified,
+not assumed — but explicit-both was chosen to match this fix's own
+dispatch instruction and to make the function's correctness independent
+of `rules`' own cascade wiring staying exactly as it is today), and why
+`field_usages` (`used_by = 'rule'` rows) needs no separate handling here
+(no FK from `field_usages.used_by_id` to `rules.id` exists at all — those
+rows are already fully covered by `deleteAllFieldsForUser`'s own cascade
+from `fields`, regardless of the order the two functions run in).
+
+Wired into `executeErasure` immediately after `deleteAllTradingAccountsForUser`
+and before `deleteAllFieldsForUser` — a reading-order choice, not an FK
+requirement (`deleteAllRulesForUser` is independently self-contained and
+provably safe in any order relative to every other call in this list, per
+its own header). `lib/privacy/__tests__/erasure.live.test.ts` gained a new
+regression test seeding a real `rules` row and a real, genuinely-frozen
+`rule_evaluations` row (via the actual freeze pipeline, not a raw insert)
+before running `executeErasure`, proving both are gone afterward — the
+exact scenario that had been silently broken since 2026-08-23.

@@ -16,6 +16,8 @@ const {
   deleteAllTradingAccountsForUserMock,
   deleteAllRecoveryCodesMock,
   deleteSubscriptionForUserMock,
+  deleteAllFieldsForUserMock,
+  deleteAllRulesForUserMock,
 } = vi.hoisted(() => ({
   createServiceRoleClientMock: vi.fn(),
   createDataRequestMock: vi.fn(),
@@ -32,6 +34,8 @@ const {
   deleteAllTradingAccountsForUserMock: vi.fn(),
   deleteAllRecoveryCodesMock: vi.fn(),
   deleteSubscriptionForUserMock: vi.fn(),
+  deleteAllFieldsForUserMock: vi.fn(),
+  deleteAllRulesForUserMock: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -71,6 +75,12 @@ vi.mock('@/lib/auth/mfa-recovery-repository', () => ({
 }));
 vi.mock('@/lib/entitlements/subscription-repository', () => ({
   deleteSubscriptionForUser: deleteSubscriptionForUserMock,
+}));
+vi.mock('@/lib/fields/fields-repository', () => ({
+  deleteAllFieldsForUser: deleteAllFieldsForUserMock,
+}));
+vi.mock('@/lib/rules/rules-repository', () => ({
+  deleteAllRulesForUser: deleteAllRulesForUserMock,
 }));
 
 import {
@@ -229,6 +239,12 @@ describe('executeErasure', () => {
     deleteAllTradingAccountsForUserMock.mockImplementation(async () => {
       callOrder.push('trading_accounts');
     });
+    deleteAllRulesForUserMock.mockImplementation(async () => {
+      callOrder.push('rules');
+    });
+    deleteAllFieldsForUserMock.mockImplementation(async () => {
+      callOrder.push('fields');
+    });
     deleteSubscriptionForUserMock.mockImplementation(async () => {
       callOrder.push('subscription');
     });
@@ -245,10 +261,22 @@ describe('executeErasure', () => {
     await executeErasure('req-1', { bypassGracePeriod: true });
 
     expect(callOrder[0]).toBe('credentials');
-    expect(callOrder.slice(1, 4).sort()).toEqual(['recovery_codes', 'subscription', 'trading_accounts']);
+    // The explicit delete-list steps (docs/adr/0010) have no ordering
+    // constraint between each other — deleteAllRulesForUser/
+    // deleteAllFieldsForUser are each independently self-contained (see
+    // their own header comments and erasure.ts's step 3b comment), so
+    // this asserts the SET of steps ran, not a specific order among them.
+    expect(callOrder.slice(1, 6).sort()).toEqual(
+      ['fields', 'recovery_codes', 'rules', 'subscription', 'trading_accounts'].sort(),
+    );
     expect(callOrder).toContain('tombstone');
     expect(callOrder.at(-1)).toBe('delete_user');
     expect(callOrder.indexOf('tombstone')).toBeLessThan(callOrder.indexOf('delete_user'));
+
+    // Genuinely proves both new functions are wired into executeErasure,
+    // not just that the test no longer crashes against real Postgres.
+    expect(deleteAllRulesForUserMock).toHaveBeenCalledWith('user-1');
+    expect(deleteAllFieldsForUserMock).toHaveBeenCalledWith('user-1');
 
     expect(recordErasureTombstoneMock).toHaveBeenCalledWith('trader@example.com', 'req-1');
     expect(recordAuditEventMock).toHaveBeenCalledWith(
@@ -284,6 +312,8 @@ describe('executeErasure', () => {
       expect(deleteAllAccountCredentialsForUserMock).not.toHaveBeenCalled();
       expect(deleteAllTradingAccountsForUserMock).not.toHaveBeenCalled();
       expect(deleteAllRecoveryCodesMock).not.toHaveBeenCalled();
+      expect(deleteAllRulesForUserMock).not.toHaveBeenCalled();
+      expect(deleteAllFieldsForUserMock).not.toHaveBeenCalled();
       expect(deleteSubscriptionForUserMock).not.toHaveBeenCalled();
       expect(recordErasureTombstoneMock).not.toHaveBeenCalled();
       expect(createServiceRoleClientMock().auth.admin.deleteUser).not.toHaveBeenCalled();

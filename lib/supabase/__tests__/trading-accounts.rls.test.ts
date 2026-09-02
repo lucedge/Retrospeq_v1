@@ -5,6 +5,7 @@ import {
   connectAsOwner,
   createTestAuthUser,
   deleteTestAuthUser,
+  erasureDeleteProfiles,
   readRlsTestEnv,
   type TestAuthUser,
 } from './rls-test-helpers';
@@ -64,7 +65,11 @@ describe.skipIf(!env)('retrospeq.trading_accounts / account_credentials — RLS 
     if (!env) return;
     // Cascades to trading_accounts (FK on_delete cascade from
     // profiles) and account_credentials (FK on_delete cascade from
-    // trading_accounts) — no orphaned test data.
+    // trading_accounts) — no orphaned test data. Pre-delete via
+    // erasureDeleteProfiles first -- see its own header for why
+    // deleteTestAuthUser's own cascade alone is no longer sufficient
+    // (every test user now carries 9 derived `fields` rows).
+    await erasureDeleteProfiles(db, [userA.id, userB.id]);
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});
     await db.end();

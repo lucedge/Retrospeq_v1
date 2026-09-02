@@ -236,6 +236,32 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // future slice to discover missing (per the `adherence-repository.ts`
   // entry's own cautionary note directly above).
   'lib/onboarding/unlock-state-repository.ts',
+  // Module 01 stories 5.2/5.3 erasure fix, 2026-09-02 (docs/adr/0010's
+  // addendum, Module 03's field-registry migration having introduced a
+  // real critical regression): `deleteAllFieldsForUser` mirrors
+  // `deleteAllTradingAccountsForUser` exactly (`lib/broker/accounts
+  // -repository.ts`, already listed above) — service-role is required
+  // here not for an RLS-bypass-of-ownership reason (`fields` has a real
+  // owner DELETE policy) but because the transaction-local
+  // `retrospeq.erasure_in_progress` flag `fields_forbid_derived_delete`
+  // checks must be set on the SAME connection issuing the delete, and
+  // this is that connection. Filtered explicitly on the caller-supplied
+  // `userId`, same posture as every other entry in this list. Added to
+  // this allowlist in the same commit that introduces the call, per the
+  // two entries directly above's own cautionary note.
+  'lib/fields/fields-repository.ts',
+  // Module 01 stories 5.2/5.3 erasure fix, 2026-09-02 (docs/adr/0010's
+  // addendum, the `rules`/`rule_evaluations` instance of the same
+  // regression, flagged alongside the `fields` fix above and closed here):
+  // `deleteAllRulesForUser` mirrors `deleteAllFieldsForUser`/
+  // `deleteAllTradingAccountsForUser` exactly — service-role is required
+  // for the same reason (the transaction-local `retrospeq.erasure_in_progress`
+  // flag `rules_forbid_delete`/`rule_evaluations_forbid_delete` check must
+  // be set on the SAME connection issuing the delete). Filtered explicitly
+  // on the caller-supplied `userId`, same posture as every other entry in
+  // this list. Added to this allowlist in the same commit that introduces
+  // the call, per the entries directly above's own cautionary note.
+  'lib/rules/rules-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

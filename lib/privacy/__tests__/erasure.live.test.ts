@@ -26,6 +26,21 @@ vi.mock('server-only', () => ({}));
  * only, via `vi.stubEnv`, never process-wide) — see
  * `lib/privacy/dev-tools-guard.ts`'s own doc comment for why this is not
  * a production affordance.
+ *
+ * Every test user created here via `createTestAuthUser` already gets 9
+ * permanent `kind = 'derived'` `retrospeq.fields` rows automatically, via
+ * `handle_new_user` (`20260902010000_field_registry_schema.sql`,
+ * Module 03) — this is exactly the real-world shape (every real user has
+ * them) that exposed a genuine critical regression: `executeErasure`
+ * never explicitly deleted `fields`, so GoTrue's own final
+ * `auth.admin.deleteUser` cascade hit `fields_forbid_derived_delete` on a
+ * connection where `retrospeq.erasure_in_progress` was never set, and the
+ * whole erasure failed for every single user. See
+ * `lib/fields/fields-repository.ts`'s `deleteAllFieldsForUser` and
+ * docs/adr/0010's 2026-09-02 addendum for the full account. Because every
+ * test user here already carries the 9 derived rows, the existing "full
+ * lifecycle" test below is extended with explicit field-count assertions
+ * rather than relying on it having caught the bug by accident.
  */
 const env = readRlsTestEnv();
 
@@ -92,6 +107,17 @@ describe.skipIf(!env)('lib/privacy/erasure.ts executeErasure (live DB)', () => {
       );
       expect(subscriptionBefore.rows).toHaveLength(1);
 
+      // The 9 derived `fields` rows every real user gets at signup
+      // (`handle_new_user` -> `seed_derived_fields_for_user`, Module 03)
+      // — asserted explicitly here, before erasure, so the "9 -> 0" claim
+      // below is proven against a real, counted starting state, not
+      // assumed.
+      const fieldsBefore = await db.query(
+        "select id from retrospeq.fields where user_id = $1 and kind = 'derived'",
+        [user.id],
+      );
+      expect(fieldsBefore.rows).toHaveLength(9);
+
       // Real story 5.2 request flow — grace period created for real,
       // then bypassed only via the guarded dev/test path.
       const request = await requestErasure(user.id);
@@ -123,6 +149,16 @@ describe.skipIf(!env)('lib/privacy/erasure.ts executeErasure (live DB)', () => {
         [user.id],
       );
       expect(subscriptionAfter.rows).toHaveLength(0);
+
+      // The regression this test file now closes: all 9 derived `fields`
+      // rows genuinely gone, not merely "not blocking the delete" —
+      // `deleteAllFieldsForUser` ran explicitly inside `executeErasure`
+      // itself, not left to (and previously silently failed by) GoTrue's
+      // own cascade.
+      const fieldsAfter = await db.query('select 1 from retrospeq.fields where user_id = $1', [
+        user.id,
+      ]);
+      expect(fieldsAfter.rows).toHaveLength(0);
 
       const profileAfter = await db.query('select 1 from retrospeq.profiles where id = $1', [
         user.id,
@@ -374,6 +410,204 @@ describe.skipIf(!env)('lib/privacy/erasure.ts executeErasure (live DB)', () => {
       expect(accountsAfter.rows).toHaveLength(0);
       const profileAfter = await db.query('select 1 from retrospeq.profiles where id = $1', [user.id]);
       expect(profileAfter.rows).toHaveLength(0);
+
+      await db
+        .query(
+          "delete from retrospeq.audit_log where action = 'erasure_executed' and metadata->>'erasedUserId' = $1",
+          [user.id],
+        )
+        .catch(() => {});
+      await db.query('delete from retrospeq.erasure_tombstones where request_id = $1', [request.id]).catch(() => {});
+      await deleteTestAuthUser(env, user.id).catch(() => {});
+    },
+    30_000,
+  );
+
+  it(
+    'succeeds for a real user with derived fields rows, and auth.admin.deleteUser genuinely ' +
+      'succeeds — regression test for the retrospeq.erasure_in_progress escape-hatch gap in ' +
+      'deleteAllFieldsForUser (docs/adr/0010 2026-09-02 addendum, Module 03)',
+    async () => {
+      if (!env) return;
+      const { requestErasure, executeErasure } = await import('../erasure');
+
+      const user = await createTestAuthUser(env, 'erasure-live-derived-fields');
+
+      // Every real user gets these 9 rows automatically at signup
+      // (`handle_new_user` -> `seed_derived_fields_for_user`) — asserted
+      // explicitly here rather than assumed, so this test proves the fix
+      // against a genuinely reproducing hazard, matching the confirmed-
+      // trade test's own precedent immediately above.
+      const derivedBefore = await db.query(
+        "select id from retrospeq.fields where user_id = $1 and kind = 'derived' order by id",
+        [user.id],
+      );
+      expect(derivedBefore.rows).toHaveLength(9);
+      expect(derivedBefore.rows.map((r) => r.id)).toContain('drv.risk_pct');
+
+      // Sanity check on the seed itself: confirm `fields_forbid_derived_delete`
+      // really does block a direct delete attempt outside the erasure
+      // escape hatch, exactly mirroring the confirmed-trade test's own
+      // "prove the hazard is real" sanity check.
+      await expect(
+        db.query('delete from retrospeq.fields where user_id = $1 and id = $2', [
+          user.id,
+          'drv.risk_pct',
+        ]),
+      ).rejects.toThrow(/can never be deleted outside of account erasure/);
+
+      const request = await requestErasure(user.id);
+      await executeErasure(request.id, { bypassGracePeriod: true });
+
+      // The regression itself, made explicit and permanent: before the
+      // fix, this next assertion never even ran — `executeErasure` threw
+      // inside `auth.admin.deleteUser`, because GoTrue's own cascade hit
+      // the same trigger the direct-delete sanity check above just
+      // proved is real, on a connection where the escape hatch was never
+      // set. `executeErasure` now completes without throwing at all.
+      const fieldsAfter = await db.query('select 1 from retrospeq.fields where user_id = $1', [
+        user.id,
+      ]);
+      expect(fieldsAfter.rows).toHaveLength(0);
+
+      // auth.admin.deleteUser genuinely succeeded — the exact call that
+      // used to fail. Confirmed via the GoTrue admin API itself, not just
+      // a local table check.
+      const { createServiceRoleClient } = await import('@/lib/supabase/service');
+      const supabase = createServiceRoleClient();
+      const { data, error } = await supabase.auth.admin.getUserById(user.id);
+      expect(data.user).toBeNull();
+      expect(error).not.toBeNull();
+
+      await db
+        .query(
+          "delete from retrospeq.audit_log where action = 'erasure_executed' and metadata->>'erasedUserId' = $1",
+          [user.id],
+        )
+        .catch(() => {});
+      await db.query('delete from retrospeq.erasure_tombstones where request_id = $1', [request.id]).catch(() => {});
+      await deleteTestAuthUser(env, user.id).catch(() => {});
+    },
+    30_000,
+  );
+
+  it(
+    'succeeds for a real user with an authored rule AND a real, genuinely-frozen rule_evaluations ' +
+      'row, and auth.admin.deleteUser genuinely succeeds — regression test for the ' +
+      'retrospeq.erasure_in_progress escape-hatch gap in `rules`/`rule_evaluations` (docs/adr/0010 ' +
+      '2026-09-02 addendum, Module 04 — the exact scenario flagged-but-not-fixed alongside the ' +
+      'deleteAllFieldsForUser fix above, closed here by the new deleteAllRulesForUser)',
+    async () => {
+      if (!env) return;
+      const { requestErasure, executeErasure } = await import('../erasure');
+
+      const user = await createTestAuthUser(env, 'erasure-live-rules');
+
+      // Seed a real trading account + a real, broker-shaped confirmed
+      // trade — mirrors the confirmed-trade regression test's own seed
+      // shape immediately above, since a `rule_evaluations` row needs a
+      // real `trades.id` to reference (`trade_id` is NOT NULL).
+      const accountRes = await db.query(
+        `insert into retrospeq.trading_accounts
+           (user_id, label, platform, base_currency, day_rollover)
+         values ($1, 'Erasure Rules Test Account', 'mt5', 'USD', '00:00:00 UTC')
+         returning id`,
+        [user.id],
+      );
+      const accountId = accountRes.rows[0].id;
+
+      const blockRes = await db.query(
+        `insert into retrospeq.blocks (user_id, account_id, instrument, opened_at, closed_at, server_day)
+         values ($1, $2, 'EURUSD', now() - interval '2 hours', now() - interval '1 hour', current_date)
+         returning id`,
+        [user.id, accountId],
+      );
+      const blockId = blockRes.rows[0].id;
+
+      const tradeRes = await db.query(
+        `insert into retrospeq.trades
+           (user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
+            currency, grouping_confidence, confirmed_at, confirmed_by)
+         values ($1, $2, $3, 'EURUSD', 'long', now() - interval '2 hours', now() - interval '1 hour',
+                 current_date, 'confirmed', 'USD', 'confident_single', now(), 'user')
+         returning id`,
+        [user.id, accountId, blockId],
+      );
+      const tradeId = tradeRes.rows[0].id;
+
+      // A real authored rule (`rules` + its `rule_versions` current
+      // version 1), then a real, frozen `rule_evaluations` row against the
+      // confirmed trade above — direct SQL, matching
+      // `rule-overrides-repository.live.test.ts`'s own established seeding
+      // pattern for this exact shape (that file's own `afterEach` cleanup
+      // already had to work around this precise gap by explicitly
+      // deleting `rule_evaluations`/`rules` under the escape hatch itself,
+      // because `executeErasure` never did — this test proves the
+      // PRODUCTION path now does the same thing, not just test cleanup).
+      const ruleRes = await db.query<{ id: string }>(
+        `insert into retrospeq.rules (user_id, current_version, scope, severity, origin, evaluation, state)
+         values ($1, 1, 'global', 'soft', 'authored', 'at_close', 'active')
+         returning id`,
+        [user.id],
+      );
+      const ruleId = ruleRes.rows[0].id;
+      await db.query(
+        `insert into retrospeq.rule_versions (rule_id, version, user_id, operand_id, op, value, rendered)
+         values ($1, 1, $2, 'total_open_risk', 'lte', '1'::jsonb, 'Erasure regression test rule')`,
+        [ruleId, user.id],
+      );
+      await db.query(
+        `insert into retrospeq.rule_evaluations
+           (user_id, trade_id, rule_id, rule_version, severity, result, observed, server_day)
+         values ($1, $2, $3, 1, 'soft', 'broken', '{"total_open_risk": 1.5}'::jsonb, current_date)`,
+        [user.id, tradeId, ruleId],
+      );
+
+      // Sanity check on the seed itself, matching the confirmed-trade and
+      // derived-fields regression tests' own precedent: confirm both
+      // triggers genuinely block a direct delete attempt outside the
+      // erasure escape hatch, so this test is proving the fix against a
+      // real, reproducing hazard — not a scenario that was never actually
+      // blocked.
+      await expect(
+        db.query('delete from retrospeq.rule_evaluations where rule_id = $1', [ruleId]),
+      ).rejects.toThrow(/cannot delete a frozen evaluation/);
+      await expect(db.query('delete from retrospeq.rules where id = $1', [ruleId])).rejects.toThrow(
+        /rules: cannot delete a rule/,
+      );
+
+      const request = await requestErasure(user.id);
+      await executeErasure(request.id, { bypassGracePeriod: true });
+
+      // The regression itself, made explicit and permanent: before the
+      // fix, this next assertion never even ran — `executeErasure` threw
+      // inside `auth.admin.deleteUser`, because GoTrue's own final cascade
+      // (`auth.users -> profiles -> rules`) hit `rules_forbid_delete` on a
+      // connection where the escape hatch was never set (the earlier
+      // `deleteAllTradingAccountsForUser`/`trades` cascade never reaches
+      // `rules` at all — `rules` has no FK to `trading_accounts`/`trades`).
+      // `executeErasure` now completes without throwing at all, and both
+      // rows are genuinely gone, not merely "not blocking the delete."
+      const evaluationsAfter = await db.query(
+        'select 1 from retrospeq.rule_evaluations where user_id = $1',
+        [user.id],
+      );
+      expect(evaluationsAfter.rows).toHaveLength(0);
+
+      const rulesAfter = await db.query('select 1 from retrospeq.rules where user_id = $1', [
+        user.id,
+      ]);
+      expect(rulesAfter.rows).toHaveLength(0);
+
+      // auth.admin.deleteUser genuinely succeeded — the exact call that
+      // used to fail for every user who had ever authored a rule.
+      // Confirmed via the GoTrue admin API itself, not just a local table
+      // check.
+      const { createServiceRoleClient } = await import('@/lib/supabase/service');
+      const supabase = createServiceRoleClient();
+      const { data, error } = await supabase.auth.admin.getUserById(user.id);
+      expect(data.user).toBeNull();
+      expect(error).not.toBeNull();
 
       await db
         .query(

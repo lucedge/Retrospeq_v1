@@ -1,5 +1,5 @@
 import 'server-only';
-import { withUserConnection } from '@/lib/supabase/direct';
+import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import type { RuleOperator } from './operand-catalogue';
 import type { GlobalRuleForOperand as TightenOnlyGlobalRule } from './validate-tighten-only';
 import type { GlobalRuleForOperand as SatisfiabilityGlobalRule } from './validate-satisfiability';
@@ -531,5 +531,113 @@ export async function applyRuleEdit(
     }
 
     return { newVersion };
+  });
+}
+
+// ---------------------------------------------------------------------
+// deleteAllRulesForUser -- erasure step 3b, Module 01 §4.6 /
+// docs/adr/0010-erasure-explicit-delete-order.md
+// ---------------------------------------------------------------------
+
+/**
+ * Erasure step 3b (part of the explicit FK-safe delete list, see
+ * docs/adr/0010-erasure-explicit-delete-order.md's 2026-09-02 addendum,
+ * which named this exact gap as a known, deliberately-not-yet-fixed
+ * follow-up) -- deletes every `rule_evaluations` row and every `rules`
+ * row (which cascades `rule_versions`/`rule_overrides`) this user owns.
+ *
+ * **Why this needs the exact same `retrospeq.erasure_in_progress` escape
+ * hatch `deleteAllTradingAccountsForUser`/`deleteAllFieldsForUser`
+ * already established, and why `executeErasure` was silently broken for
+ * every user who ever authored a rule:** `retrospeq.rules` has a
+ * `BEFORE DELETE` trigger, `rules_forbid_delete`
+ * (`20260823030000_rule_evaluations_immutability_trigger.sql`), and
+ * `retrospeq.rule_evaluations` has its OWN, independent `BEFORE DELETE`
+ * trigger, `rule_evaluations_forbid_delete` (same migration) -- both
+ * reject the delete unless `retrospeq.erasure_in_progress` reads `'true'`
+ * on the SAME connection/transaction issuing it. Before this function
+ * existed, `executeErasure` never explicitly deleted either table -- both
+ * were left to `on delete cascade` from `retrospeq.profiles(id)`
+ * (`rules.user_id`/`rule_evaluations.user_id` both cascade), relying on
+ * the FINAL `supabase.auth.admin.deleteUser(userId)` call to reach them
+ * as a side effect. That call runs through Supabase GoTrue on its OWN,
+ * completely separate Postgres connection -- not this app's own `pg`
+ * connection pool -- and GoTrue's connection has never set
+ * `retrospeq.erasure_in_progress` (a TRANSACTION-LOCAL flag,
+ * `set_config`'s own third argument, structurally invisible outside the
+ * one connection/transaction that set it). So every real erasure for a
+ * user who had ever authored so much as one rule failed at the very last
+ * step, the same class of bug `deleteAllFieldsForUser`'s own header
+ * documents in full for `fields` -- see that function for the general
+ * mechanism writeup, and docs/adr/0010's addendum for how this specific
+ * instance was found (while fixing the `fields` one) and deliberately
+ * deferred, then closed here.
+ *
+ * **FK shape, verified by reading `20260823020000_rulebook_schema.sql`
+ * directly, not assumed:** `rule_evaluations.rule_id references
+ * rules(id) on delete cascade`, `rule_versions.rule_id references
+ * rules(id) on delete cascade`, `rule_overrides.rule_id references
+ * rules(id) on delete cascade` -- so deleting `rules` alone, inside a
+ * transaction where `erasure_in_progress` is already set, WOULD be
+ * sufficient on its own: Postgres fires row-level triggers on
+ * cascade-originated deletes too (already verified live for the
+ * structurally identical `trades`/`trading_accounts` case --
+ * `forbid_broker_confirmed_trade_delete`'s own header, and independently
+ * re-confirmed by `rls-test-helpers.ts`'s `erasureDeleteProfiles`, which
+ * cascades a multi-level `profiles -> rules -> rule_evaluations` chain
+ * under this exact escape hatch in one transaction). `set_config`'s
+ * `is_local = true` third argument means the flag stays set for the
+ * WHOLE transaction, not just the one statement that set it -- so a
+ * cascade-triggered delete on `rule_evaluations`, fired as a side effect
+ * of deleting `rules` in the SAME transaction/connection, sees the same
+ * flag and passes.
+ *
+ * This function still deletes BOTH tables EXPLICITLY rather than relying
+ * on that cascade, per this fix's own dispatch instruction and as an
+ * intentional belt-and-suspenders choice (not required by the FK shape
+ * alone): `rule_evaluations` first (the child), then `rules` (the
+ * parent) -- so this function's own correctness does not depend on
+ * `rules`' cascade wiring staying exactly as-is, and so it is safe to
+ * call in ANY order relative to `deleteAllTradingAccountsForUser`
+ * (`rule_evaluations.trade_id` also references `trades(id) on delete
+ * cascade`, but this function never relies on THAT cascade either --
+ * deleting `rule_evaluations` directly by `user_id` here is independent
+ * of whether `trading_accounts`/`trades` have already been deleted for
+ * this user or not).
+ *
+ * **`field_usages` (`used_by = 'rule'` rows) deliberately NOT touched
+ * here, verified not assumed:** `field_usages.used_by_id` is genuinely
+ * polymorphic (no FK to `rules.id` at all --
+ * `20260902010000_field_registry_schema.sql`'s own header: "a single FK
+ * cannot express references-one-of-two-tables"), so deleting `rules`
+ * here does not, and structurally could not, cascade into
+ * `field_usages`. Those rows are already fully covered by
+ * `deleteAllFieldsForUser`'s own cascade instead (`field_usages(user_id,
+ * field_id) references fields(user_id, id) on delete cascade` --
+ * deleting a user's `fields` rows removes every `field_usages` row that
+ * user owns, `used_by = 'rule'` included, regardless of whether this
+ * function has run yet). No ordering dependency between this function
+ * and `deleteAllFieldsForUser` as a result.
+ *
+ * `rule_versions`/`rule_overrides` have no `BEFORE DELETE` trigger of
+ * their own (verified: every migration in this repo was grepped for
+ * `before delete` before writing this function -- `trades`,
+ * `rule_evaluations`, `rules`, and `fields` are the only four tables with
+ * one) -- both are cleanly cascade-removed by deleting `rules`, no
+ * separate explicit delete needed. `adherence_weekly.top_break_rule_id
+ * references rules(id) on delete set null` (not cascade) -- deleting
+ * `rules` never blocks on it, it just nulls the column on any
+ * already-materialised historical week row, same as it would for a live
+ * user retiring a rule. `operand_distributions` has no `rule_id`/`rules`
+ * reference at all (keyed only on `(user_id, operand_id)`, cascading
+ * directly from `profiles`) -- untouched by this function, already
+ * reachable safely by the final `auth.admin.deleteUser` cascade since it
+ * has no `BEFORE DELETE` trigger of its own.
+ */
+export async function deleteAllRulesForUser(userId: string): Promise<void> {
+  await withServiceRoleConnection(async (client) => {
+    await client.query("select set_config('retrospeq.erasure_in_progress', 'true', true)");
+    await client.query('delete from retrospeq.rule_evaluations where user_id = $1', [userId]);
+    await client.query('delete from retrospeq.rules where user_id = $1', [userId]);
   });
 }

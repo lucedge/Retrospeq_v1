@@ -5,6 +5,7 @@ import {
   connectAsOwner,
   createTestAuthUser,
   deleteTestAuthUser,
+  erasureDeleteProfiles,
   readRlsTestEnv,
   type TestAuthUser,
 } from './rls-test-helpers';
@@ -56,9 +57,12 @@ describe.skipIf(!env)('retrospeq.profiles — RLS cross-user isolation (live DB)
 
   afterAll(async () => {
     if (!env) return;
-    // Deleting the auth.users rows cascades to profiles
-    // (`references auth.users(id) on delete cascade`) — no orphaned
-    // test data left behind in either table.
+    // Pre-delete profiles directly, under the erasure escape hatch,
+    // BEFORE deleteTestAuthUser's own auth.users cascade reaches
+    // `fields` -- see `erasureDeleteProfiles`'s own header for why this
+    // is now required (every test user carries 9 derived `fields` rows
+    // whose delete trigger otherwise rejects the cascade).
+    await erasureDeleteProfiles(db, [userA.id, userB.id]);
     await deleteTestAuthUser(env, userA.id).catch(() => {});
     await deleteTestAuthUser(env, userB.id).catch(() => {});
     await db.end();

@@ -19,6 +19,8 @@ import {
 } from '@/lib/broker/accounts-repository';
 import { deleteAllRecoveryCodes } from '@/lib/auth/mfa-recovery-repository';
 import { deleteSubscriptionForUser } from '@/lib/entitlements/subscription-repository';
+import { deleteAllFieldsForUser } from '@/lib/fields/fields-repository';
+import { deleteAllRulesForUser } from '@/lib/rules/rules-repository';
 
 /**
  * Module 01 stories 5.2/5.3, §4.6's full erasure flow. This is the
@@ -258,8 +260,21 @@ export async function executeErasure(
   // already gone (above); `profiles` itself is deleted only as a side
   // effect of the final `auth.users` delete below, never explicitly here
   // — see the ADR for why that specific row is the one exception.
+  // `deleteAllFieldsForUser`/`deleteAllRulesForUser` have no FK
+  // relationship to any of the other calls below (no ordering constraint
+  // between them — each is independently self-contained, deleting only by
+  // `user_id`, never relying on another call in this list having already
+  // run — see each function's own header comment for why it, specifically,
+  // needs the same erasure_in_progress escape hatch
+  // `deleteAllTradingAccountsForUser` already established).
+  // `deleteAllRulesForUser` placed here (Module 04, right after Module
+  // 02's trading data and before Module 03's `fields`) purely for reading
+  // order — see its own header for the full FK verification proving no
+  // actual ordering constraint exists relative to any call in this list.
   await deleteAllRecoveryCodes(userId);
   await deleteAllTradingAccountsForUser(userId);
+  await deleteAllRulesForUser(userId);
+  await deleteAllFieldsForUser(userId);
   await deleteSubscriptionForUser(userId);
 
   // --- §4.6 step 3c ------------------------------------------------------

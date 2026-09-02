@@ -1108,3 +1108,71 @@ values parse cleanly — `lib/ingestion/server-day.ts`'s `computeServerDay`
 throws loudly, not silently, on a malformed rollover string, which this
 function's own try/catch would swallow into a `syncDegraded: true` Clear
 render rather than surface directly).
+
+## `handle_new_user` failing at the derived-field seeding step blocks signup entirely
+
+**Source:** Module 03 (Field Registry & Strategy) §3.2 — the field-registry
+schema slice (2026-09-02). Owning code:
+`retrospeq.seed_derived_fields_for_user` (SQL function), called from
+`retrospeq.handle_new_user` (`supabase/migrations/20260902010000_field_registry_schema.sql`),
+which itself fires as an `after insert on auth.users` trigger.
+
+**What this means operationally — this is a different, more severe
+failure shape than every other `handle_new_user` extension in this
+repo's runbook.** `unlock_state`/`operand_distributions`/
+`adherence_weekly` recomputes (see their own entries above) are all
+BEST-EFFORT, POST-COMMIT calls, wrapped in their own try/catch, that can
+fail without affecting the operation that triggered them. The signup
+trigger itself has NO such isolation: `handle_new_user` runs entirely
+inside the SAME database transaction as the `auth.users` INSERT (Supabase
+Auth's own signup flow), and every insert inside it —
+`profiles`/`subscriptions`/`onboarding_state`/`unlock_state`/the 9
+`seed_derived_fields_for_user` rows — either ALL commit together or NONE
+do. If `seed_derived_fields_for_user` throws for any reason (a
+constraint violation, a transient connection issue inside the trigger's
+own execution, a future migration that breaks this function's own
+column list without updating it), the entire `auth.users` INSERT is
+rolled back and the signup itself fails outright — not a degraded
+experience, a hard failure blocking every new account creation until
+fixed. This is the same severity class as a bug in the `profiles` insert
+itself would already have been (that risk pre-dates this slice); this
+entry exists because the derived-field insert is the newest, most
+recently-added link in that same all-or-nothing chain, and per AGENTS.md's
+"never fake it, always flag it," a new failure mode that could take down
+signup entirely deserves its own named entry, not an assumption that
+existing entries already cover it.
+
+**How to check:** Supabase Auth signup failures surface to the client as
+a generic 500 from the `/auth/v1/signup` (or admin `createUser`) endpoint
+— GoTrue does not distinguish "the trigger itself failed" from other
+internal errors in its own client-facing response. The reliable signal is
+server-side: Postgres logs (or Supabase's own project logs) for an error
+whose message names `retrospeq.seed_derived_fields_for_user` or
+`retrospeq.handle_new_user` directly (Postgres includes the failing
+function name in a trigger-execution error by default). A quick live
+health check for "is this actually happening right now": compare
+`select count(*) from retrospeq.profiles` against
+`select count(*) from (select user_id from retrospeq.fields where kind = 'derived' group by user_id having count(*) = 9) t` —
+these two counts must always be equal (every profile has all 9 derived
+fields or none of the signup chain committed at all); a live divergence
+here would mean SOMETHING partially succeeded outside the trigger's own
+transaction, which should not be possible given `handle_new_user` is one
+atomic function, and would itself be worth escalating as a Postgres-level
+anomaly rather than an application bug.
+
+**Action:** this specific insert is the least likely part of the chain
+to fail in practice — the 9 rows are static, literal SQL VALUES with no
+external dependency, no user input, and no cross-table lookups beyond the
+`(user_id, id)` primary key `seed_derived_fields_for_user` itself
+guarantees is fresh for a brand-new user (`on conflict do nothing` makes
+even an accidental double-fire a no-op, not an error). A real occurrence
+most likely means either a genuine Postgres-level outage/connectivity
+blip on the shared project (investigate as a general availability
+incident, same as any other `auth.users`-trigger failure would be) or a
+FUTURE migration that altered `retrospeq.fields`' column set / CHECK
+constraints without updating this function to match (verify the function
+body's own column list against the current `fields` schema; a mismatch
+here is a code deploy bug, not a runtime data issue, and should be fixed
+by correcting `seed_derived_fields_for_user` in a new forward-only
+migration, never by hand-patching the live function without a matching
+migration file).
