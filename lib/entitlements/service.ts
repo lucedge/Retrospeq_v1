@@ -2,6 +2,7 @@ import 'server-only';
 import { can, type CanDeps } from './can';
 import { countActiveTradingAccounts } from './account-usage';
 import { countActiveHardRules, countActiveRules } from './rules-usage';
+import { countActiveStrategies } from './strategy-usage';
 import { getUserPlan } from './subscription-repository';
 import type { Capability, EntitlementResult } from './types';
 
@@ -30,6 +31,11 @@ export const defaultCanDeps: CanDeps = {
     // here would fail-closed-block every Pro-plan promotion, not just
     // ones genuinely at the 6-rule cap).
     'rules.hard': countActiveHardRules,
+    // Module 03 (Field Registry & Strategy) Slice 03b — see
+    // strategy-usage.ts's own header for why `is_default = false` is
+    // excluded from this count, and docs/adr/0018 for why
+    // `strategy.create` also gates strategy EDIT, not just creation.
+    'strategy.create': countActiveStrategies,
   },
 };
 

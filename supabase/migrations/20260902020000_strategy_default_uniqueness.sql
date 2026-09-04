@@ -1,0 +1,41 @@
+-- Module 03 (Field Registry & Strategy) Slice 03b -- strategy CRUD +
+-- versioning (§4.6). One small schema follow-up left implicit, not
+-- explicit, by Slice 03a's own migration
+-- (`20260902010000_field_registry_schema.sql`): §1's "Free users have
+-- one silent, auto-created strategy" and §3.1's `strategies.is_default`
+-- column together imply AT MOST ONE `is_default = true` row per user,
+-- but Slice 03a's own migration never encoded that as a real DB
+-- constraint -- only this slice's own application-layer guarded INSERT
+-- (`lib/fields/strategy-repository.ts`'s `insertStrategyAndVersion`,
+-- the `$3 = true or ...` cap-check bypass for `isDefaultStrategy`)
+-- prevents it today, and only for calls that go through that one
+-- function.
+--
+-- Per this repo's established "encode the real invariant at the DB
+-- layer, don't trust the application layer alone" posture (see
+-- `fields_unique_active_scoped`'s own header in the prior migration for
+-- the identical reasoning applied to field-name uniqueness), this
+-- migration closes that gap with a partial unique index rather than
+-- leaving it as an application-only guarantee -- a future Module 08
+-- slice's own default-strategy creation, a raw service-role script, or a
+-- bug in some other future write path is now structurally prevented
+-- from ever landing a user at two "the" default strategies, not just
+-- conventionally discouraged from it.
+--
+-- Scoped to `state = 'active'` (not a bare `where is_default = true`) so
+-- an archived default strategy (not a flow this module exposes today,
+-- but not forbidden by the schema either) does not permanently block a
+-- replacement default from ever being created -- matches
+-- `fields_unique_active_scoped`'s own "an archived field does not block
+-- a new active field from reusing its name" reasoning, applied to the
+-- same active/archived axis here.
+create unique index strategies_one_default_per_user
+  on retrospeq.strategies (user_id)
+  where is_default = true and state = 'active';
+
+-- NOT VERIFIED beyond direct-Postgres application at the time this file
+-- is written -- same standing caveat as every prior migration in this
+-- repo: applied and confirmed via information_schema/pg_indexes probes,
+-- but the full RLS/constraint-adversarial test suite is
+-- retrospeq-tester's job, run separately
+-- (lib/fields/__tests__/strategy-repository.live.test.ts).
