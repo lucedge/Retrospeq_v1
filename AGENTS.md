@@ -231,6 +231,55 @@ updates the ledger). The orchestrator is the one invoked by the local
 progress in person, see PROGRESS.md "Autonomous continuation —
 cost/cadence policy") after a context reset or usage-limit restart.
 
+## Ledger currency — a review gate isn't done until it's written down
+
+Added 2026-09-08 after this exact gap recurred **five times** across
+Module 04/08/03 slices (10f, 08b, 03a, 03b, 03c) despite a session-
+internal "please remember to update the ledger" convention that kept
+failing anyway — the fifth occurrence was the threshold a prior
+PROGRESS.md note itself set for promoting this from a convention to a
+real rule here. The pattern every time: a `retrospeq-tester`/
+`retrospeq-security-reviewer`/`retrospeq-qa` dispatch found something
+real, passed or failed correctly, reported back in the conversation —
+and then a context reset or usage-limit crash hit before that finding
+got written into `PROGRESS.md`, leaving the ledger claiming a gate was
+"still pending" when it had actually already run and passed (or, worse,
+silently dropping a real fail). A reader restarting cold from
+`PROGRESS.md` alone — the only continuity mechanism this build has —
+would get the wrong answer every time this happened.
+
+**Root cause**: writing the ledger was always an implicit expectation of
+whichever session *received* a review's findings, never an explicit,
+checkable deliverable of the review dispatch itself. That's fragile
+across a build that gets interrupted mid-conversation as routinely as
+this one does.
+
+**The rule, not just a convention**: a `retrospeq-tester`/
+`retrospeq-security-reviewer`/`retrospeq-qa` dispatch is not complete
+until it has written its own dated entry into `PROGRESS.md`'s Decision
+log — a real PASS/FAIL record with enough detail to stand on its own,
+not a placeholder — as part of finishing its own work, not left for the
+orchestrating session to transcribe later from a chat summary. This
+applies whether the agent is run by the interactive orchestrator, the
+local `/loop`, or a scheduled routine. The dispatching session still
+also updates `PROGRESS.md`'s "Current task"/phase-status sections
+afterward (that synthesis is the orchestrator's own job, not
+mechanically transcribable by the review agent, which doesn't have the
+cross-slice context to know where its finding fits in the larger
+narrative) — but the raw, dated, findable record of what a gate found
+must exist the moment the gate finishes, regardless of what happens to
+the session immediately after.
+
+**Symmetric habit on the other side of the handoff**: whatever runs
+next after a gate passes — the next dispatch in the coder → tester →
+security-reviewer → qa chain, or the orchestrator's own next action —
+does a quick "does PROGRESS.md's own status line match what I was just
+told happened" check before proceeding. This is the same reflexive
+check `retrospeq-qa` already does at the end of a slice, just applied at
+every handoff point instead of only the final one — it's what caught
+all five prior occurrences and is what caught the one this note itself
+responds to.
+
 ## UI self-verification (no interactive browser tool available)
 
 Agents in this environment have Bash but no interactive browser

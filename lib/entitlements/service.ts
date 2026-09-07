@@ -3,6 +3,7 @@ import { can, type CanDeps } from './can';
 import { countActiveTradingAccounts } from './account-usage';
 import { countActiveHardRules, countActiveRules } from './rules-usage';
 import { countActiveStrategies } from './strategy-usage';
+import { countActiveCustomFields } from './fields-usage';
 import { getUserPlan } from './subscription-repository';
 import type { Capability, EntitlementResult } from './types';
 
@@ -36,6 +37,12 @@ export const defaultCanDeps: CanDeps = {
     // excluded from this count, and docs/adr/0018 for why
     // `strategy.create` also gates strategy EDIT, not just creation.
     'strategy.create': countActiveStrategies,
+    // Module 03 (Field Registry & Strategy) Slice 03c — see
+    // fields-usage.ts's own header for why derived fields are excluded
+    // from this count, and docs/adr/0019 for why field CREATION is gated
+    // by this already-existing capability rather than inventing a new one
+    // or gating transitively via `strategy.create`.
+    'fields.custom': countActiveCustomFields,
   },
 };
 
