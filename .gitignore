@@ -66,3 +66,10 @@ next-env.d.ts
 # repeatable, it belongs in a real test file under a __tests__/ dir, not
 # here.
 /tmp/
+
+# Defense-in-depth only: lib/analytics/__tests__/eslint-boundary.test.ts
+# creates and deletes this directory entirely within a single test run
+# (a throwaway ESLint fixture proving the Module 04/05 import boundary,
+# docs/adr/0021, actually fires) — it should never survive a normal run,
+# this entry only guards against a crash mid-test leaving it behind.
+/lib/analytics/__eslint_boundary_fixture__/

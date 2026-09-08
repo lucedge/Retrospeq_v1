@@ -1176,3 +1176,91 @@ here is a code deploy bug, not a runtime data issue, and should be fixed
 by correcting `seed_derived_fields_for_user` in a new forward-only
 migration, never by hand-patching the live function without a matching
 migration file).
+
+## `analytic_config` unreadable — every analytic renders nothing, product-wide
+
+**Source:** Module 05 (Analytics & Findings) §9 — `ANALYTIC_CONFIG_UNAVAILABLE`
+row, verbatim: "Config unreadable → Render nothing. Never a default-on."
+§4.8: "Config is cached 60 s. If config cannot be read, nothing renders."
+Owning code: `lib/analytics/registry-runtime.ts`'s `canRenderPure`
+(the pure formula) and `lib/analytics/registry-runtime-service.ts`'s
+`canRender` (the orchestration layer that actually reads
+`retrospeq.analytic_config` and converts a read failure into this state) —
+Slice 05a, 2026-09-08.
+
+**What this means operationally:** this is the single most severe failure
+mode this slice introduces, precisely because it is invisible in the
+worst way — not an error banner, not a 500, just an EMPTY product. If
+`retrospeq.analytic_config` becomes unreadable (a Postgres outage, a
+connection-pool exhaustion under `withUserConnection`, a bad migration
+that breaks the table's own shape), `canRender` returns `{ canRender:
+false, reason: 'config_unavailable' }` for every analytic, every user,
+every surface, all at once — the entire analytics product (whatever is
+built on top of it: strategy-screen findings, weekly-review detections,
+the dashboard's derived findings) goes silently dark simultaneously.
+This is DELIBERATE and CORRECT per §9's own framing ("Silence over
+wrongness, always") — the alternative (guessing `enabled = true` when the
+config can't actually be confirmed) is strictly worse — but "correct" and
+"invisible" together mean this specific failure mode needs an explicit
+watch, not just trust that "no errors in the logs" means nothing is
+wrong.
+
+**A genuinely broader fail-closed net than the literal spec text:**
+`registry-runtime-service.ts`'s own `canRender` treats ANY of its four
+downstream reads throwing (`getAnalyticConfig`, `getUserPlan`,
+`isUserInCohort`, `isSuppressed`, `getAccountSyncTiers`) — not only the
+config read itself — as `reason: 'config_unavailable'`. A real incident
+in, say, `retrospeq.trading_accounts` connectivity would present
+identically to an `analytic_config` outage from this function's own
+external behaviour. Distinguishing "which read actually failed" requires
+looking past `canRender`'s own return value into application logs (each
+repository function lets its own thrown error propagate with its
+original message before this layer catches and converts it) — the
+`reason` field alone only tells you "something upstream of the render
+decision failed," not which read.
+
+**How to check:** every `canRender` call that resolves to
+`reason: 'config_unavailable'` is, by construction, the ONLY case this
+formula ever swallows an exception for (every other `false` reason
+— `disabled`/`plan`/`cohort`/`suppressed`/`tier`/`not_configured` — is a
+real, successfully-read, negative decision, not a failure). A spike in
+`config_unavailable` outcomes across many distinct users/analytics in a
+short window is the operational signal — this repo has no metrics/alerting
+infra wired yet (PROGRESS.md "Infra gaps"), so today this is only
+checkable via a live Postgres connectivity probe or by instrumenting a
+future caller of `canRender` to log the `reason` field. A live
+`select 1 from retrospeq.analytic_config limit 1` against
+`SUPABASE_DB_URL` (same connection every repository function already
+uses) is the fastest direct health check.
+
+**Correction (2026-09-08, QA gate pass):** this entry originally said
+`canRender` reads `analytic_config` fresh on every call with "nothing ...
+cached across requests." That was accurate when this entry was first
+written but went stale the same day: a same-day coder follow-up dispatch
+(found missing by an independent tester dispatch, PROGRESS.md's
+2026-09-08 decision log) added the real 60-second in-process cache §4.8
+always described (`lib/analytics/config-cache.ts`, wired into
+`config-repository.ts`'s `getAnalyticConfig`). Read the code, not this
+paragraph's own prior claim, before relying on it.
+
+**Action:** a genuine read FAILURE is, by construction, never memoized
+(`setCachedAnalyticConfig` returns immediately on an `'unavailable'`
+status without touching the cache — see that function's own header) —
+so the self-healing property this paragraph originally described still
+holds for a transient blip: the very next call re-reads Postgres fresh,
+it does not wait out a stale cached failure. What the cache DOES now
+introduce: a genuinely SUCCESSFUL read (`enabled`/`min_plan`/etc.
+actually changed via an ops write) can take up to 60 seconds to reach a
+given server process, matching §4.8's own accepted staleness window —
+this is intended latency on a real config change, not a symptom to
+chase. Escalate `config_unavailable` spikes as before: many
+users/analytics simultaneously (a genuine Postgres/RLS/connectivity
+incident on the shared dev project, or in production once one exists —
+investigate the same way any other `withUserConnection`-based read
+failure would be investigated) or persistence across repeated calls for
+the same user (worth checking directly whether `retrospeq.analytic_config`
+itself is reachable and RLS-readable, per the live check above, before
+assuming the problem is elsewhere). If a kill switch flip (`enabled =
+false`) does not appear to take effect for up to 60 seconds after being
+applied, that is the cache working as designed, not a bug — re-check
+after the TTL window before escalating.

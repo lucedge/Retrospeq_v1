@@ -262,13 +262,37 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // this list. Added to this allowlist in the same commit that introduces
   // the call, per the entries directly above's own cautionary note.
   'lib/rules/rules-repository.ts',
+  // Module 05 (Analytics & Findings) Slice 05a (§4.8's own closing line:
+  // "Every successful render writes an analytic_renders row"):
+  // `analytic_renders` is materialised, owner-SELECT-only, no client
+  // INSERT policy at all — the same shape class as `adherence_weekly`/
+  // `operand_distributions`/`unlock_state` above. `recordAnalyticRender`
+  // is called by a future analytic renderer AFTER `canRender()` (which
+  // itself reads under `withUserConnection`, genuine session-scoped RLS —
+  // deliberately NOT on this list) returns true; every query is
+  // explicitly scoped to the caller-supplied `userId`, same posture as
+  // every other entry in this list. Added to this allowlist in the same
+  // commit that introduces the call, per the entries directly above's own
+  // cautionary note.
+  'lib/analytics/render-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
     const full = join(dir, entry);
-    const stat = statSync(full);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch (err) {
+      // Same TOCTOU race `findFilesContaining`'s own `readFileSync` guards
+      // against, one step earlier: `readdirSync` already returned this
+      // entry, but another concurrently-running test's own throwaway
+      // fixture file/directory could be deleted in the window before
+      // `statSync` runs. Skip it -- a vanished entry has nothing to scan.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
     if (stat.isDirectory()) {
       walk(full, out);
     } else if (SCAN_EXTENSIONS.has(entry.slice(entry.lastIndexOf('.')))) {
@@ -284,7 +308,28 @@ function findFilesContaining(needle: string): Set<string> {
   const matches = new Set<string>();
   for (const file of allFiles) {
     if (file.replace(/\\/g, '/') === THIS_FILE) continue;
-    const text = readFileSync(file, 'utf8');
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch (err) {
+      // TOCTOU race, not a real failure: this repo-wide scan lists every
+      // file first, then reads each one in a separate pass -- if another
+      // vitest test file running CONCURRENTLY (e.g.
+      // lib/analytics/__tests__/eslint-boundary.test.ts, which writes and
+      // deletes real throwaway fixture files under lib/analytics/ at test
+      // runtime, by design) deletes a file in the window between this
+      // scan's `walk()` and this `readFileSync`, the file genuinely no
+      // longer exists by the time we get here. A vanished file trivially
+      // cannot "contain" `needle` for the purposes of this allowlist
+      // check, and a file that only ever existed as another test's
+      // throwaway fixture was never a real service-role call site to
+      // begin with -- skip it rather than fail the whole scan. Any OTHER
+      // read error (permissions, a genuinely corrupt file) still
+      // propagates -- this only swallows the specific "file no longer
+      // exists" case.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
     if (text.includes(needle)) {
       matches.add(relative(REPO_ROOT, file).replace(/\\/g, '/'));
     }
