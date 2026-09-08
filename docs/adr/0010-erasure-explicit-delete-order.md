@@ -231,3 +231,87 @@ regression test seeding a real `rules` row and a real, genuinely-frozen
 `rule_evaluations` row (via the actual freeze pipeline, not a raw insert)
 before running `executeErasure`, proving both are gone afterward — the
 exact scenario that had been silently broken since 2026-08-23.
+
+## Addendum, 2026-09-09: `retrospeq.trigger_evaluations` — the third table
+## in this same bug class, confirmed SAFE without a `deleteAllXForUser`,
+## unlike the two before it — written down so "verified safe" is
+## distinguishable from "nobody checked"
+
+Module 04's `trigger_evaluations` table
+(`20260909010000_trigger_evaluations_schema.sql`, Module 03 Slice 03f)
+has the identical shape that broke `fields` and `rules`/`rule_evaluations`
+above: a direct `user_id references retrospeq.profiles(id) on delete
+cascade` column, plus a `BEFORE DELETE` trigger
+(`trigger_evaluations_forbid_delete`) that rejects deletion unless
+`retrospeq.erasure_in_progress` is set on the same connection/transaction
+issuing the delete. By this ADR's own "Consequence for future slices"
+warning above, this is exactly the pattern that should trigger a matching
+explicit `deleteAllXForUser` call — and this addendum exists because that
+check was actually done, not skipped: `lib/privacy/erasure.ts`'s
+`executeErasure` does **not** call any `deleteAllTriggerEvaluationsForUser`-
+shaped function, and no such function exists anywhere in this repo. This
+is deliberate, not an oversight, for a reason genuinely different from
+`fields`/`rules`' own fix, confirmed by reading the actual cascade path
+rather than assumed:
+
+`retrospeq.trigger_evaluations.trade_id` references
+`retrospeq.trades(id) on delete cascade`
+(`20260909010000_trigger_evaluations_schema.sql`), and
+`retrospeq.trades.account_id` references
+`retrospeq.trading_accounts(id) on delete cascade`
+(`20260822010000_ingestion_schema.sql`). `executeErasure`'s own step 3b
+already calls `deleteAllTradingAccountsForUser`
+(`lib/broker/accounts-repository.ts`) as part of this ADR's explicit list
+— and that function already sets `retrospeq.erasure_in_progress` LOCAL to
+its own transaction, on this app's own connection, BEFORE issuing
+`delete from retrospeq.trading_accounts where user_id = $1` (added
+2026-08-22, see this ADR's first addendum's own "Infra gaps" cross-
+reference and that function's header comment, originally written to
+satisfy `trades`' own `forbid_broker_confirmed_trade_delete` trigger).
+That one DELETE statement's cascade reaches `trigger_evaluations` two
+levels deep (`trading_accounts` → `trades` → `trigger_evaluations`),
+entirely within the same statement/transaction/connection that already
+has `erasure_in_progress` set — Postgres does not open a new connection or
+transaction for cascade-originated deletes, and a `SET LOCAL`-style GUC
+(`set_config(..., true)`) stays visible for the whole transaction,
+including every cascade step inside it. So by the time
+`trigger_evaluations_forbid_delete` fires for a cascade-originated row
+delete, `current_setting('retrospeq.erasure_in_progress', true) = 'true'`
+already holds, and the escape hatch fires correctly — verified live, not
+just reasoned about (`lib/privacy/__tests__/erasure.trigger-evaluations
+.independent-verify.live.test.ts`: seeds a real trading account, trade,
+strategy, trigger condition, and a real frozen `trigger_evaluations` row
+via the actual freeze pipeline; confirms a direct delete is rejected
+outside erasure; runs a real `requestErasure`/`executeErasure`; confirms
+the `trigger_evaluations` row, the trade, the trigger condition, and the
+profile are all gone afterward, and `auth.admin.deleteUser` succeeds).
+
+This is structurally different from why `fields`/`rules` broke: both of
+those tables are reached ONLY by the final `auth.admin.deleteUser` call's
+own cascade, which runs through GoTrue on a **separate** Postgres
+connection that never has `erasure_in_progress` set (a transaction-local
+GUC set on this app's own connection is invisible to a different
+connection entirely — the exact mechanism the second addendum above
+explains). `trigger_evaluations` never needs to survive that far: it is
+fully deleted, with the escape hatch correctly set, during step 3b's
+`deleteAllTradingAccountsForUser` call — long before `auth.admin
+.deleteUser` ever runs. `trigger_evaluations` also carries its own direct
+`user_id references profiles(id) on delete cascade`, exactly like
+`fields`/`rules` did, but that path is moot: by the time
+`auth.admin.deleteUser` reaches it via that direct FK, the row is already
+gone from the earlier, correctly-escape-hatched cascade.
+
+**Consequence for future slices, stated explicitly (same spirit as the
+first addendum's own warning):** a table reached by a `BEFORE DELETE`
+immutability trigger does NOT automatically need its own
+`deleteAllXForUser` entry in this ADR's list — it needs one only if the
+table is *not already* transitively reached, on this app's own
+connection, with `erasure_in_progress` set, by some call already in
+`executeErasure`'s explicit list. Before adding a new `deleteAllXForUser`
+for a future table in this situation, trace its actual FK chain first
+(as done here) — it may already be safely covered by an existing
+explicit call reaching it via cascade, in which case the correct fix is
+this kind of addendum (documenting why no new function is needed), not a
+new function that would just delete the same rows a second time (a
+harmless no-op, but dead code and a false signal that a gap existed where
+none did).

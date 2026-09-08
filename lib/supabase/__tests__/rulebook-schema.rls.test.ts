@@ -21,10 +21,16 @@ import {
  * (`ingestion-schema.rls.test.ts` is the direct precedent this file
  * follows).
  *
- * `trigger_evaluations` (Module 04 §3.1's own final table) is
- * DELIBERATELY not covered here — it was not created by this slice's
- * migration at all (see that migration's own header: it depends on
- * Module 03's `trigger_conditions`, which does not exist yet).
+ * `trigger_evaluations` (Module 04 §3.1's own final table) was NOT created
+ * by this file's own migration (see that migration's own header: it
+ * depended on Module 03's `trigger_conditions`, which did not exist yet at
+ * the time). It now exists, built by
+ * `20260909010000_trigger_evaluations_schema.sql` — its own RLS shape,
+ * cross-user isolation, and immutability-trigger coverage lives in
+ * `trigger-evaluations-schema.rls.test.ts`, a sibling file, not added here,
+ * to avoid retrofitting this file's own `ALL_TABLES`/`expectedShape`
+ * constants (scoped to exactly the 6 tables THIS migration created) with a
+ * 7th table a later migration added.
  */
 const env = readRlsTestEnv();
 

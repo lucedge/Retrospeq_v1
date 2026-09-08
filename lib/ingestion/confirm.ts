@@ -7,6 +7,7 @@ import {
   type InstrumentBlockState,
 } from './sync';
 import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/rules/freeze-evaluations';
+import { freezeTriggerEvaluationsForTrade } from '@/lib/rules/freeze-trigger-evaluations';
 import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-repository';
 import { recomputeUnlockStateForConfirmations } from '@/lib/onboarding/unlock-state-repository';
 
@@ -477,6 +478,13 @@ export async function confirmDay(
         // exist in this repo.
         const freezeResult = await evaluateAndFreezeTradeRules(client, trade.id, { frozenAt: now });
         ruleEvaluationAnomalies.push(...freezeResult.anomalies);
+        // trade.confirmed -> Module 04 also writes frozen trigger_evaluations
+        // (Module 03 §4.7 / Module 04 §3.1), same transaction, same
+        // frozenAt -- a trade is never confirmed without its trigger
+        // evaluations either. No-ops (0 written) for a trade with no
+        // strategy binding, which is every trade in this repo until Module
+        // 03's own capture-arming UI writes a real strategy_id.
+        await freezeTriggerEvaluationsForTrade(client, trade.id, { frozenAt: now });
       }
     }
 
@@ -659,6 +667,9 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
     for (const tradeId of confirmedIds) {
       const freezeResult = await evaluateAndFreezeTradeRules(client, tradeId, { frozenAt: now });
       ruleEvaluationAnomalies.push(...freezeResult.anomalies);
+      // Same trigger-evaluations freeze as confirmDay's own loop above --
+      // see that call site's comment.
+      await freezeTriggerEvaluationsForTrade(client, tradeId, { frozenAt: now });
     }
 
     // No day_closeouts row, ever -- see header's own dedicated paragraph.

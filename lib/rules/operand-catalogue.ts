@@ -467,7 +467,7 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { is_true: 'Only enter when your trigger checklist is fully met.' },
     computableToday: false,
-    factNote: "Depends on Module 03's trigger_conditions table, which does not exist in this repo yet (this is the same forward dependency the schema migration's header documents for the deferred trigger_evaluations table). Module 04 §1: \"the trigger checklist UI (Module 03 authors it, this module evaluates it).\"",
+    factNote: "UPDATED (Module 03 §4.7 slice, trigger_evaluations now live): Module 03's trigger_conditions table and Module 04's own trigger_evaluations table (20260909010000_trigger_evaluations_schema.sql) both now exist and are frozen at close-out (lib/rules/freeze-trigger-evaluations.ts) -- the forward dependency this note used to describe is closed. Still NOT computableToday, though: nothing in computable-operand-values.ts/cross-trade-operand-values.ts derives this bool from a trade's own trigger_evaluations rows yet (what should 'fully met' mean for a trade with zero applicable conditions -- not_applicable, or vacuously true? -- is a genuine open design question, not decided by this note), so a rule referencing trigger_conditions_met still cannot be authored/evaluated today. Flagged as the natural next follow-up, not attempted in the slice that unblocked it, to avoid deciding that open question implicitly inside an unrelated authoring-pipeline change.",
   },
 
   // ----------------------------------------------------------------

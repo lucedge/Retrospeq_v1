@@ -69,9 +69,16 @@ const STRATEGY_NAME_MAX_LENGTH = 100;
  * that runs regardless of whether the (not-yet-built) authoring UI
  * enforced it client-side.
  */
-const TRIGGER_TEXT_MAX_LENGTH = 120;
+/**
+ * Exported (not just module-local) since Slice 03f's real
+ * `trigger_conditions` authoring pipeline (`lib/fields/trigger-conditions-
+ * repository.ts`) reuses this SAME bound for the SAME reason — one 120-char
+ * limit for trigger-condition text, not two independently-maintained
+ * copies of §5.2's own `maxlength="120"`.
+ */
+export const TRIGGER_TEXT_MAX_LENGTH = 120;
 /** §9: "`TRIGGER_TOO_MANY` | > 5 conditions | Soft warning, not blocking." */
-const TRIGGER_SOFT_WARNING_THRESHOLD = 5;
+export const TRIGGER_SOFT_WARNING_THRESHOLD = 5;
 
 export class StrategyNameInvalidError extends Error {
   readonly code = 'STRATEGY_NAME_INVALID' as const;
