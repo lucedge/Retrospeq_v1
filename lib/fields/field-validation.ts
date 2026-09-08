@@ -250,7 +250,19 @@ function stripPluralToken(token: string): string {
   return token;
 }
 
-function normalizeForMatch(name: string): string {
+/**
+ * Exported (Slice 03e, field PROMOTION, §4.5's own "Offer it proactively
+ * when a second strategy is created with a similarly named field" /
+ * §6.1's own flow diagram) so `fields-repository.ts`'s
+ * `findPromotionCandidates` can answer the SAME "is this basically the
+ * same field" question this file already answers for the pruning rule,
+ * rather than inventing a second, divergent similarity heuristic — this
+ * slice's own dispatch instruction, verbatim: "consistency matters here
+ * since both are answering a 'is this basically the same field' question."
+ * Was previously module-private; behaviour is completely unchanged by
+ * exporting it, only its visibility.
+ */
+export function normalizeForMatch(name: string): string {
   const tokens = normalizeFieldName(name).split(' ').filter(Boolean);
   const withoutStopwords = tokens.filter((t) => !FIELD_NAME_MATCH_STOPWORDS.has(t));
   // Guard: if every token WAS a stopword (e.g. the literal input "of"),

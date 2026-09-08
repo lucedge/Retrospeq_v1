@@ -3,6 +3,7 @@ import {
   checkPruningRule,
   FieldConfigInvalidError,
   FieldDuplicatesDerivedError,
+  normalizeForMatch,
   validateFieldConfig,
 } from '../field-validation';
 
@@ -169,5 +170,46 @@ describe('validateFieldConfig — §4.3', () => {
       expect(() => validateFieldConfig('rating', { min: 5, max: 1 })).toThrow(FieldConfigInvalidError);
       expect(() => validateFieldConfig('rating', { min: 3, max: 3 })).toThrow(FieldConfigInvalidError);
     });
+  });
+});
+
+/**
+ * Module 03 Slice 03e (field PROMOTION) — pure, DB-free unit coverage for
+ * `normalizeForMatch`'s general PAIRWISE similarity behaviour (as opposed
+ * to `checkPruningRule`'s own tests above, which only exercise it against
+ * the fixed 9-entry derived-field catalogue). `fields-repository.ts`'s
+ * `findPromotionCandidates` (§4.5's own "offer promotion... when a second
+ * strategy wants a similarly named var") reuses this SAME function to
+ * decide whether an existing `strategy_var` field's name is "similarly
+ * named" to a field being proposed for a different strategy — these tests
+ * are the pure, DB-free half of that decision's own test coverage (the
+ * other half — real rows, real cross-strategy scoping — lives in
+ * `fields-repository.promotion.live.test.ts`, since `findPromotionCandidates`
+ * itself always needs a real DB connection to run at all, matching every
+ * other function in `fields-repository.ts` — this file has no pure/DB-free
+ * repository-level tests anywhere, by established precedent, only
+ * validation-layer ones like this).
+ */
+describe('normalizeForMatch — general pairwise similarity (Slice 03e)', () => {
+  it('treats an exact match, case/whitespace/punctuation variance as identical', () => {
+    expect(normalizeForMatch('Conviction')).toBe(normalizeForMatch('conviction'));
+    expect(normalizeForMatch('Conviction')).toBe(normalizeForMatch('  CONVICTION!  '));
+  });
+
+  it('treats a plain plural as identical to its singular (conservative plural-strip)', () => {
+    expect(normalizeForMatch('PD array')).toBe(normalizeForMatch('PD arrays'));
+  });
+
+  it('treats a word-order swap as identical once stopwords are stripped', () => {
+    expect(normalizeForMatch('Setup quality')).toBe(normalizeForMatch('Quality of setup'));
+  });
+
+  it('does NOT treat unrelated names as identical', () => {
+    expect(normalizeForMatch('Conviction')).not.toBe(normalizeForMatch('Timeframe'));
+    expect(normalizeForMatch('PD array')).not.toBe(normalizeForMatch('Liquidity sweep'));
+  });
+
+  it('does NOT treat a genuine word-insertion/synonym as identical (documented out-of-scope gap, same as checkPruningRule\'s own)', () => {
+    expect(normalizeForMatch('Trade length')).not.toBe(normalizeForMatch('Trade duration'));
   });
 });

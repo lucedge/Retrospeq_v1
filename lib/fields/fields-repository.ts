@@ -1,7 +1,7 @@
 import 'server-only';
 import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import { canForUser } from '@/lib/entitlements/service';
-import { checkPruningRule, validateFieldConfig, type ProposedFieldConfig } from './field-validation';
+import { checkPruningRule, normalizeForMatch, validateFieldConfig, type ProposedFieldConfig } from './field-validation';
 import { StrategyNotFoundError } from './strategy-repository';
 import type { FieldDataType } from './strategy-validation';
 
@@ -527,7 +527,20 @@ export class FieldDerivedImmutableError extends Error {
   readonly code = 'FIELD_DERIVED_IMMUTABLE' as const;
   constructor(
     readonly fieldId: string,
-    readonly attemptedOperation: 'renamed' | 'archived',
+    // 'promoted' added in Slice 03e -- promoting a field is, at the DB
+    // layer, an UPDATE of `kind`/`owner_strategy_id` on the exact same
+    // `retrospeq.fields` row `renameField`/`archiveField` already guard --
+    // `fields_forbid_derived_update` (20260902010000_field_registry_schema.sql)
+    // rejects EVERY update to a derived row with no narrower allowlist
+    // (confirmed by re-reading its own body again for this slice, same
+    // "safest reading, confirmed against the actual trigger body" posture
+    // `archiveField`'s own header already establishes), so a derived field
+    // is exactly as immutable against promotion as it is against rename/
+    // archive -- reusing this ONE error class for all three, rather than a
+    // fourth near-duplicate class, keeps "a derived field can never be
+    // client-mutated, full stop" a single, honestly-named invariant instead
+    // of three separately-maintained ones that happen to say the same thing.
+    readonly attemptedOperation: 'renamed' | 'archived' | 'promoted',
   ) {
     super(
       `Field ${fieldId} is a derived field (kind = 'derived') and can never be ${attemptedOperation} — Module 03 §3.2: "never editable, never deletable."`,
@@ -574,6 +587,7 @@ export class FieldInUseError extends Error {
 
 interface FieldLifecycleRow {
   id: string;
+  name: string;
   kind: AnyFieldKind;
   state: 'active' | 'archived';
   ownerStrategyId: string | null;
@@ -595,12 +609,19 @@ async function fetchFieldForLifecycleOp(userId: string, fieldId: string): Promis
   return withUserConnection(userId, async (client) => {
     const res = await client.query<{
       id: string;
+      name: string;
       kind: AnyFieldKind;
       state: 'active' | 'archived';
       owner_strategy_id: string | null;
       archived_at: string | null;
     }>(
-      `select id, kind, state, owner_strategy_id, archived_at
+      // `name` added in Slice 03e (promotion) -- `renameField`/`archiveField`
+      // never needed it (they take/produce a name themselves or don't need
+      // one at all), but `promoteField`'s own FieldNameConflictError needs
+      // the CURRENT name of the field being promoted to build its message,
+      // and its idempotent-no-op branch needs it to return a complete
+      // PromotedField without a second round trip.
+      `select id, name, kind, state, owner_strategy_id, archived_at
          from retrospeq.fields
         where user_id = $1 and id = $2`,
       [userId, fieldId],
@@ -609,6 +630,7 @@ async function fetchFieldForLifecycleOp(userId: string, fieldId: string): Promis
     if (!row) return null;
     return {
       id: row.id,
+      name: row.name,
       kind: row.kind,
       state: row.state,
       ownerStrategyId: row.owner_strategy_id,
@@ -1039,3 +1061,422 @@ export async function archiveField(userId: string, fieldId: string): Promise<Arc
 // editor UI (§5.2's own reference markup already shows a `pick_one`/
 // `pick_many` options editor), since option add/remove has no standalone
 // product surface without one.
+
+// =======================================================================
+// Slice 03e — field PROMOTION (§4.5's own "Promote strategy_var -> account"
+// row + §4.5's own prose: "Promotion is what prevents three incomparable
+// 'Conviction' fields. Offer it proactively when a second strategy is
+// created with a similarly named field." / §6.1's own flow diagram).
+// Backend only, per this slice's own dispatch -- no UI (Module 03 has none
+// yet, a known, separately-tracked gap), no trigger-condition authoring
+// (§4.7), no field-cap warning (§4.8).
+// =======================================================================
+
+export interface PromotedField {
+  fieldId: string;
+  name: string;
+  kind: 'account';
+  ownerStrategyId: null;
+}
+
+/**
+ * §4.5's own promotion row, verbatim: "Same field id, all history intact,
+ * `owner_strategy_id` set null, now eligible for global rules." A pure
+ * metadata flip on the SAME `retrospeq.fields` row -- `id`, `data_type`,
+ * `config`, `min_tier`, `created_at`, and every `trade_captures`/
+ * `trade_events.captures` row that already references this field id are
+ * completely untouched (this function never issues a single statement
+ * against either of those two tables) -- ONLY `kind` and `owner_strategy_id`
+ * change. §7.1's own test-plan line, verbatim: "Promotion preserves field id
+ * and all `trade_captures` rows" -- true here structurally, not just by
+ * intent, since nothing in this function's own SQL can touch that table.
+ *
+ * Order of checks, same "cheap/pure before expensive/DB, resolve existence
+ * once" discipline `renameField`/`archiveField` already establish:
+ *
+ *   1. One read (`fetchFieldForLifecycleOp`) resolving "exists and owned by
+ *      this user" (`FieldRecordNotFoundError`, same cross-user-hijack-
+ *      closing posture every other lifecycle op in this file already uses
+ *      -- a field owned by a DIFFERENT user is indistinguishable from a
+ *      genuinely nonexistent one, by design).
+ *   2. `kind = 'derived'` -> `FieldDerivedImmutableError(fieldId, 'promoted')`
+ *      -- REUSED (widened `attemptedOperation` union, see that class's own
+ *      updated header) rather than a fourth near-duplicate error class, per
+ *      this slice's own dispatch instruction's own framing: "a `derived`
+ *      field is never client-mutable at all -- same trigger-enforced
+ *      immutability `renameField`/`archiveField` already respect."
+ *   3. `kind = 'account'` -> IDEMPOTENT no-op, returns the field's current
+ *      state rather than throwing or re-running any check. **THE JUDGMENT
+ *      CALL this slice's own dispatch asked to be made explicit, not
+ *      silently guessed:** promotion has no documented reverse operation
+ *      anywhere in §4.5 (no "demote account -> strategy_var" row exists at
+ *      all -- the lifecycle table's five rows are add/remove/type-change/
+ *      option-add-remove/rename/promote, nothing that moves a field back
+ *      DOWN in scope), so `kind = 'account'` is, like `archiveField`'s own
+ *      `state = 'archived'`, a genuinely TERMINAL state for this axis --
+ *      the dispatch's own framing agrees: "an already-`account` field has
+ *      nothing to promote." A second `promoteField` call against an already
+ *      -promoted field therefore reads as the exact same "harmless double-
+ *      click" `archiveField`'s own header already reasons through for
+ *      re-archiving an archived field, not a meaningful new request that
+ *      ought to fail or re-validate anything -- there is nothing left to
+ *      validate, the field already IS what the caller asked for.
+ *   4. The write itself -- one guarded UPDATE, scoped to
+ *      `kind = 'strategy_var'` in its own WHERE clause (the only kind that
+ *      can reach this line, both other kinds having already returned/thrown
+ *      above), translating a real `(user_id, name, owner_strategy_id)`
+ *      collision against the NOW-unscoped (`owner_strategy_id = null`)
+ *      partial unique index (`fields_unique_active_unscoped`) into
+ *      `FieldNameConflictError` -- REUSED from `createField`/`renameField`,
+ *      per this slice's own dispatch instruction ("reuse the existing error
+ *      class... don't invent a new one") -- never a raw Postgres error. This
+ *      is §7.2's own property-test line, verbatim, made concrete: "No two
+ *      active fields share `(user_id, name, owner_strategy_id)`" -- a
+ *      strategy_var field named "Conviction" being promoted while an
+ *      existing ACCOUNT field is already named "Conviction" is exactly the
+ *      collision that index exists to catch, and this UPDATE would trip it
+ *      exactly the same way an equivalent raw INSERT/UPDATE would.
+ *
+ * **Deliberately does NOT require `state = 'active'`** -- promoting an
+ * ARCHIVED `strategy_var` field is allowed, a genuine judgment call this
+ * slice's own dispatch asked to be reasoned through rather than silently
+ * decided either way. Reasoning, mirroring `renameField`'s own identical
+ * call for its own operation:
+ *
+ *   1. Both partial unique indexes (`fields_unique_active_scoped`/
+ *      `fields_unique_active_unscoped`) are scoped to `state = 'active'`
+ *      only (confirmed directly against
+ *      `20260902010000_field_registry_schema.sql`) -- an ARCHIVED row does
+ *      not participate in either index at all, regardless of what its own
+ *      `kind`/`owner_strategy_id` are, so promoting an archived field can
+ *      structurally never collide with (or be blocked by) an active one.
+ *      There is no invariant this operation could violate by allowing it.
+ *   2. `archiveField` itself only ever archives a field with ZERO live
+ *      `field_usages` dependents (§4.5/§9's own `FIELD_IN_USE` gate) -- an
+ *      archived `strategy_var` field is therefore, by construction, not
+ *      referenced by any live strategy or rule today. Promoting it changes
+ *      nothing observable in the moment (an archived field is not offered
+ *      in any picker, active or otherwise), but it keeps the registry row's
+ *      OWN metadata (`kind`, `owner_strategy_id`) honest for whenever the
+ *      row is later inspected (e.g. a future admin/export view, or if a
+ *      not-yet-built "un-archive" path ever ships) -- the alternative,
+ *      permanently forbidding promotion of an archived field, would leave a
+ *      trader unable to ever correct a mistakenly-`strategy_var`-scoped
+ *      field's kind once they'd archived it, for no invariant-protecting
+ *      reason.
+ *   3. Symmetric with `renameField`'s own established precedent for the
+ *      exact same "is a mutation on an archived field's own metadata safe"
+ *      question -- answering it differently here with no new reason to
+ *      would be an unexplained inconsistency between two structurally
+ *      identical judgment calls in the same file.
+ *
+ * **Also deliberately does NOT gate on any entitlement capability** --
+ * identical reasoning to `renameField`/`archiveField`'s own header: §1,
+ * "the entire strategy module is Pro," is enforced at the point a
+ * `strategy_var` field can come into existence at all (`createField`'s own
+ * `FieldEntitlementLimitError` gate) -- a free-plan user structurally has
+ * zero `strategy_var` fields to promote in the first place (their only
+ * fields are the 9 permanent `drv.*` rows, already blocked by the derived
+ * check above regardless of plan), so a second entitlement check here would
+ * be dead code, never reachable by a real free-plan caller.
+ *
+ * **Does this need the same `pg_advisory_xact_lock` TOCTOU fix
+ * `archiveField` needed? Reasoned through explicitly, not applied
+ * reflexively. THREE race surfaces confirmed in total -- the first two
+ * closed by ordinary Postgres mechanisms already relied on elsewhere in
+ * this file, reasoned through directly below; the third genuinely exists at
+ * the lock level (structurally the SAME gap class `archiveField`'s own
+ * Slice 03d fix closed) but traced through to BENIGN today, not an active
+ * bug -- see that third bullet for the full reasoning and the explicit
+ * doc-vs-lock judgment call made there. (`retrospeq-tester`'s own
+ * independent verification pass, 2026-09-08, confirmed the third race
+ * empirically against a real Postgres instance --
+ * `fields-repository.promotion.independent-verify.live.test.ts`, scenario
+ * 4 -- using the same two-connection, `pg_stat_activity` lock-wait-polling
+ * technique Slice 03d's own `archiveField` fix verification had to switch
+ * to after a fixed-timer first attempt gave a false positive from network
+ * latency masking the race. This header originally enumerated only the
+ * first two surfaces as if that were the complete set -- fixed here to
+ * honestly reflect all three that have now actually been tested.)**
+ *
+ * `archiveField`'s own race existed because its guarded UPDATE's
+ * correctness depended on a `not exists (select ... from field_usages ...)`
+ * subquery reading a DIFFERENT table than the one being updated -- and a
+ * concurrent, still-uncommitted `field_usages` INSERT (which takes a `FOR
+ * KEY SHARE` lock on the referenced `fields` row) does NOT conflict, under
+ * Postgres's own row-lock compatibility matrix, with this kind of UPDATE's
+ * own `FOR NO KEY UPDATE` lock -- so the two sides could genuinely commit
+ * concurrently with neither seeing the other, a real cross-table blind spot
+ * no single-table guard could close without an explicit lock.
+ *
+ *   - **Two concurrent `promoteField` calls against the SAME field id.**
+ *     Both target the exact same row via its own primary key
+ *     (`user_id, id`) in the UPDATE's own WHERE clause -- Postgres's
+ *     ordinary row-level locking already serializes this without any
+ *     advisory lock: whichever transaction's UPDATE statement runs first
+ *     takes the row lock and the second one blocks until the first commits,
+ *     then re-evaluates its own `kind = 'strategy_var'` predicate against
+ *     the now-committed row and correctly finds zero matching rows (the
+ *     first call already flipped `kind` to `'account'`) -- exactly the
+ *     `(res.rowCount ?? 0) !== 1` branch below, which re-derives current
+ *     state rather than assuming success or failure, and correctly resolves
+ *     to the SAME idempotent-no-op result the second caller would have
+ *     gotten had it simply lost a hypothetical lock-based race instead.
+ *   - **A promotion racing a concurrent INSERT/UPDATE that would collide on
+ *     the target `(user_id, name, null)` unique-index slot** (e.g. a
+ *     concurrent `createField` call creating a brand-new `account` field
+ *     with the SAME name this promotion is about to adopt). This is not a
+ *     TOCTOU gap at all -- it is precisely the ordinary case a unique INDEX
+ *     exists to arbitrate: Postgres's own index-insertion machinery
+ *     guarantees that of any two concurrent transactions attempting to
+ *     claim the same unique-index slot, exactly one commits and the other
+ *     receives a real `23505` unique-violation error, deterministically,
+ *     with no possible window where both silently succeed -- this is the
+ *     exact same guarantee `createField`'s own `isUniqueViolation` catch
+ *     already relies on for its own concurrent-insert case, requiring no
+ *     additional lock of its own.
+ *   - **`promoteField` racing a concurrent `rebuildFieldUsagesForStrategy`
+ *     call (`strategy-repository.ts`, run mid-`createStrategy`/
+ *     `editStrategy`) that is mid-flight on the SAME field id.** This IS
+ *     the same lock-class gap `archiveField`'s own Slice 03d fix closed,
+ *     confirmed empirically rather than assumed away: a manually-held,
+ *     UNCOMMITTED `field_usages` INSERT (replaying
+ *     `rebuildFieldUsagesForStrategy`'s own advisory-lock-then-insert
+ *     sequence) does NOT block a concurrent real `promoteField` UPDATE
+ *     (`fields-repository.promotion.independent-verify.live.test.ts`,
+ *     scenario 4) -- the identical non-conflicting `FOR KEY SHARE` (the
+ *     `field_usages` insert's own FK check against `fields`) vs. `FOR NO
+ *     KEY UPDATE` (this UPDATE, touching only non-key `fields` columns)
+ *     lock-mode pair `archiveField`'s own header documents in full.
+ *     `promoteField` takes NO advisory lock of its own, so this race is
+ *     genuinely real at the lock level -- but tracing every interleaving
+ *     shows it is BENIGN today, not an active bug, for two independent
+ *     reasons:
+ *       (a) `promoteField` never reads `field_usages` at all. Its own
+ *           guarded UPDATE (below) touches ONLY `retrospeq.fields`' own
+ *           `kind`/`owner_strategy_id` columns -- nothing about a
+ *           concurrent, in-flight `field_usages` write can make this
+ *           function's own read-then-write decision stale or wrong, since
+ *           that decision never consults `field_usages` in the first place.
+ *       (b) `rebuildFieldUsagesForStrategy`'s own post-lock precondition
+ *           guard (`strategy-repository.ts`) checks ONLY `state` (`active`
+ *           vs. `archived`) before inserting -- never `kind` or
+ *           `owner_strategy_id`, the two columns THIS function actually
+ *           changes. A field mid-promotion (or freshly promoted) is exactly
+ *           as insertable into `field_usages` as one untouched by this
+ *           function at all -- promotion is invisible to that guard by
+ *           construction, not by luck or coincidence.
+ *     Because neither side's own correctness condition depends on the
+ *     other's in-flight state, the two operations can interleave in either
+ *     order with no invariant violated either way: a `field_usages` row
+ *     referencing an already- or concurrently-promoted (`kind = 'account'`)
+ *     field is itself a perfectly legitimate, INTENDED end state (§4.2:
+ *     account fields are usable across every strategy, not only the one
+ *     that originally owned them as a `strategy_var`) -- there is no
+ *     "wrong" outcome for this interleaving to land on, in either order.
+ *
+ *     **JUDGMENT CALL, made explicitly rather than left implicit (this
+ *     slice's own dispatch instruction): DOC-ONLY, not an added
+ *     `pg_advisory_xact_lock(hashtext(fieldId))` here.** Given no current
+ *     invariant is violated, adding the lock now would misstate rather than
+ *     strengthen the actual invariant -- this file's own established
+ *     posture (see the "Concretely" paragraph immediately below) is that an
+ *     advisory lock in this codebase exists specifically to make a guard's
+ *     OWN read of a DIFFERENT table race-safe against that table's
+ *     concurrent write, and `promoteField` performs no such read to
+ *     protect. A lock with no read to guard would read, to a future
+ *     maintainer, as "these two operations must serialize because
+ *     something here depends on it" -- which is false today, and a false
+ *     signal is worse than no signal. The real risk is not today's
+ *     behaviour but this reasoning silently ROTTING: if a future slice ever
+ *     makes `promoteField` start consulting `field_usages` (e.g. a
+ *     promotion-time usage check), or extends
+ *     `rebuildFieldUsagesForStrategy`'s own guard to check `kind`/
+ *     `owner_strategy_id` too, this safety argument stops holding and
+ *     nothing would flag it. Mitigated the cheap way instead of the
+ *     expensive one: a forward-pointer comment left directly on
+ *     `rebuildFieldUsagesForStrategy`'s own state-check guard
+ *     (`strategy-repository.ts`) naming exactly this dependency, so the
+ *     next person to extend either function's precondition trips over the
+ *     assumption instead of having to trust a bare claim three files away.
+ *
+ * Concretely: an advisory lock exists in this codebase specifically to make
+ * a guard's OWN read of a DIFFERENT table race-safe (`archiveField`'s
+ * `field_usages` check; `promoteRuleSeverity`'s own per-user hard-cap count,
+ * `severity-lifecycle-repository.ts`) -- `promoteField` has no such
+ * cross-table read driving its own write decision (see the third bullet
+ * above for the full trace of why that remains true even though the two
+ * operations CAN interleave without blocking each other), so applying one
+ * here would add pure serialization overhead for zero correctness benefit
+ * today, the exact "don't apply reflexively" outcome this slice's own
+ * dispatch asked to be reasoned through rather than assumed.
+ */
+export async function promoteField(userId: string, fieldId: string): Promise<PromotedField> {
+  const current = await fetchFieldForLifecycleOp(userId, fieldId);
+  if (!current) {
+    throw new FieldRecordNotFoundError(fieldId);
+  }
+  if (current.kind === 'derived') {
+    throw new FieldDerivedImmutableError(fieldId, 'promoted');
+  }
+  if (current.kind === 'account') {
+    // Idempotent no-op -- see this function's own header, point 3.
+    return { fieldId, name: current.name, kind: 'account', ownerStrategyId: null };
+  }
+
+  try {
+    return await withUserConnection(userId, async (client) => {
+      const res = await client.query<{ name: string }>(
+        `update retrospeq.fields
+            set kind = 'account', owner_strategy_id = null
+          where user_id = $1 and id = $2 and kind = 'strategy_var'
+          returning name`,
+        [userId, fieldId],
+      );
+      if ((res.rowCount ?? 0) !== 1) {
+        // A concurrent promotion of this SAME field id already completed
+        // between our own read above and this write (see this function's
+        // own header on why this is the ordinary, correctly-serialized
+        // outcome, not a bug to guard against with a lock) -- re-derive
+        // current state rather than assume either success or failure.
+        const fresh = await fetchFieldForLifecycleOp(userId, fieldId);
+        if (fresh && fresh.kind === 'account') {
+          return { fieldId, name: fresh.name, kind: 'account' as const, ownerStrategyId: null };
+        }
+        // Neither "already promoted" nor "still strategy_var" -- the field
+        // itself must have been concurrently archived/deleted out from
+        // under us in a way that also changed its kind, or genuinely no
+        // longer exists (e.g. a concurrent erasure). Structurally rare, but
+        // this file's own established posture (see `renameField`/
+        // `archiveField`'s own identical final branch) is to re-derive an
+        // honest error rather than assume.
+        throw new FieldRecordNotFoundError(fieldId);
+      }
+      return { fieldId, name: res.rows[0].name, kind: 'account' as const, ownerStrategyId: null };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // Post-promotion, this field is unscoped (`owner_strategy_id = null`)
+      // -- `FieldNameConflictError`'s own constructor already renders the
+      // correct ("already exists", not "already exists in this strategy")
+      // message for a null `ownerStrategyId`.
+      throw new FieldNameConflictError(current.name, null);
+    }
+    throw err;
+  }
+}
+
+export interface PromotionCandidate {
+  /** The EXISTING `strategy_var` field this candidate refers to -- the one
+   *  that WOULD be promoted, not anything about to be newly created. */
+  fieldId: string;
+  name: string;
+  /** The strategy that currently owns this candidate field -- always some
+   *  strategy OTHER than the one this search was scoped away from (see
+   *  `excludeStrategyId` below). */
+  ownerStrategyId: string;
+  /** Which of the caller-supplied `proposedFieldNames` (verbatim, as
+   *  supplied -- not normalized) this candidate matched against. Lets a
+   *  future "offer promotion" UI say "you already have a field like THIS
+   *  ONE" against the specific name a trader just typed, rather than a
+   *  generic unattributed list. */
+  matchedProposedName: string;
+}
+
+/**
+ * §4.5's own prose, verbatim: "Promotion is what prevents three
+ * incomparable 'Conviction' fields. Offer it proactively when a second
+ * strategy is created with a similarly named field." / §6.1's own flow
+ * diagram: "second strategy wants a similarly named var -> offer promotion
+ * (same id, history intact)."
+ *
+ * A pure READ -- this function makes no decision and calls no mutation of
+ * its own (never calls `promoteField`), per this slice's own dispatch
+ * instruction: "Keep this helper's scope tight -- it answers 'what should
+ * be suggested,' it does not call `promoteField` itself or make any
+ * decision unilaterally." The actual "offer promotion" PROMPT is a future
+ * UI slice's job (Module 03 has no UI at all yet, a known, separately-
+ * tracked gap) -- this function only supplies the candidate list a future
+ * prompt would render.
+ *
+ * `excludeStrategyId`: the strategy currently being created or edited --
+ * `null` for a brand-new strategy that has no id yet (§4.5's own "second
+ * strategy is created" wording literally describes this case: at the
+ * moment a NEW strategy is being authored, it has no `strategies.id` to
+ * exclude by, so every one of the user's existing `strategy_var` fields is
+ * a fair candidate). When non-null, a `strategy_var` field already owned by
+ * THIS SAME strategy is deliberately excluded -- §4.5's own "OTHER
+ * strategies" framing (this slice's own dispatch, verbatim: "scoped to
+ * OTHER strategies") means a field the trader already added to the very
+ * strategy they're editing is not a duplication problem at all (it's
+ * already the field they meant), and reusing it within the SAME strategy is
+ * additionally something `fields_unique_active_scoped`'s own per-strategy
+ * uniqueness already keeps from ever being TWO separate rows in the first
+ * place.
+ *
+ * `proposedFieldNames`: the name(s) of field(s) the trader is proposing to
+ * add to the strategy identified by `excludeStrategyId` (or to the
+ * brand-new strategy being authored, when `excludeStrategyId` is `null`) --
+ * NOT re-derived from any existing DB state, since at strategy-CREATE time
+ * there is nothing yet to derive them from; the caller (a future strategy-
+ * builder UI/Server Action) supplies them directly, matching how
+ * `createField`'s own caller already supplies a proposed `name` rather than
+ * this repository re-deriving one from elsewhere.
+ *
+ * Matching reuses `field-validation.ts`'s own `normalizeForMatch` --
+ * EXACTLY the same normalization (case-fold, diacritic-fold, punctuation-
+ * collapse, stopword-strip, token-sort, conservative plural-strip) §4.1's
+ * own pruning-rule check already applies when comparing a proposed name
+ * against the derived-field catalogue, per this slice's own dispatch
+ * instruction to reuse it rather than invent a second, divergent
+ * similarity heuristic. Two names are treated as "similarly named" here
+ * if and only if they normalize identically -- this is a real, bounded
+ * heuristic (see `normalizeForMatch`'s own header for its documented
+ * scope/limits), not a semantic-similarity model; the same tradeoffs
+ * `checkPruningRule` already accepts for the same reasons apply here too.
+ *
+ * Only ACTIVE `strategy_var` fields are ever returned as candidates -- an
+ * archived one is not a live duplication risk (nothing offers it in any
+ * picker today), matching this repository's own general "archived rows
+ * don't participate in active-scoped checks" posture (the two partial
+ * unique indexes themselves are scoped identically).
+ */
+export async function findPromotionCandidates(
+  userId: string,
+  excludeStrategyId: string | null,
+  proposedFieldNames: string[],
+): Promise<PromotionCandidate[]> {
+  const normalizedProposed = proposedFieldNames
+    .map((raw) => ({ raw, normalized: normalizeForMatch(raw) }))
+    .filter((entry) => entry.normalized.length > 0);
+  if (normalizedProposed.length === 0) {
+    return [];
+  }
+
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string; name: string; owner_strategy_id: string }>(
+      `select id, name, owner_strategy_id
+         from retrospeq.fields
+        where user_id = $1
+          and kind = 'strategy_var'
+          and state = 'active'
+          and ($2::uuid is null or owner_strategy_id <> $2::uuid)`,
+      [userId, excludeStrategyId],
+    );
+
+    const candidates: PromotionCandidate[] = [];
+    for (const row of res.rows) {
+      const normalizedExisting = normalizeForMatch(row.name);
+      const match = normalizedProposed.find((entry) => entry.normalized === normalizedExisting);
+      if (match) {
+        candidates.push({
+          fieldId: row.id,
+          name: row.name,
+          ownerStrategyId: row.owner_strategy_id,
+          matchedProposedName: match.raw,
+        });
+      }
+    }
+    return candidates;
+  });
+}

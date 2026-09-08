@@ -284,6 +284,24 @@ async function rebuildFieldUsagesForStrategy(
   // that won the lock for this SAME field id in the meantime. `state`
   // (not existence alone) is what matters — a row that still exists but
   // is now archived must be rejected exactly like one that never existed.
+  //
+  // FORWARD POINTER (2026-09-08, `retrospeq-tester`'s independent
+  // verification of `promoteField`, `fields-repository.ts`): this guard
+  // checks `state` ONLY — never `kind`/`owner_strategy_id`. That is exactly
+  // why `promoteField` (which changes `kind`/`owner_strategy_id`, never
+  // `state`) can race this function at the lock level (a still-uncommitted
+  // `field_usages` INSERT here does NOT block a concurrent `promoteField`
+  // UPDATE — same `FOR KEY SHARE`/`FOR NO KEY UPDATE` non-conflict
+  // `archiveField`'s own header documents) with no corruption, today —
+  // `promoteField` never reads `field_usages`, so this guard's blind spot
+  // on `kind`/`owner_strategy_id` is invisible to it by construction. IF
+  // this guard is ever extended to also check `kind`/`owner_strategy_id`
+  // (or `promoteField` is ever changed to read `field_usages`), that
+  // safety argument stops holding — `promoteField` would then need the
+  // same `pg_advisory_xact_lock(hashtext(fieldId))` this function and
+  // `archiveField` already take, acquired before its own guarded UPDATE.
+  // See `promoteField`'s own header (`fields-repository.ts`) for the full
+  // trace this note is a forward pointer for.
   const stateCheck = await client.query<{ id: string; state: 'active' | 'archived' }>(
     `select id, state from retrospeq.fields where user_id = $1 and id = any($2::text[])`,
     [userId, uniqueIds],
