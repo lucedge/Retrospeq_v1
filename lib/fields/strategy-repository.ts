@@ -5,6 +5,7 @@ import { canForUser } from '@/lib/entitlements/service';
 import {
   countCapturedFields,
   evaluateTriggers,
+  FieldNotFoundError,
   validateCaptureMoments,
   validateStrategyName,
   type FieldDataType,
@@ -181,6 +182,79 @@ export async function fetchFieldDefinitionsByIds(
 // §4.6's own literal wording, not a partial UPDATE).
 // ---------------------------------------------------------------------
 
+/**
+ * CONCURRENCY FIX (2026-09-08, closing a REAL gap `retrospeq-tester`'s own
+ * independent verification found and empirically reproduced against the
+ * live DB — `fields-repository.lifecycle.independent-verify.live.test.ts`,
+ * "GENUINE two-connection TOCTOU probe" — see that file's own header and
+ * PROGRESS.md's 2026-09-08 decision-log entry for the full derivation this
+ * comment only summarizes):
+ *
+ * `archiveField`'s own guarded UPDATE (`fields-repository.ts`) was believed
+ * to close the "field archived while a strategy still references it" race
+ * the same way `promoteRuleSeverity`'s guarded UPDATE closes the 6-hard-
+ * rule-cap race (`severity-lifecycle-repository.ts`'s own "CONCURRENCY FIX"
+ * header) — a single guarded UPDATE whose own WHERE clause re-checks the
+ * invariant atomically. It does NOT, because unlike that race (both sides
+ * contend for the SAME row/lock), this race's two sides touch DIFFERENT
+ * tables (`fields` vs `field_usages`) with NO natural lock conflict between
+ * them: `field_usages(user_id, field_id) references fields(user_id, id)`
+ * makes an INSERT here take a `FOR KEY SHARE` tuple lock on the referenced
+ * `fields` row, but `archiveField`'s guarded UPDATE (touching only
+ * `state`/`archived_at`, neither part of the PK) takes a `FOR NO KEY
+ * UPDATE` lock — and Postgres's own row-lock conflict matrix does NOT
+ * consider those two modes to conflict. So a still-UNCOMMITTED insert here
+ * is genuinely invisible to `archiveField`'s own `not exists` subquery
+ * (READ COMMITTED, a fresh snapshot per statement), and both sides can
+ * commit, leaving `fields.state = 'archived'` AND a live `field_usages` row
+ * referencing it at the same time.
+ *
+ * Fixed the same way Slice 7/10b's own genuine cross-table/cross-row races
+ * were fixed: a `pg_advisory_xact_lock` keyed on the FIELD's own id (NOT
+ * the user id, unlike `promoteRuleSeverity`'s user-keyed lock — two
+ * DIFFERENT fields being archived/referenced concurrently share no
+ * invariant and must NOT contend with each other; only two operations
+ * touching the SAME field id need to serialize) — acquired here, and by
+ * `archiveField`'s own guarded-UPDATE transaction, BEFORE either side's
+ * real write. Whichever side acquires a given field's lock first now
+ * genuinely blocks the other until it commits or rolls back; the loser
+ * then re-reads (a fresh READ COMMITTED statement, post-lock-wait) the
+ * now-COMMITTED state left by the winner, instead of racing against an
+ * invisible uncommitted write.
+ *
+ * That serialization alone is not sufficient on its own for THIS
+ * direction, though: if `archiveField` wins the race (archives the field
+ * first), this function must not go on to insert a `field_usages` row for
+ * a field that is now archived — nothing about acquiring-then-losing the
+ * lock prevents that by itself, since this function's OWN fields[] input
+ * was validated `state = 'active'` earlier (`fetchFieldDefinitionsByIds`,
+ * called by `createStrategy`/`editStrategy` before this transaction even
+ * opens) against a snapshot that is, by the time this statement runs,
+ * stale exactly in the race case this lock exists to catch. So every
+ * referenced field's `state` is re-checked HERE, freshly, immediately
+ * after acquiring its lock — `FieldNotFoundError` (reused from
+ * `strategy-validation.ts`; an archived field is, from this function's own
+ * "field usable for capture" point of view, indistinguishable from one
+ * that never existed for this user, matching `fetchFieldDefinitionsByIds`'
+ * own `state = 'active'` filter) aborts the WHOLE surrounding transaction
+ * (`createStrategy`/`editStrategy`'s own `withUserConnection` rolls back
+ * on any throw — the identical mid-transaction-throw pattern
+ * `applyStrategyEditVersion`'s own `StrategyEditConflictError` already
+ * establishes a few lines above this function) rather than silently
+ * committing a `field_usages` row that references an archived field.
+ *
+ * DEADLOCK AVOIDANCE: a single `createStrategy`/`editStrategy` call can
+ * reference MULTIPLE fields at once (`strategy_versions.fields[]`), each
+ * needing its own per-field lock. Acquiring them in the caller-supplied
+ * (effectively arbitrary) array order would let two concurrent calls that
+ * both reference fields X and Y, in opposite orders, deadlock (call A
+ * holds X wants Y, call B holds Y wants X). Avoided the same way any
+ * multi-lock code must: sort the ids into one CONSISTENT order (plain
+ * lexicographic string sort — the ids themselves, not their hashes, so the
+ * order is deterministic and independent of `hashtext`'s own output) and
+ * acquire every lock in that order, every time, regardless of the order
+ * the caller's own `fields[]` array happened to list them in.
+ */
 async function rebuildFieldUsagesForStrategy(
   client: PoolClient,
   userId: string,
@@ -194,6 +268,33 @@ async function rebuildFieldUsagesForStrategy(
   );
   const uniqueIds = Array.from(new Set(fieldIds));
   if (uniqueIds.length === 0) return;
+
+  // Sorted, consistent lock order across EVERY call (this one and any
+  // concurrent one) — see this function's own header ("DEADLOCK
+  // AVOIDANCE") for why caller-supplied order is not safe to use directly.
+  const lockOrderedIds = [...uniqueIds].sort();
+  for (const id of lockOrderedIds) {
+    await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [id]);
+  }
+
+  // Fresh, post-lock-acquisition re-check — closes the race described in
+  // this function's own header: a field that was `state = 'active'` when
+  // `fetchFieldDefinitionsByIds` validated it (before this transaction
+  // opened) may have been archived by a concurrent `archiveField` call
+  // that won the lock for this SAME field id in the meantime. `state`
+  // (not existence alone) is what matters — a row that still exists but
+  // is now archived must be rejected exactly like one that never existed.
+  const stateCheck = await client.query<{ id: string; state: 'active' | 'archived' }>(
+    `select id, state from retrospeq.fields where user_id = $1 and id = any($2::text[])`,
+    [userId, uniqueIds],
+  );
+  const stateById = new Map(stateCheck.rows.map((row) => [row.id, row.state]));
+  for (const id of uniqueIds) {
+    if (stateById.get(id) !== 'active') {
+      throw new FieldNotFoundError(id);
+    }
+  }
+
   await client.query(
     `insert into retrospeq.field_usages (field_id, user_id, used_by, used_by_id)
      select unnest($1::text[]), $2, 'strategy', $3`,

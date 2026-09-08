@@ -25,13 +25,128 @@ authority.
 | 2 | Module 04 (Rulebook & Evaluation) + Module 08 onboarding | **In progress — Module 04's own currently-in-reach scope is fully DONE as of Slice 10f (2026-09-01; only Slice 10c/discovery and strategy-scoped rule stories remain, both correctly blocked on Modules 05/03). Module 08 (onboarding) now starting — see "Current task" for a real blocker analysis found before any Module 08 code was written: large parts of Module 08's own spec depend on Modules 03/05/06/07, none of which exist yet, despite AGENTS.md's build-order pairing framing "Module 04 + Module 08" as one shippable phase.** Slices 1-4 all **DONE**, full coder→tester→security→qa gate sequence passed on every one (Slice 2's security review failed once on 2 real findings, both fixed and re-verified PASS live; every other gate passed clean or with only test-coverage gaps found-and-closed, never a rubber stamp). Slice 1: schema + operand catalogue + pure evaluator. Slice 2: authoring pipeline (rule CRUD, versioning, tighten-only/satisfiability/tier/entitlement validation). Slice 3: preview engine (§5.8) + `operand_distributions`, scoped to the 8 `computableToday: true` operands. Slice 4: cross-trade `TradeFacts` assembly (§5.3/§5.4/§5.6), 20 of the remaining 30 operands built via cross-trade SQL (10 genuinely deferred — missing infra/data/other-module dependencies, each with a documented reason), establishes the repo's first week-boundary convention (ISO week, Monday start, `docs/adr/0015-iso-week-boundary-monday-start.md`) that Slice 6's `adherence_weekly` and Module 07's streaks must match exactly. Slice 4 explicitly does NOT write to `rule_evaluations` and does NOT touch `lib/ingestion/confirm.ts` — pure read-only query assembly; wiring into the freeze transaction is Slice 5. `lib/rules/` coverage 95-100% across all new files. Full decision-log entries below have every gate's findings in detail. **Slice 5 (freeze-wiring) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed (QA failed once on a missing ADR + a ledger-update-ordering gap, both real and both closed — see decision log). `rule_evaluations` rows now actually get written and frozen at close-out, from BOTH `confirmDay` and `autoConfirmStaleTrades`, inside their existing transactions. 40 tests (9 mocked-orchestration unit, 12 coder live-DB integration, plus 5 more coder confirm.ts-side live tests and 5 independently-authored tester adversarial live tests not overlapping the coder's fixtures) all green, independently re-run and coverage-measured (98.5% on `freeze-evaluations.ts`, 100% on `confirm.ts`) — proving forward-only application, exact-instant version-boundary resolution, frozen-immutability-after-edit-and-promotion (edit, promotion, and a direct raw-SQL bypass attempt all independently re-verified rejected), session-rule attachment (self-inclusive `trades_today`, independently confirmed correct from the raw SQL, not just trusted), idempotent double-invocation safety (directly proven, not just reasoned about), and the `RuleEvaluationError`-during-freeze anomaly path (two independent malformed-rule scenarios, logged loudly via `docs/runbook.md`'s new entry, never blocks confirmation). `npm run build`/`tsc`/`eslint` all clean, independently re-run. **Slice 6 (`adherence_weekly` materialization) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/adherence-repository.ts` reads frozen `rule_evaluations` only, computes the two-fraction adherence report (hard/soft, never blended) + HARD-PRIORITY `top_break_rule_id` (a hard breach always wins the naming slot over any number of soft breaches, falling back to soft-only when zero hard breaks occurred — QA's first pass FAILED on the original combined-pool implementation as a real `retrospeq-design-decisions.md` §6 violation, fixed and re-verified PASS), wired into `confirm.ts` as a best-effort post-commit recompute (mirrors `operand_distributions`'s established pattern, proven live to never corrupt/half-write a row even under a forced write failure). Tester found zero production bugs, closed real test gaps (a genuine live write-failure-injection test, a hard/soft-outnumbered disambiguating fixture). Security-reviewer PASS (7/7 — confirmed the recompute is strictly post-commit and can't affect the freeze transaction, confirmed the upsert is one atomic statement, confirmed RLS/isolation/no injection). 37 tests green (33 unit/live + 4 live-DB), 100% coverage on `adherence-repository.ts`. **Slice 7 (severity lifecycle, §5.7) DONE (2026-08-25)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/promotion-eligibility.ts` (read-only soft→hard eligibility check: 6wk-active/≥20-evals/≥95%-compliance read as ALL-TIME, "zero breaks in the last 3 weeks" as a rolling 21-day window — documented reasoning, independently re-derived and concurred by the tester) + `lib/rules/severity-lifecycle-repository.ts` (promote/demote/retire, atomic guarded UPDATEs; hard cap enforced inside the UPDATE's own WHERE clause) + `app/(app)/rules/actions.ts`'s `promoteRule`/`demoteRule`/`retireRule`. **Tester found a real, reproducible production bug**: two concurrent promotions of different soft rules could both succeed and exceed the 6-hard-rule cap (the correlated-subquery guard only locked the row it wrote, not the rows it counted) — proven via a genuine two-connection test, not timing luck. **Fixed** with `pg_advisory_xact_lock(hashtext(user_id))` as the first statement in the transaction; `demoteRuleSeverity`/`retireRuleState` confirmed not to need it (single-row updates, already safe). Security-reviewer PASS (9/9, independently re-ran the fix 3x plus their own adversarial 3-way race scenario — invariant held). QA's first pass failed only on a ledger-currency gap (the security PASS hadn't been logged yet), re-verified PASS on all code-level checks. Free-tier `rules.hard: 0` blocks promotion entirely; retirement is one-way (no reactivate path anywhere, verified); severity never retroactively touches frozen `rule_evaluations`. 95 tests total (90 coder + 5 tester), coverage 93.8%/100%. Out of scope: `rule_overrides`/ambient strip (§5.9, Slice 8), UI (§6, Slice 9). **Slice 8 (ambient live-state engine + `rule_overrides`, §5.9) DONE (2026-08-27)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/ambient-state.ts`'s `getAmbientAccountState` (read-only, reuses Slice 4's cross-trade fetch/compute functions via a structurally-impossible-to-collide `NO_REFERENCE_TRADE_ID` sentinel and the real `evaluate()`, always returns a fully-defined `facts`/`rules` shape — the "always visible, never appear-on-threshold" guarantee independently re-verified against fresh fixtures by BOTH tester and QA) + `lib/rules/rule-overrides-repository.ts` (`fetchRuleForOverride`/`insertRuleOverride` with an adversarial-verified trade-ownership re-check/`fetchOverrideOutcomeSummary` with an independently-reconfirmed DISTINCT-trade dedup) + `recordOverride` Server Action (`ruleVersion` structurally un-influenceable by the client). Security-reviewer PASS (10/10 — confirmed the cross-user `trade_id` ownership check is the sole real defense beyond RLS since `rule_overrides`' own RLS never constrains the FK target's ownership, confirmed non-racy same-transaction check-then-insert, confirmed no injection surface; one non-blocking future-hardening note on `observed`'s lack of an explicit size cap, mitigated today by Next.js's framework body-size limit + rate limiting). QA PASS (8/8 — re-derived the "always visible" guarantee adversarially a third time, confirmed the tint vocabulary never leaks a color mapping, confirmed §5.9's worked-example fields are all present, confirmed no punitive language in error strings; two non-blocking documentation notes: this ledger entry itself, and an optional `docs/runbook.md` addition for the uncaught-`RuleEvaluationError` live-read variant, distinct from the freeze-time caught-and-logged one). 109 tests (99 mocked + 10 live), 100% line/function coverage, 94.28%/100% branch. See the 2026-08-27 decision-log entries for the full independent-verification write-ups. **Slice 9 (`operand_distributions` extended to `daily_loss_pct`/`consecutive_losses`, closing the gap §5.10's guided front door needs) DONE (2026-08-29)** — full coder → tester → security-reviewer → qa gate sequence passed. `lib/rules/distributions-repository.ts` wires Slice 4's already-built cross-trade pure functions (`computeDayWeekPnl`/`computeConsecutiveLosses`) into Slice 3's distribution-bucketing pipeline via two new batched fetch functions (`fetchAccountHistoryForCrossTradeOperands` — one query for every distinct account via a `row_number()`-partitioned window function; `fetchAccountStartingEquities`), keeping net query count flat (+2) regardless of window size/account count; exports `DISTRIBUTION_OPERAND_IDS` (the 8 original + these 2). **Independent tester verification found a real production bug the coder's own pass missed**: the coder's "`preview.ts` needed ZERO changes" claim was wrong — `preview.ts` still gated on the stale `operand.computableToday` flag (never updated when cross-trade computation was added for these two operands), so `preview('daily_loss_pct', ...)`/`preview('consecutive_losses', ...)` always returned `operand_not_computable` regardless of real data, silently defeating this slice's entire stated purpose. Caught via a live-DB `it.fails` test (`distributions-repository.independent-verify.live.test.ts`) that encoded the desired behaviour and failed exactly as designed against real seeded data, plus 13 fresh pure-function tests (`distributions-repository.independent-verify.test.ts`: point-in-time correctness, 3-account isolation, decimal-precision-through-the-real-pipeline, batching/N+1 proof) — both written with fresh fixtures, not the coder's own. **Fixed**: `preview.ts`'s gate swapped to `DISTRIBUTION_OPERAND_IDS.includes(operandId)` (the precise, single-purpose set), `operand-catalogue.ts`'s `computableToday` deliberately left untouched (different consumer, out of scope), the `it.fails` converted to a normal passing `it()` once confirmed live. Security-reviewer PASS (5/5 — no import cycle, `getOperand` validation still runs before the new gate check so no injection surface, user-scoped RLS via `withUserConnection` unchanged, read-only/no `rule_evaluations` touch, no compound-rule/XP introduction; independently re-ran `preview.test.ts`+`preview.property.test.ts`, 24/24). QA PASS (9/9 — all non-negotiables held, `insufficient_history`/`operand_not_computable` distinction still coherent post-fix, no UI surface so no screenshot check needed, analytics/rules import boundary clean, runbook accuracy verified against actual code; one procedural-only finding — this ledger itself still claimed coder-pass-only and "zero changes," fixed in this entry). Full suite re-run clean after the fix: 101 files, 1400 passed, 8 skipped, 0 failed; `tsc --noEmit` and `eslint .` both clean (19 pre-existing unrelated warnings only). No migration, no ADR (filling an already-scoped Slice 3/4 deferral; the preview.ts fix is a bug fix restoring intended behavior, not a new deviation). **Slice 10a (§5.10 / story 1.4's guided three-rule front door) DONE (2026-08-29)** — full coder → tester → security-reviewer → qa gate sequence passed (tester independent verification: PASS, no real bug found — see "Current task" above for the full 9-point write-up; security-reviewer: PASS 7/7; qa: PASS 9/10 clean plus one real `.rq-num` gap found and closed, re-verified after the fix). Slice 10 (the whole §6 UI) is being built as several sub-slices per AGENTS.md's own slicing guidance ("a whole module is not" one dispatch) — this is 10a, the guided front door ONLY; the general rule editor (story 1.1), discovery (story 1.3), the ambient strip (§5.9 UI), and adherence display (§5.6 UI) remain future sub-slices, unchanged in scope. Built: `lib/rules/guided-front-door.ts`'s `seedGuidedRuleThresholds` (read-only; per-operand threshold seeding + `alreadyGoverned` detection reusing `fetchActiveGlobalRuleVersionsForOperand`), `app/(app)/rules/start/page.tsx` (Server Component) + `GuidedFrontDoor.tsx` (Client Component, per-card stepper/live-preview/inclusion-toggle state, sequential `createRule` submission). **Route choice**: a dedicated `/rules/start`, not `/rules/page.tsx` doubling as empty-state — keeps this sub-slice from having to anticipate the shape of the future full rulebook list (documented in the page's own header comment). **Threshold-seeding approach**: with real history (n >= `MIN_TRADES_FOR_PREVIEW`, reused from `preview.ts`, now exported alongside a new `percentileFromBuckets` generalizing the existing `weightedMedian` — p50 is now literally `percentileFromBuckets(_, 0.5)`, one implementation not two), seed at the 80th percentile of the trader's own history (direction-aware: the stricter-tighter side gets the mirrored 20th percentile) — chosen because it lands inside `preview.ts`'s own already-established "healthy" ratio band (0.06–0.35) rather than the raw median, which would flag ~half the trader's own history on a rule they never authored. Without enough history, falls back honestly to the operand's own catalogue bounds midpoint (never a fabricated "typical" number). Design-system compliance verified via a real screenshot self-check (`tmp/dev-screenshots/guided-front-door-*.png`, throwaway) AND a real E2E run: zero primary `.rq-btn` on the choosing screen (only a genuine `.rq-btn--equal` "Add"/"Skip" pair — the ethics no-implied-recommendation rule applied to accept-vs-decline, not just the grouping-chip precedent it was written for), one primary `.rq-btn` on the done state only (no longer a live decision), `.rq-num` on every numeric readout, `.rq-step`/`.rq-step__btn` steppers (no native range slider — that primitive doesn't exist in the shipped design system, documented in the component's own header), a loading skeleton genuinely distinct from the real `insufficient_history` copy. New tests: 5 mocked unit tests (`guided-front-door.test.ts`, SQL-text-dispatched mocks since `Promise.all` gives no query-order guarantee), 2 live-DB tests (`guided-front-door.live.test.ts`, real `recomputeOperandDistributionsForUser` pipeline + a real `insertRuleAndVersion` row for the `alreadyGoverned` case), 4 new `preview.ts` unit tests for the `percentileFromBuckets` refactor, and a 3-test Playwright E2E file (`e2e/rules-guided-front-door.spec.ts`: core flow incl. live preview + real DB write, decline-entirely, and the failure path — a trader already at the free-tier `rules.create` cap of 3 sees an honest message with the add action genuinely disabled, while "Skip for now" still works). One test-authoring bug caught and fixed by the coder's own re-verification pass (not shipped): an unscoped `getByText('Starts soft')` E2E assertion false-matched the screen's own intro copy ("...every one starts soft...") — fixed to scope to the `.rq-tag--muted` chip elements, confirmed by inspecting the actual matched DOM nodes rather than assuming. Full suite (131 files) green except one pre-existing, unrelated flaky live-DB timeout (`trades-freeze-trigger.live.test.ts`, confirmed to pass cleanly in isolation, a DB-connection-contention artifact of running 1598 tests in one pass, not a regression). `npm run build`/`tsc --noEmit`/`eslint .` all clean. No migration (no schema change), no ADR (a UI route/interaction-pattern choice, not a 00-foundation convention deviation), no new `docs/runbook.md` entry (no new alerting condition — this screen only orchestrates the already-runbooked `createRule`/`previewRule`). **Slice 10b (general rule editor, CREATE flow only, story 1.1 / §6.1's `.rule-editor` reference markup) DONE (2026-08-31)** — full coder → tester → coder-fix → security-reviewer → qa gate sequence passed. `app/(app)/rules/new/page.tsx` + `RuleEditor.tsx` + `lib/rules/editable-operands.ts` (`getEditableOperands`: number/duration/bool operand types only, single-authorable-operator only, tier-gated via the same `hasSufficientTierAccount` `createRule` itself uses — the picker can never offer what the server would reject). Global-scope-only (Module 03/strategies doesn't exist yet); tighten-only rejection alert correctly omitted (`checkTightenOnly` only ever runs for `scope: 'strategy'`, confirmed unreachable here, not built as dead UI); `RULE_UNSATISFIABLE` genuinely reachable and handled (proven live with a real seeded conflicting global rule). **Independent tester verification found a REAL, REPRODUCIBLE PRODUCTION BUG**: a cross-tab/concurrent double-submit on `createRule` let a free-tier trader exceed the documented 3-rule cap (4 active rules landed against a cap of 3, reproduced 3/3 runs) — a pre-existing gap in `createRule`'s entitlement pre-check and `insertRuleAndVersion`'s write being two separate unguarded round trips, the same TOCTOU class Slice 7 already found and fixed for the `rules.hard` cap, and shared with Slice 10a's guided front door (which calls the same `createRule`). **Fixed** the same way: `pg_advisory_xact_lock(hashtext(user_id))` as the first statement inside `insertRuleAndVersion`'s own transaction, plus a new guarded INSERT (`where $capLimit::int is null or (select count(*) ...) < $capLimit`) that re-checks the cap atomically; zero rows returned throws a new `RuleCreateCapExceededError`, mapped to the SAME `ENTITLEMENT_LIMIT` message the early pre-check already used (verified identical string/code — no confusing double-message experience for a race-loser). Verified via the tester's own tripwire E2E going green, a genuine two-connection live-DB block-and-lose proof (`waitForBlockedQuery`, matching Slice 7's own gold-standard technique), and Slice 10a's own suites re-confirmed unaffected. Security-reviewer PASS (5/5 — no deadlock risk between the two advisory-lock call sites in the whole repo, both userId-keyed and neither nested; fully parameterized SQL; no sensitive leakage; no other write path bypasses the guard). QA PASS (race-loser message confirmed identical/non-confusing, design-system clean, independently closed both gaps the security-reviewer had explicitly left open — including live-running the cross-tab E2E spec itself, 6/6) plus one real non-blocking finding: `RuleEditor.tsx`'s "Rule slots: N of M used" header is a page-load snapshot that goes stale within a session (reproduced: submit rule #3, click "Write another rule," attempt #4 — stale "2 of 3" alongside the correct rejection), server-side enforcement unaffected, fix queued as an immediate follow-up rather than reopening this slice's own gate. 1609 passed/13 skipped/0 failed at fix time; `tsc --noEmit`/`npm run build`/`eslint .` all clean (independently re-confirmed 2026-08-31: tsc clean, eslint 0 errors/19 pre-existing warnings, build clean, 95/95 targeted tests including the two-connection race proof). **Slice 10d part 1 (§5.9 UI, the ambient strip ONLY — the adherence display, §5.6 UI, is a separate follow-up dispatch, NOT built here) CODED (2026-08-31), coder pass only, NOT yet tested/security-reviewed/QA'd.** Placed on `app/(app)/trades/manual-entry` (story 3.5's own "before I enter a trade" framing — this repo's only such screen today): `app/(app)/rules/actions.ts`'s new `fetchAmbientState` Server Action (thin wrapper around Slice 8's already-built `getAmbientAccountState`, new `ambientAccountState` rate-limit scope) + `ManualEntryScreen.tsx` (new — lifts the account-id `<select>` state up from `ManualEntryForm.tsx` so the sibling `AmbientStrip.tsx` can re-fetch on every switch) + `AmbientStrip.tsx` (new — presentational, renders exactly §6.1's three named cells, Today/Day P&L/Risk, always, never conditionally). **Real design-system gap found and closed, not papered over**: `retrospeq-design-system/brand/css/components.css` had NEVER shipped the `.ambient`/`.ambient__cell[data-state]`/`.ambient__label`/`.ambient__value` rules §6.1's own reference markup names directly — added there (geometry/weight/box-shadow only: a left-border width/colour escalation plus a full inset ring for `breach`, never a hue swap, confirmed against `tokens.css` that no new custom property was introduced) and re-synced to `public/brand/css/components.css` per this repo's own sync convention. **Real, reproducible bug found and fixed during this slice's own self-check, not shipped**: the account-switch effect's original "skip the first run" guard used an invocation-COUNT ref (`useRef(false)`), which React Strict Mode (`next dev`'s default) silently inverts — Strict Mode's deliberate double-invoke-every-effect-once behavior consumed the "skip" on a throwaway first pass, letting the real mount fall through into the real-fetch branch and fire an extra, unwanted `fetchAmbientState` round trip (plus a spurious `ambient -> null` flash) on every ordinary page load — measured directly via added instrumentation (~10.5s vs ~7.5s for an unrelated pre-existing manual-entry E2E test that started failing at its original 10s timeout once this bug was introduced). Fixed by comparing the account id VALUE against what `ambient` currently reflects (`lastFetchedAccountId` ref) instead of counting invocations — idempotent regardless of how many times an effect fires for the same value; re-verified the previously-broken `trades-slice7b.spec.ts` manual-entry E2E test passes again cleanly (13.7s, no timeout change needed there). New tests: 6 mocked unit tests for `fetchAmbientState` (`app/(app)/rules/__tests__/actions.test.ts`, success/invalid-uuid/cross-user-not-found-mapped-generically/internal-error/rate-limit/session-missing) and a new 3-test Playwright E2E file (`e2e/rules-ambient-strip.spec.ts`: genuine `neutral` state on a brand-new zero-trade/zero-rule account, genuine `watch` tint from a real broken SOFT `daily_loss_pct` rule, and genuine `breach` tint from a real broken HARD `total_open_risk` rule — including a real account switch re-fetching live data via two-account seeding, submitting past the breach with zero modal/dialog present at any point, and a real `rule_overrides` row independently verified against Postgres directly, `trade_id` null, citing the exact observed value the strip showed). Screenshot self-check done for all three tint states (`tmp/dev-screenshots/ambient-strip-{neutral,watch,breach}.png` plus cropped versions confirming the border-weight/ring escalation is visually real, not just present in the CSS text) — all three read as genuinely distinct without any hue difference. Full suite re-run after the fix: 1609 passed/13 skipped/7 failed, but every one of the 7 failures is in a live-DB test file this slice never touched (`manual-entry.live.test.ts`, `split-join.live.test.ts`, `sync.live.test.ts`, `trades-repository.live.test.ts`, `adherence-repository.live.test.ts`, `severity-lifecycle.live.test.ts`, `severity-lifecycle.independent-verification.live.test.ts`) — reproduced identically in complete isolation (single-file runs, stale dev-server process killed first, `pg_stat_activity` checked directly and showed no locks/contention), consistent with this repo's own established "shared dev/test Supabase project" environmental-flakiness pattern (ADR 0002) rather than a regression; `tsc --noEmit`/`npx eslint .`/`npm run build` all clean (0 errors, the same 19 pre-existing warnings). **Independent tester verification of Slice 10d part 1 DONE (2026-08-31) — PASS overall, no functional/security regression found, but the coder's "7 failures are flaky/pre-existing" diagnosis was imprecise and one real (already coder-flagged, still open) gap confirmed worth a near-term fix.** See the "Current task" section's own detailed write-up for the full 8-point independent re-derivation (re-ran the full suite independently, found 9 failures not 7 on that pass, re-ran 6 of the 9 flagged files fully in isolation — 5 reproduce a DETERMINISTIC "test timed out at its own default/explicit timeout" failure even completely alone, one file — `confirm.live.test.ts` — passed 18/18 clean in isolation, meaning only THAT one is genuine full-suite-contention flakiness in the classic sense; none of the 9 touch rules/ambient/override/manual-entry code, confirmed by grep + `git log`/`git status` per file). CSS tint mapping independently confirmed hue-free and byte-identical between the two copies; own fresh screenshots taken and read. Always-visible neutral strip, override write (different rule/operand than the coder's own fixture), fast double-account-switch race, and cross-user isolation of `fetchAmbientState` all independently re-proven with fresh fixtures/a fresh Playwright spec (4/4 passed, then deleted — throwaway verification only, not shipped). Strict Mode fix confirmed correct by direct code reading; the previously-broken `trades-slice7b.spec.ts` re-run clean (7/7, matching the coder's own reported timings). `tsc --noEmit` clean, `eslint .` clean (0 errors, 19 pre-existing warnings). `npm run build` could NOT be completed — three consecutive attempts (incl. one with `NODE_OPTIONS=--max-old-space-size=6144`) all OOM'd during Next.js's "Collecting page data" worker-pool phase with a genuine host virtual-memory exhaustion signature (`FreeVirtualMemory` ~1.3GB against an ~18.5GB total on this machine at verification time), NOT a code defect — the TypeScript compilation phase inside `next build` itself completed cleanly every single attempt before the later phase crashed, consistent with `tsc --noEmit`'s own clean, separate pass and with the dev server serving the app correctly throughout (23+ passing E2E assertions in this same session). **Reporting this honestly as build-unverified-for-infra-reasons, not as a pass** — the next session with more host headroom should re-run `npm run build` before this slice is called fully clean on that specific check. **The tester's own open SSR-error-handling gap was then FIXED (2026-08-31, same day)**: `page.tsx`'s initial `getAmbientAccountState` read now wraps in the same catch shape `fetchAmbientState` already used, degrading the ambient section gracefully ("…" cells + "Account state is unavailable right now") without blocking the rest of the trade-entry form — verified via a new E2E test seeding a genuinely malformed rule and confirming a real trade submission still completes; `npm run build` re-run clean this time (memory checked first, 5.9GB free, no orphaned processes — the prior build-unverified-for-host-memory-reasons gap independently closed). Full suite at fix time: 1605 passed/13 skipped/11 failed across 7 files, all re-confirmed the same pre-existing live-DB timeout issue the tester already diagnosed. **Security-reviewer PASS (2026-08-31, all focus areas)**: `recordOverride`'s `ruleId`/`observed` confirmed genuinely server-sourced end-to-end (never client input, independently re-validated server-side against ownership+state+evaluation before insert); `tradeId: null` confirmed correctly append-only with no later-misattribution path (`rule_overrides` has no UPDATE policy); the new `ambientAccountState` rate-limit scope (120/60s ip, 80/60s per-user) confirmed correctly keyed and reasonably positioned between `previewRule`'s tighter per-keystroke limit and the hourly scopes; cross-user isolation independently re-confirmed a THIRD time (real RLS + ownership check on `trading_accounts`, identical not-found response for nonexistent vs. not-owned); the SSR fix confirmed leak-free (only two fixed generic strings ever reach the client); tint mapping confirmed achromatic a third time. One non-blocking recommendation (not a checklist violation): `docs/runbook.md` had no alerting entry for `recordOverride` write failures — added (search "`rule_overrides` write failing silently"), documenting that this slice turned the write from theoretical (Slice 8 built `recordOverride` with no caller at all) to automatic-on-every-breach, raising the real-world stakes of its existing `console.error`-only failure mode. **QA PASS (2026-08-31, all items)**: always-visible confirmed across all 5 states (neutral/watch/breach/loading/ssr-degraded) via fresh screenshots; no red/green (achromatic tokens confirmed a FOURTH independent time); `.rq-num` present on all 3 readouts; degraded-state copy confirmed honest and non-alarming; rest-of-form genuinely interactive during degradation (qa filled and submitted real form values, not just eyeballed the layout); no compound-rule/XP coupling; runbook entry accuracy confirmed (one trivial wording nit — the entry originally implied `recordOverride` was "occasional and user-initiated" before this slice, when it actually had zero callers at all until now — corrected in place, not worth a re-dispatch); spec fidelity to §5.9/§6.1/story 3.5 confirmed at the markup level; zero modals/dialogs at any point of a breach-and-proceed flow. **Module 04 Slice 10d part 1 is now fully DONE.** **Slice 10d part 2 (§5.6 UI / story 3.3, the adherence display ONLY) is now CODED (2026-08-31), coder pass only, NOT yet independently tested/security-reviewed/QA'd.** Built: `lib/rules/adherence-display.ts`'s `getAdherenceDisplayForUser` (composes two already-built, already-tested reads — Slice 6's `fetchAdherenceWeekly` for the current AND the immediately-prior ISO week, via new `currentWeekStartFor`/`priorWeekStartFor` helpers reusing `promotion-eligibility.ts`'s own established `now.toISOString().slice(0,10)` plain-UTC-date convention rather than any per-account `server_day`, since adherence spans every account a trader has, not one), plus a new `fetchRuleRenderedText` read in `rules-repository.ts` (the attribution line's rule-name join `adherence_weekly.top_break_rule_id` was always deliberately name-agnostic about). Hard-priority severity/denominator for the attribution line is DERIVED, not re-queried, from the already-materialised `hardTotal`/`hardFollowed` fields alone (`hardBreaks > 0` implies the top break came from the hard pool, per `computeAdherenceWeekCounts`'s own selection order — Slice 6's header) — zero extra queries beyond the two parallel `fetchAdherenceWeekly` calls plus one conditional rendered-text lookup. `app/(app)/rules/actions.ts` gained `fetchAdherenceDisplay` (session-derived userId only, no arguments at all — this composition has nothing else to legitimately vary in this slice's own scope) and `lib/rate-limit/config.ts` gained a new `adherenceDisplay` scope (90/3600s ip, 60/3600s email — a plain page-load read, not a bursty interactive one). **Route choice**: `app/(app)/rules/page.tsx` itself (NOT a new dedicated route, the opposite choice from Slice 10a's own reasoning) — documented in the page's own header comment: 10a avoided this exact file because building the GUIDED FRONT DOOR there would force a later restructure once the real rulebook list shipped; the adherence display has no such conflict, since §6.1's own reference markup already places `.adherence` as a permanent section of the SAME "your rulebook" screen the rule list will eventually join, not a stand-in for a future screen's shape — this dispatch's own page.tsx leaves an explicit comment marking exactly where that future list belongs, below the adherence section. `page.tsx` calls the rate-limited `fetchAdherenceDisplay` Server Action directly (not the underlying library function), a deliberate difference from `manual-entry/page.tsx`'s own "bypass the rate limit for a fast first paint" precedent — documented as intentional, since this screen has no equivalent latency-critical first-paint requirement, so routing every read (including the very first one) through the same rate-limited entry point is strictly safer by default with no UX cost. **Real design-system gap found and closed, matching Slice 10d part 1's own precedent exactly**: `.adherence`/`.adherence__hard`/`.adherence__soft`/`.adherence__attribution` were named in §6.1's own reference markup but never shipped in `retrospeq-design-system/brand/css/components.css` — added there (weight/order/colour-scale only: hard bold+full-ink, soft regular-weight+`--rq-ink-soft`, attribution smallest+`--rq-ink-faint` — no hue anywhere, confirmed against `tokens.css`) and re-synced to `public/brand/css/components.css`. Three honest non-error states, all screenshot-verified (`tmp/dev-screenshots/adherence-{ready,insufficient-history,zero-breaks}.png`): `insufficient_history` (no materialised row for the current week — brand-new trader, no confirmations yet this week, or a stuck recompute per this slice's own new `docs/runbook.md` addition) renders "Not enough data yet" prose, never a fabricated "0 of 0"; a real week with both hard and soft breaks renders both fractions plus a real "up from" comparison (omitted, not fabricated, when the prior week itself has no row) plus the hard-priority attribution line naming the breached rule by its CURRENT rendered sentence (a documented, honest simplification — `adherence_weekly` itself never stores which `rule_version` was live during the displayed week, only `rules-repository.ts`'s own header explains why re-deriving that exactly would mean a live re-join `adherence_weekly`'s whole "materialised, never computed at read time" contract exists to avoid); a genuinely good week (zero breaks) renders "No rules were broken this week." plainly, no celebration, no attribution line, per AGENTS.md's "Adherence earns no XP, ever." New tests: 20 unit (16 `adherence-display.test.ts` incl. the exact §6.1 worked-example reproduction — "6 of the 14 soft breaks" — as a literal fixture, plus a source-scan test for zero xp/streak/points/gamification references; 4 new `fetchAdherenceDisplay` cases in `actions.test.ts`, extending the existing 84 to 100 total, still all green), 2 new live-DB tests in `rules-repository.live.test.ts` (`fetchRuleRenderedText` resolves the CURRENT post-edit version, and returns `null` — never leaking another user's text — for a nonexistent or cross-user rule id; 9/9 green including the 6 pre-existing tests in that file), and a new 3-test Playwright E2E file (`e2e/rules-adherence.spec.ts`) that deliberately seeds `adherence_weekly`/`rules`/`rule_versions` directly via SQL rather than driving the real confirm pipeline (documented in the file's own header: the MATERIALISATION pipeline is already proven live by Slice 6's own tests; this slice's whole job is the DISPLAY layer on top of it) — all 3 green, screenshots confirm no red/green and a real weight/order hierarchy (hard bold and first, soft lighter and second, attribution faintest and last). Full targeted suite green (100 mocked unit + 9 rules-repository live + 3 E2E); `tsc --noEmit` and `npx eslint .` both clean (0 errors, the same 19 pre-existing warnings). A broader `npx vitest run lib/rules app/(app)/rules` pass surfaced 4 failures, ALL in live-DB files this slice never touched (`adherence-repository.live.test.ts`, `freeze-evaluations.live.test.ts`, `severity-lifecycle.live.test.ts`, `severity-lifecycle.independent-verification.live.test.ts`) and ALL a `Test timed out in Nms` shape at that specific test's own timeout — re-ran `adherence-repository.live.test.ts` a second time in complete isolation and it failed identically on the exact same test, matching this session's own already-documented "deterministic too-tight-timeout, not classic flakiness" diagnosis from Slice 10d part 1's independent tester verification, not a regression from this slice (confirmed via `git status`/diff scope: this slice touched none of `confirm.ts`/`freeze-evaluations.ts`/`severity-lifecycle-repository.ts`). **`npm run build` could NOT be completed** — two consecutive attempts (one with `NODE_OPTIONS=--max-old-space-size=6144`) both crashed with the same access-violation-shaped worker exit this session's own host has produced before (PROGRESS.md's Slice 10d part 1 entry, "Collecting page data"/"Generating static pages" phase) — `tsc --noEmit`'s own separate, clean pass completed in both attempts before the later phase crashed, and `Get-Process` showed several memory-heavy editor/IDE processes running outside this agent's control, consistent with genuine host memory pressure rather than a code defect. **Reporting this honestly as build-unverified-for-infra-reasons, not as a pass** — a future session with more host headroom should re-run `npm run build` before this slice is called fully clean on that specific check. No migration (no schema change), no ADR (the route-choice and rate-limit-scope decisions are documented in-file per this repo's own convention, not a 00-foundation deviation), `docs/runbook.md` gained one new paragraph (not a new top-level entry — the underlying failure mode already had one) noting this slice is the first UI surface where a stuck `adherence_weekly` recompute becomes directly visible to a trader. **Independent tester verification PASS (2026-08-31)**: week-boundary math re-derived with fresh fixtures including an instant-level boundary stress test (correct, no off-by-one); hard-priority attribution re-proven with a harder 1-hard-vs-4-soft fixture; the "current wording not historical" limitation confirmed genuinely true via a real `applyRuleEdit`-after-freeze test; empty/zero-breaks states confirmed honest via fresh screenshots; cross-user isolation confirmed at both Server Action and RLS layers; closed a real test-coverage gap the coder's own suite left (added a full-pipeline test deriving adherence from raw evaluations, not only against directly-seeded `adherence_weekly` rows). Also confirmed the recurring `npm run build` OOM pattern (this is its 3rd occurrence this session) is genuinely infra, not code — killing 3-4 leftover node/dev-server processes recovered free virtual memory from ~1.6GB to ~1.85GB and the exact same build then passed clean with zero code changes; flagged to the owner as worth a durable fix (larger page file) given the pattern is now confirmed, not a one-off. **Security-reviewer PASS (2026-08-31, 6/6)**: `fetchRuleRenderedText` confirmed doubly scoped (RLS + explicit `user_id` filter in SQL) and confirmed unreachable via any client-facing surface at all (`fetchAdherenceDisplay` takes zero parameters — no pivot path exists to test); cross-user isolation confirmed at every layer; the new `adherenceDisplay` rate-limit scope confirmed correctly keyed and reasonably positioned; no injection surface, fully read-only end to end, no `rule_evaluations` touch, no compound rules, no XP/gamification language; the "current wording not historical" limitation reviewed specifically for exploitability and found to have no security angle (worst case is stale phrasing next to an accurate identity/count, not spoofable or data-leaking). **QA PASS (2026-08-31, clean on all 7 items)**: hard/soft confirmed genuinely never blended into one score anywhere on screen; no XP/gamification language re-confirmed specifically for this screen (zero breaks and a bad week read with the same plain tone); `.rq-num` present on every numeric readout; no red/green (CSS confirmed byte-identical/achromatic between the two synced copies); honest empty/zero-breaks states re-screenshotted with fresh fixtures; a real populated week matches §6.1's own worked-example shape; `app/(app)/rules/page.tsx` confirmed to read as a coherent real page today, with the future-rule-list placeholder genuinely a code comment, never user-visible placeholder text. **Module 04 Slice 10d part 2 is now fully DONE.** **Slice 10e (rule list/browsing view, story 1.1, plus §5.7 severity promote/demote/retire controls) DONE (2026-08-31)** — full coder → tester → coder-fix → tester-reverify → security-reviewer → qa gate sequence passed. Closes a real, previously-untracked gap Slice 10d part 2's own QA pass found: Slice 7 (2026-08-25) built `promoteRule`/`demoteRule`/`retireRule` backend-only with their UI explicitly deferred, and nothing tracked that as outstanding until now. Built: `lib/rules/rules-repository.ts`'s new `fetchRulesForUser` (active rules before retired, hard before soft within active, oldest-first tiebreak, never another user's rows), `app/(app)/rules/actions.ts`'s new `fetchRulesList` Server Action, `app/(app)/rules/RuleList.tsx` (the list itself, promote/demote/retire buttons, the §6.1 hard-cap swap chooser, a promotion-ineligibility explanation, a retire confirmation step), extending `app/(app)/rules/page.tsx` and a small `app/(app)/layout.tsx` nav addition. **Independent tester verification found TWO real, reproducible bugs**, closing this repo's own established pattern of independent verification catching something real on the majority of Module 04 slices: (1) the hard-cap swap dialog could get stuck on "Swapping…" forever if the second (`promoteRule`) Server Action call's promise never settled (correlated with a Turbopack dev-server artifact, reproduced 3/3 in isolation) — no data loss (the server-side promotion did eventually commit), but a genuine client-side UI dead end with no timeout, no error, no retry path; (2) a free-tier trader attempting to promote an ineligible rule saw ONLY the eligibility-gate breakdown, with zero mention that Pro tier was ALSO required — falsely implying that waiting out the gates alone would work. **Both fixed**: bug #1 via a new `app/(app)/rules/with-timeout.ts` (`Promise.race`-based 15s client-side deadline, wired into all 5 Server Action call sites in `RuleList.tsx`, proven with a deterministic never-settling-promise unit test rather than relying on the flaky dev-server artifact to reproduce); bug #2 via a new additive `eligibility.proRequired` flag on `promoteRule`'s ineligible-branch response (a single derived boolean, never leaking the full `EntitlementResult`), shown alongside — never replacing — the real gate breakdown. **Independent adversarial re-verification of both fixes: PASS, no gap found** (4 fresh timeout-breaking scenarios including an exact-deadline race and a late-arriving-response-after-abandonment proof; 3 fresh `proRequired` fixtures covering all three real combinations; entitlement-leakage re-checked and confirmed to expose only the one boolean; full suite re-run clean: 90/90 mocked + 11/11 live-DB + 6/6 E2E plus 3 extra isolated swap-test runs). Security-reviewer PASS (4/4 — traced the timeout-abandonment scenario through Slice 7's own `pg_advisory_xact_lock` guards and confirmed no double-promotion/cap-breach path is possible regardless of client-side behavior; confirmed `proRequired` leaks nothing beyond its one boolean; assessed a tester-flagged non-blocking UX gap — the hard-cap chooser and normal promote/demote buttons aren't mutually exclusive in the JSX — as having no security angle since server-side invariants are structurally independent of client button state). QA PASS (both fix-specific states screenshot-verified honest and non-alarming, all non-negotiables re-confirmed across the whole slice, retire confirmed genuinely one-way, the chooser-bypass UX gap confirmed tracked not lost, spec fidelity confirmed with one honest note that §6.1 has no literal standalone rule-list reference markup so the list's shape is a documented, reasonable extrapolation). **Known tracked follow-up, not blocking**: the hard-cap chooser/direct-promote-button mutual-exclusion UX gap (see the tester's independent-verification write-up above, item 5) — logged, not fixed in this slice, no security angle per the security-reviewer's own assessment. **Slice 10f (story 2.5's rule-value editing UI) DONE (2026-09-01)** — full coder → tester → coder-fix → tester-reverify → security-reviewer → qa gate sequence passed, closing the last real, previously-untracked Module 04 gap found by the 2026-08-31 spec-coverage re-check: `editRule` had been fully built/tested/security-reviewed since Slice 2 (2026-08-19) with zero UI ever built for it. Built: a new `fetchRuleForEdit` Server Action wrapping the existing `fetchCurrentRuleForEdit`, a new `EditRuleControl.tsx` pre-filling a stepper with the rule's real current value/bounds and a live preview, an Edit action in `RuleList.tsx` gated to bounded numeric operands on active rules only. **Independent tester verification found a REAL, SERIOUS bug**: `editRule`'s optimistic-concurrency protection was a no-op end to end — it accepted an `expectedVersion` re-derived from a fresh internal read rather than the stale snapshot the trader's edit control actually opened against, so `RULE_EDIT_CONFLICT` could never fire through the real "I have this open, someone else edited it, I save my stale value" scenario; reproduced live: a stale edit silently overwrote an intervening one with zero signal anything had changed, even though the underlying `applyRuleEdit` guarded UPDATE (proven safe since Slice 10e) was itself correct — it was simply never fed the right version to check against. **Fixed properly, not just documented**: `editRule`'s signature now REQUIRES `expectedVersion` from the caller's own original snapshot, a cheap early check short-circuits before the validation pipeline on mismatch, and `EditRuleControl.tsx` threads its snapshot version through end to end, offering a genuine "Refresh with the latest value" recovery path on conflict rather than a dead end — the coder also caught and rewrote its OWN prior E2E test, which had been asserting the buggy silent-overwrite AS correct behavior. **Independent re-verification with entirely fresh scenarios found no gap**: a tighter race window (intervening commit firing while the edit call was already in flight), the Refresh path's own highest-risk failure mode stress-tested specifically (confirmed a THIRD concurrent edit after refreshing a new baseline is still correctly caught — no reused-stale-snapshot bug in the refresh wiring itself), a same-session double-submit against one shared stale snapshot (exactly one succeeds, one rejected, no double-write). Security-reviewer PASS (5/5 — `expectedVersion` confirmed genuinely unbypassable by a hostile client since the atomic guarded UPDATE is the real backstop regardless of client input, ownership checked strictly before version logic runs so no cross-user probing signal leaks, server-side gating confirmed independent of the UI's own `isThresholdEditable` check, no non-negotiables violated, all SQL parameterized). QA PASS (all 10 items clean, including DB-level proof of the new `rule_versions` row on a successful edit, and a final module-wide sweep confirming every exported Server Action in `app/(app)/rules/actions.ts` now has a real UI caller — no repeat of the promote/demote/retire orphaned-backend pattern anywhere). **This closes Module 04's own currently-in-reach scope entirely** — only Slice 10c (discovery, blocked on Module 05) and strategy-scoped rule stories 1.5-1.7 (blocked on Module 03) remain, both confirmed genuine external blockers, not oversights.
 
 **Module 04 scope gap found by this slice's own QA pass, not yet tracked anywhere — given its own number, Slice 10e, rather than staying invisible.** Slice 7 (2026-08-25) built `promoteRule`/`demoteRule`/`retireRule` as backend-only Server Actions, explicitly scoping their UI as future work at the time. That UI has never shipped — confirmed via `grep`: those three functions are called nowhere in `app/` except their own Server Action definitions and test file. This is NOT Slice 10c (discovery, story 1.3 — correctly tracked as blocked on Module 05) and is NOT this slice (10d part 2, adherence) — it is a genuine, currently-unclaimed gap: the rule list/browsing view (story 1.1's "one sentence, one tappable number" list, the natural home for `app/(app)/rules/page.tsx`'s own already-reserved future-list placeholder from this slice) PLUS the severity promote/demote/retire controls (§6.1's `alert--choice` hard-cap swap markup, deferred all the way back at Slice 10b's own dispatch for exactly this reason — it needs an existing-rules list to select a demote target from, which didn't exist until now). Today, a trader who wants to promote a rule to hard, or simply see their existing rules, has no UI path to either — a real product gap, not a documentation nit. Per AGENTS.md step 8/"never fake it," this is logged here rather than left silently dropped; Module 04 is NOT done until Slice 10e is either built or deliberately, visibly deferred with a real reason. See "Next" below for the priority call on 10e vs. 10c.
-| 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | **In progress, started 2026-09-02.** Both full specs read before any code, per this build's own standing discipline. Module 03 goes first — Module 05's own §10 Dependencies table names Module 03 (field definitions and types) as a real dependency, and Module 04's own field-based rule scoping (`strategy_var`) has been waiting on it since Slice 10b. **Slice 03a (field-registry schema + §3.2's 9-entry derived-field seed catalogue) CODED (2026-09-02), independently verified (2026-09-02) — the erasure regression that verification found is now FIXED (2026-09-02, see the matching decision-log entry and "Current task" for the full write-up) — schema/RLS/PK/uniqueness work AND the erasure fix are both verified; this slice is ready for security-reviewer/qa, not yet marked "done" by this coder (that call belongs to qa/security-reviewer per this repo's own convention). **UPDATE: security-reviewer gate PASSED, 2026-09-02 -- all 9 checklist items plus both named erasure deep-dive items, see the matching 2026-09-02 decision-log entry (search "SECURITY REVIEW GATE"); qa is the one remaining gate before this slice can be called done.** Schema/RLS/PK/uniqueness work itself independently re-proven sound with fresh adversarial fixtures. Built all 5 tables (`fields`/`strategies`/`strategy_versions`/`field_usages`/`trigger_conditions`), RLS on all 5 (100% coverage, live-verified), `handle_new_user` extended a 4th time to seed the 9 derived fields atomically at signup (backfilled live against all 328 pre-existing profiles, 0/328 mismatched), the `fields_forbid_derived_update`/`fields_forbid_derived_delete` triggers (adversarially proven, including the erasure escape hatch a real bug surfaced needing). **Two real, load-bearing bugs found and fixed in the spec's own literal DDL before it ever shipped** (not transcribed verbatim): `fields.id` would have been a globally-collide-on-second-signup primary key (fixed to composite `(user_id, id)`, `docs/adr/0017-fields-composite-primary-key.md`), and the literal `unique (user_id, name, owner_strategy_id)` constraint would not have enforced uniqueness for NULL `owner_strategy_id` rows at all (fixed with two partial unique indexes). **A third, cross-cutting regression found and fixed while writing this slice's own tests, not shipped**: the new derived-field delete-block trigger broke every OTHER RLS test file's cleanup (`deleteTestAuthUser`'s cascade from `auth.users` now hits it) — fixed at the source (`deleteTestAuthUser` itself now pre-deletes under the erasure escape hatch, one shared connection per test file, not per call, after a first per-call-connection draft was proven via live A/B testing to slow down `confirm.live.test.ts` before being replaced) rather than editing 40+ call sites individually. **A fourth, critical regression — the REAL production `executeErasure` path (not test cleanup) was broken for every user — found by independent verification and fixed 2026-09-02**: see the matching decision-log entry for the full root cause/fix/verification write-up; `lib/fields/fields-repository.ts`'s new `deleteAllFieldsForUser`, wired into `executeErasure`. **A genuine, flagged-not-resolved naming overlap with Module 04's operand catalogue** (`risk_pct`/`hold_seconds`/`day_of_week`/`order_type`/`instrument` vs. this slice's `drv.*`-prefixed field ids for the same underlying facts) is documented in the migration's own header and this slice's report, not silently picked a side on. **A separate instance of the same erasure-bug class, found while fixing the fields one and initially left open and tracked, has now ALSO been fixed (2026-09-02, same day, dedicated follow-up dispatch)** — `rules`/`rule_evaluations` (Module 04) had the identical gap: `lib/rules/rules-repository.ts`'s new `deleteAllRulesForUser` closes it, same mechanism as `deleteAllFieldsForUser`, wired into `executeErasure` and documented in `docs/adr/0010`'s own follow-up addendum — see the matching 2026-09-02 decision-log entry below for the full write-up. `erasure.live.test.ts` is now 8/8 (a new dedicated regression test seeding a real `rules` row and a real, genuinely-frozen `rule_evaluations` row). 41/41 (now 41/42, 1 intentionally skipped) live-DB schema tests passing, `tsc`/`eslint`/`npm run build` all clean. **Slice 03b (strategy CRUD + versioning, §4.6) is now FULLY DONE (2026-09-04)** — full coder → tester → security-reviewer → qa gate sequence passed. Backend only (no UI, no field-creation flow, no trigger-condition authoring UI). `lib/fields/strategy-repository.ts` (`createStrategy`/`editStrategy`, mirroring `rules-repository.ts`'s guarded-UPDATE versioning shape exactly, built to avoid repeating Slice 10f's own found bug) + `lib/fields/strategy-validation.ts` (§4.4 capture-moment validation, §9 trigger-count soft warning) + `lib/entitlements/strategy-usage.ts` (real `strategy.create` counter wired into `defaultCanDeps`) + one new migration (`strategies_one_default_per_user` partial unique index, applied live, a real gap the coder found and fixed on its own — Slice 03a had left this implicit) + `docs/adr/0018` (edit reuses the `strategy.create` capability, documented reasoning). Independent tester verification PASS on every item, using a genuinely DIFFERENT concurrency mechanism than the coder's own two-connection proofs (same-session `Promise.all` double-submit vs. held-open-transaction), plus a real concurrent (not sequential) double-attempt on the default-strategy uniqueness constraint the coder's own suite never tried; `field_usages`' delete-then-reinsert race window confirmed closed both structurally and empirically. **Security-reviewer PASS on all 6 items (2026-09-04)** — entitlement-gate reasoning from ADR 0018 independently re-derived and confirmed sound; `isDefaultStrategy` bypass confirmed genuinely unreachable via repo-wide grep AND direct code reading; RLS confirmed on `strategies`/`strategy_versions`/`field_usages`; all SQL parameterized; both two-connection concurrency proofs spot-checked directly. Two non-blocking follow-ups, BOTH logged in the Infra gaps list (search "isDefaultStrategy has no built-in check" and "field_usages_owner_insert"): `isDefaultStrategy` has no built-in "does this user already have zero strategies" check (not exploitable today, no live caller — flagged for Module 08's future default-strategy wiring); `field_usages_owner_insert`'s RLS policy doesn't verify `used_by_id` ownership at the RLS layer (closed today only by the application layer — added as a further confirmed instance to the repo-wide FK-ownership-check gap already tracked). **QA PASS on 6 of 7 items directly, with the 7th (ledger currency) failing and then fixed as part of closing this entry out** — spec fidelity to §4.6/§6.2 confirmed against the literal flow diagram, both Infra-gaps follow-ups confirmed accurate, ADR 0018 confirmed complete, §4.4 validation spot-checked (50/50 tests), non-negotiables clean, no new untracked gap. 46 fields tests + 10 entitlement tests, all green. `tsc`/`eslint` clean; `npm run build` hit this session's own already-escalated host-memory OOM pattern (now reproduced 3 times this session across different slices) — TypeScript compilation itself clean every time, reported honestly as infra-unverified, not a pass. Field creation, trigger-condition authoring, and any UI all remain future sub-slices. **Slice 03c (field CREATION -- §4.1's pruning rule + §4.3's type/config validation, backend only) is now FULLY DONE (2026-09-08) -- full coder -> tester -> security-reviewer -> qa gate sequence passed (tester found and the coder fixed a real §4.1 pruning-rule gap: zero tolerance for word-order reordering/pluralization, even against the curated list's own entries -- see the matching decision-log entries for the tester's finding, the coder's fix, security-reviewer PASS 6/6 (2026-09-08), and this qa PASS).** Built: `lib/fields/field-validation.ts` (`checkPruningRule` -- a curated, hand-reviewable per-derived-field list of known duplicate-name variants matched after Unicode-aware normalization, deliberately NOT a full NLP/embedding-similarity system nor a `data_type`-based match, reasoning documented in the file's own header; `validateFieldConfig` -- §4.3's per-`data_type` config shape, e.g. `pick_one`/`pick_many` require non-empty distinct `options[]`, `number` requires `min < max` plus a positive `step`, `rating`'s `min`/`max` are optional-but-paired with a 1-5 default applied by the caller) + `lib/fields/fields-repository.ts`'s new `createField` (kind=`account`|`strategy_var`, entitlement-gated, cross-user strategy-ownership-checked, clean-error-on-collision) + `lib/entitlements/fields-usage.ts`'s new `countActiveCustomFields` wired into `defaultCanDeps` + `docs/adr/0019-field-creation-entitlement-gate.md`. **Entitlement decision**: gates on the ALREADY-EXISTING `fields.custom` capability (`free: 0, pro: null`, present in `capability-table.ts` since Module 01's own first entitlements slice with zero real callers until now) rather than gating transitively through `strategy.create` -- ADR 0019 has the full reasoning (a field can be `kind='account'` with no strategy relationship at creation time at all, and the two capabilities could diverge in a future pricing change even though they resolve identically today). **Field id generation scheme** (a genuine judgment call, §3.1's own `'str.<uuid>.pd_array'` is confirmed-by-re-reading to be an illustrative example, not a mandated format): `'acct.' || uuidv7` / `'str.' || uuidv7`, generated server-side in SQL via the same `retrospeq.uuid_generate_v7()` every other PK in this schema uses -- deliberately NOT slugifying the trader's name into the id (renames would make a name-derived id segment permanently stale per §4.5, and arbitrary-name slugification can collide independently of the real `name` uniqueness constraint) and NOT embedding `owner_strategy_id` in a `strategy_var` field's id (would leave a stale artifact after a future §4.5 promotion to `account`) -- full reasoning in `createField`'s own header comment. Real `(user_id, name, owner_strategy_id)` collisions (already DB-enforced by Slice 03a's two partial unique indexes) are caught and translated into a clean `FieldNameConflictError`, matching `lib/broker/accounts-repository.ts`'s own `isUniqueViolation` precedent, never a raw Postgres error reaching the caller. 49 pure unit tests (`field-validation.test.ts`, incl. 20 pruning-rule duplicate-variant cases across all 9 derived fields plus 6 genuinely-novel-name accept cases) + 21 live-DB tests (`fields-repository.live.test.ts`: both kinds, id-prefix shape, config normalization/defaulting, the pruning rule end-to-end, config validation end-to-end, kind/scope mismatch, name-length bound, the real unique-index collision on both the unscoped and scoped index, independence of the two indexes, a cross-user `ownerStrategyId` hijack attempt correctly rejected with `StrategyNotFoundError` and no row written, a malformed non-UUID `ownerStrategyId` short-circuited before ever reaching Postgres, entitlement gate free/Pro incl. gate-runs-before-ownership-check ordering, and cross-user RLS isolation both for uniqueness scoping and for direct row visibility via `asRole`), all green (70 new tests total). `tsc --noEmit` and `eslint` both clean. `npm run build` hit this session's own already-escalated, NEEDS_YOUR_INPUT.md-tracked host-virtual-memory OOM pattern at the "Collecting page data" phase (TypeScript compilation itself completed cleanly first, same signature as every prior occurrence this session) -- reported honestly as infra-unverified, not a pass; no new NEEDS_YOUR_INPUT.md entry needed since this exact failure mode is already tracked there. No new runbook entry (no alerting/background-job condition introduced -- `createField`'s errors are ordinary synchronous validation rejections, not §7.3-shaped alerting conditions). Field rename/archive/type-change/promotion (§4.5), the field-cap warning (§4.8), trigger-condition authoring (§4.7), and any UI (field picker, field editor) all remain future sub-slices, unchanged in scope. |
+| 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | **In progress, started 2026-09-02.** Both full specs read before any code, per this build's own standing discipline. Module 03 goes first — Module 05's own §10 Dependencies table names Module 03 (field definitions and types) as a real dependency, and Module 04's own field-based rule scoping (`strategy_var`) has been waiting on it since Slice 10b. **Slice 03a (field-registry schema + §3.2's 9-entry derived-field seed catalogue) CODED (2026-09-02), independently verified (2026-09-02) — the erasure regression that verification found is now FIXED (2026-09-02, see the matching decision-log entry and "Current task" for the full write-up) — schema/RLS/PK/uniqueness work AND the erasure fix are both verified; this slice is ready for security-reviewer/qa, not yet marked "done" by this coder (that call belongs to qa/security-reviewer per this repo's own convention). **UPDATE: security-reviewer gate PASSED, 2026-09-02 -- all 9 checklist items plus both named erasure deep-dive items, see the matching 2026-09-02 decision-log entry (search "SECURITY REVIEW GATE"); qa is the one remaining gate before this slice can be called done.** Schema/RLS/PK/uniqueness work itself independently re-proven sound with fresh adversarial fixtures. Built all 5 tables (`fields`/`strategies`/`strategy_versions`/`field_usages`/`trigger_conditions`), RLS on all 5 (100% coverage, live-verified), `handle_new_user` extended a 4th time to seed the 9 derived fields atomically at signup (backfilled live against all 328 pre-existing profiles, 0/328 mismatched), the `fields_forbid_derived_update`/`fields_forbid_derived_delete` triggers (adversarially proven, including the erasure escape hatch a real bug surfaced needing). **Two real, load-bearing bugs found and fixed in the spec's own literal DDL before it ever shipped** (not transcribed verbatim): `fields.id` would have been a globally-collide-on-second-signup primary key (fixed to composite `(user_id, id)`, `docs/adr/0017-fields-composite-primary-key.md`), and the literal `unique (user_id, name, owner_strategy_id)` constraint would not have enforced uniqueness for NULL `owner_strategy_id` rows at all (fixed with two partial unique indexes). **A third, cross-cutting regression found and fixed while writing this slice's own tests, not shipped**: the new derived-field delete-block trigger broke every OTHER RLS test file's cleanup (`deleteTestAuthUser`'s cascade from `auth.users` now hits it) — fixed at the source (`deleteTestAuthUser` itself now pre-deletes under the erasure escape hatch, one shared connection per test file, not per call, after a first per-call-connection draft was proven via live A/B testing to slow down `confirm.live.test.ts` before being replaced) rather than editing 40+ call sites individually. **A fourth, critical regression — the REAL production `executeErasure` path (not test cleanup) was broken for every user — found by independent verification and fixed 2026-09-02**: see the matching decision-log entry for the full root cause/fix/verification write-up; `lib/fields/fields-repository.ts`'s new `deleteAllFieldsForUser`, wired into `executeErasure`. **A genuine, flagged-not-resolved naming overlap with Module 04's operand catalogue** (`risk_pct`/`hold_seconds`/`day_of_week`/`order_type`/`instrument` vs. this slice's `drv.*`-prefixed field ids for the same underlying facts) is documented in the migration's own header and this slice's report, not silently picked a side on. **A separate instance of the same erasure-bug class, found while fixing the fields one and initially left open and tracked, has now ALSO been fixed (2026-09-02, same day, dedicated follow-up dispatch)** — `rules`/`rule_evaluations` (Module 04) had the identical gap: `lib/rules/rules-repository.ts`'s new `deleteAllRulesForUser` closes it, same mechanism as `deleteAllFieldsForUser`, wired into `executeErasure` and documented in `docs/adr/0010`'s own follow-up addendum — see the matching 2026-09-02 decision-log entry below for the full write-up. `erasure.live.test.ts` is now 8/8 (a new dedicated regression test seeding a real `rules` row and a real, genuinely-frozen `rule_evaluations` row). 41/41 (now 41/42, 1 intentionally skipped) live-DB schema tests passing, `tsc`/`eslint`/`npm run build` all clean. **Slice 03b (strategy CRUD + versioning, §4.6) is now FULLY DONE (2026-09-04)** — full coder → tester → security-reviewer → qa gate sequence passed. Backend only (no UI, no field-creation flow, no trigger-condition authoring UI). `lib/fields/strategy-repository.ts` (`createStrategy`/`editStrategy`, mirroring `rules-repository.ts`'s guarded-UPDATE versioning shape exactly, built to avoid repeating Slice 10f's own found bug) + `lib/fields/strategy-validation.ts` (§4.4 capture-moment validation, §9 trigger-count soft warning) + `lib/entitlements/strategy-usage.ts` (real `strategy.create` counter wired into `defaultCanDeps`) + one new migration (`strategies_one_default_per_user` partial unique index, applied live, a real gap the coder found and fixed on its own — Slice 03a had left this implicit) + `docs/adr/0018` (edit reuses the `strategy.create` capability, documented reasoning). Independent tester verification PASS on every item, using a genuinely DIFFERENT concurrency mechanism than the coder's own two-connection proofs (same-session `Promise.all` double-submit vs. held-open-transaction), plus a real concurrent (not sequential) double-attempt on the default-strategy uniqueness constraint the coder's own suite never tried; `field_usages`' delete-then-reinsert race window confirmed closed both structurally and empirically. **Security-reviewer PASS on all 6 items (2026-09-04)** — entitlement-gate reasoning from ADR 0018 independently re-derived and confirmed sound; `isDefaultStrategy` bypass confirmed genuinely unreachable via repo-wide grep AND direct code reading; RLS confirmed on `strategies`/`strategy_versions`/`field_usages`; all SQL parameterized; both two-connection concurrency proofs spot-checked directly. Two non-blocking follow-ups, BOTH logged in the Infra gaps list (search "isDefaultStrategy has no built-in check" and "field_usages_owner_insert"): `isDefaultStrategy` has no built-in "does this user already have zero strategies" check (not exploitable today, no live caller — flagged for Module 08's future default-strategy wiring); `field_usages_owner_insert`'s RLS policy doesn't verify `used_by_id` ownership at the RLS layer (closed today only by the application layer — added as a further confirmed instance to the repo-wide FK-ownership-check gap already tracked). **QA PASS on 6 of 7 items directly, with the 7th (ledger currency) failing and then fixed as part of closing this entry out** — spec fidelity to §4.6/§6.2 confirmed against the literal flow diagram, both Infra-gaps follow-ups confirmed accurate, ADR 0018 confirmed complete, §4.4 validation spot-checked (50/50 tests), non-negotiables clean, no new untracked gap. 46 fields tests + 10 entitlement tests, all green. `tsc`/`eslint` clean; `npm run build` hit this session's own already-escalated host-memory OOM pattern (now reproduced 3 times this session across different slices) — TypeScript compilation itself clean every time, reported honestly as infra-unverified, not a pass. Field creation, trigger-condition authoring, and any UI all remain future sub-slices. **Slice 03c (field CREATION -- §4.1's pruning rule + §4.3's type/config validation, backend only) is now FULLY DONE (2026-09-08) -- full coder -> tester -> security-reviewer -> qa gate sequence passed (tester found and the coder fixed a real §4.1 pruning-rule gap: zero tolerance for word-order reordering/pluralization, even against the curated list's own entries -- see the matching decision-log entries for the tester's finding, the coder's fix, security-reviewer PASS 6/6 (2026-09-08), and this qa PASS).** Built: `lib/fields/field-validation.ts` (`checkPruningRule` -- a curated, hand-reviewable per-derived-field list of known duplicate-name variants matched after Unicode-aware normalization, deliberately NOT a full NLP/embedding-similarity system nor a `data_type`-based match, reasoning documented in the file's own header; `validateFieldConfig` -- §4.3's per-`data_type` config shape, e.g. `pick_one`/`pick_many` require non-empty distinct `options[]`, `number` requires `min < max` plus a positive `step`, `rating`'s `min`/`max` are optional-but-paired with a 1-5 default applied by the caller) + `lib/fields/fields-repository.ts`'s new `createField` (kind=`account`|`strategy_var`, entitlement-gated, cross-user strategy-ownership-checked, clean-error-on-collision) + `lib/entitlements/fields-usage.ts`'s new `countActiveCustomFields` wired into `defaultCanDeps` + `docs/adr/0019-field-creation-entitlement-gate.md`. **Entitlement decision**: gates on the ALREADY-EXISTING `fields.custom` capability (`free: 0, pro: null`, present in `capability-table.ts` since Module 01's own first entitlements slice with zero real callers until now) rather than gating transitively through `strategy.create` -- ADR 0019 has the full reasoning (a field can be `kind='account'` with no strategy relationship at creation time at all, and the two capabilities could diverge in a future pricing change even though they resolve identically today). **Field id generation scheme** (a genuine judgment call, §3.1's own `'str.<uuid>.pd_array'` is confirmed-by-re-reading to be an illustrative example, not a mandated format): `'acct.' || uuidv7` / `'str.' || uuidv7`, generated server-side in SQL via the same `retrospeq.uuid_generate_v7()` every other PK in this schema uses -- deliberately NOT slugifying the trader's name into the id (renames would make a name-derived id segment permanently stale per §4.5, and arbitrary-name slugification can collide independently of the real `name` uniqueness constraint) and NOT embedding `owner_strategy_id` in a `strategy_var` field's id (would leave a stale artifact after a future §4.5 promotion to `account`) -- full reasoning in `createField`'s own header comment. Real `(user_id, name, owner_strategy_id)` collisions (already DB-enforced by Slice 03a's two partial unique indexes) are caught and translated into a clean `FieldNameConflictError`, matching `lib/broker/accounts-repository.ts`'s own `isUniqueViolation` precedent, never a raw Postgres error reaching the caller. 49 pure unit tests (`field-validation.test.ts`, incl. 20 pruning-rule duplicate-variant cases across all 9 derived fields plus 6 genuinely-novel-name accept cases) + 21 live-DB tests (`fields-repository.live.test.ts`: both kinds, id-prefix shape, config normalization/defaulting, the pruning rule end-to-end, config validation end-to-end, kind/scope mismatch, name-length bound, the real unique-index collision on both the unscoped and scoped index, independence of the two indexes, a cross-user `ownerStrategyId` hijack attempt correctly rejected with `StrategyNotFoundError` and no row written, a malformed non-UUID `ownerStrategyId` short-circuited before ever reaching Postgres, entitlement gate free/Pro incl. gate-runs-before-ownership-check ordering, and cross-user RLS isolation both for uniqueness scoping and for direct row visibility via `asRole`), all green (70 new tests total). `tsc --noEmit` and `eslint` both clean. `npm run build` hit this session's own already-escalated, NEEDS_YOUR_INPUT.md-tracked host-virtual-memory OOM pattern at the "Collecting page data" phase (TypeScript compilation itself completed cleanly first, same signature as every prior occurrence this session) -- reported honestly as infra-unverified, not a pass; no new NEEDS_YOUR_INPUT.md entry needed since this exact failure mode is already tracked there. No new runbook entry (no alerting/background-job condition introduced -- `createField`'s errors are ordinary synchronous validation rejections, not §7.3-shaped alerting conditions). Field rename/archive/type-change/promotion (§4.5), the field-cap warning (§4.8), trigger-condition authoring (§4.7), and any UI (field picker, field editor) all remain future sub-slices, unchanged in scope. **Slice 03d (§4.5's field LIFECYCLE -- rename + archive, backend only) is now CODED (2026-09-08), coder pass only, NOT yet independently tested/security-reviewed/QA'd.** Built: `lib/fields/fields-repository.ts`'s new `renameField`/`archiveField`, plus three new error classes (`FieldRecordNotFoundError` -- deliberately NOT reusing `strategy-validation.ts`'s own differently-scoped `FieldNotFoundError` name, to avoid a future forced import alias; `FieldDerivedImmutableError`; `FieldInUseError`, §9's real `FIELD_IN_USE`). `renameField` reuses `createField`'s own `checkPruningRule`/`FieldNameConflictError`/`FieldNameInvalidError` verbatim (renaming TO a derived-duplicate name or an active-field collision is rejected the same way creating it that way would be) and confirms-then-surfaces the derived-field block cleanly BEFORE ever attempting the UPDATE the `fields_forbid_derived_update` trigger would otherwise reject with raw trigger text -- verified live, not assumed (a real `renameField(_, 'drv.session', _)` call asserted to throw the new typed error with no trigger-shaped text in the message). `archiveField` checks `field_usages` generically across BOTH `used_by` values (only `'strategy'` rows can exist in this repo today -- no Module 04 rule-authoring-against-the-registry pipeline exists yet -- but the query is written to need zero changes once one does), resolves dependent labels via a direct schema-qualified SQL join to `retrospeq.strategies`/`retrospeq.rules`+`rule_versions` rather than a new `lib/fields -> lib/rules` TS import (no such import exists anywhere in this repo today, confirmed by grep; AGENTS.md's own "Analytics code cannot import rule code" non-negotiable made this feel worth avoiding by construction rather than by discipline alone), is idempotent on an already-archived field (no re-throw, returns the existing `archivedAt`), and closes the real check-then-write TOCTOU window (a concurrent `editStrategy` inserting a fresh `field_usages` row between the friendly pre-check and the write) with a single guarded UPDATE whose own WHERE clause re-checks `not exists (... field_usages ...)` atomically -- the same "encode the real invariant in the guarded write, not just an earlier read" posture this build's own Slice 7/10b races already established, applied here up front rather than found later. **Two judgment calls made explicit per this slice's own dispatch instruction, documented in both this entry and a substantial code comment in `fields-repository.ts` itself, not silently assumed either way**: (1) "change a field's type" (§4.5) needs NO new function -- it is `createField(...)` (already built, Slice 03c) optionally followed by a separate, caller-initiated `archiveField(...)` call on the old field id, decided NOT to auto-archive the old field as a side effect, since §4.5's own row never says the old field is archived automatically and the old field's captured history stays independently valid and useful; (2) `pick_one`/`pick_many` option add/remove is explicitly DEFERRED, not built -- removing an option needs a genuinely new `config` jsonb shape (a per-option soft-archive marker) this schema does not have today, is real design work outside a "rename + archive" dispatch's own scope, and has no caller yet (no field-editor UI exists at all). 19 new live-DB tests (`fields-repository.lifecycle.live.test.ts`): rename basics/trim/name-length, the pruning rule applied to rename (both an exact derived-name match and a curated variant), a real active-field name collision, a self-rename no-op, an archived-field rename reusing an active field's name (proving the two partial unique indexes' `state = 'active'` scoping), the derived-field block on both operations (message asserted clean of trigger/raise-exception text), not-found handling, idempotent double-archive, and -- the dispatch's own required centerpiece -- archiving BLOCKED by a real `field_usages` row seeded through Slice 03b's own real `createStrategy` (dependents array asserted to name the actual strategy), then confirmed to UNBLOCK once `editStrategy` rebuilds `field_usages` with that field removed, plus cross-user adversarial isolation (RLS + app-layer ownership check) for both operations. Full `lib/fields` suite re-run clean: 186/186 (167 pre-existing + 19 new). `tsc --noEmit` clean, `eslint .` clean (0 errors, the same 19 pre-existing warnings). **`npm run build` completed CLEAN this time** (~5.7GB free host memory checked first, no leftover node processes found before starting) -- the first time this exact session's own escalated OOM pattern did not recur, consistent with it being genuine host memory pressure rather than a code defect (matches the prior session's own "killing leftover processes recovers enough headroom" finding). No new migration (no schema change -- both operations write within `20260902010000_field_registry_schema.sql`'s existing columns). No new ADR (a Module 03 spec-interpretation judgment call, not a 00-foundation convention deviation -- documented in-file per this slice's own explicit instruction: code comment + this report, matching `docs/adr/0018`'s OWN threshold for when a judgment call gets a dedicated ADR file rather than an in-file comment). No new `docs/runbook.md` entry (same reasoning as Slice 03c's own entry just above -- `renameField`/`archiveField` are ordinary synchronous, caller-facing rejections, not a §7.3-shaped alerting/background-job condition). Promotion (§4.4/§6.1), trigger-condition authoring (§4.7), the field-cap warning (§4.8), pick_one/pick_many option add/remove (deferred above), and any UI all remain future sub-slices, unchanged in scope. Next: tester -> security-reviewer -> qa gate sequence on Slice 03d, matching this module's own established sequence. |
 | 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**AT A GLANCE (2026-09-04, latest, corrected): Both Slice 03a (field-
+**AT A GLANCE (2026-09-08, latest of latest): Slice 03d's coder follow-up
+fix (the TOCTOU gap below) has now been INDEPENDENTLY RE-VERIFIED A SECOND
+TIME, from scratch, by a separate dispatch -- PASS on all 7 items, no new
+gap, plus genuinely new 3-way-race and version-guard-interaction coverage.
+Full detail in the matching 2026-09-08 "SECOND-PASS INDEPENDENT
+RE-VERIFICATION" decision-log entry at the TOP of the Decision log section
+below. One honest open item that entry flags and this paragraph is not
+letting go stale: `npm run build` (the actual, unmodified command) failed
+4 consecutive times in that pass on host-memory grounds (confirmed infra,
+not a code regression, via a reverted diagnostic run) -- not yet
+demonstrated to pass cleanly as the literal command on this host. Next:
+security-reviewer/qa gate sequence on Slice 03d as a whole (both
+independent-verification passes are folded into that same slice, not
+separate ones) -- someone in that sequence should get one genuine clean
+`npm run build` before calling this slice fully done end-to-end.**
+
+**AT A GLANCE (2026-09-08, prior): Slice 03d's own TOCTOU gap (found by
+independent verification the same day, see the matching decision-log
+entry below) is now FIXED -- coder follow-up pass, not yet independently
+re-verified.** Two real fixes, both scoped exactly to the tester's own
+report, nothing else touched:
+
+1. **The archive-vs-reference concurrency gap (the real one).**
+   `archiveField`'s guarded UPDATE (`lib/fields/fields-repository.ts`) and
+   `rebuildFieldUsagesForStrategy` (`lib/fields/strategy-repository.ts`,
+   the only real code path that ever inserts a `field_usages` row, called
+   by `createStrategy`/`editStrategy`) now BOTH take
+   `pg_advisory_xact_lock(hashtext(field id))` -- keyed on the FIELD's own
+   id, deliberately NOT the user id (two different fields being archived/
+   referenced concurrently must not contend with each other; matches
+   `promoteRuleSeverity`'s own user-keyed lock in spirit, per-field here
+   because the invariant itself is per-field) -- as the first statement of
+   their own respective write transactions, before either one's real
+   write. This is the SAME lock-based technique already proven in this
+   session for Slice 7's hard-cap race and Slice 10b's create-cap race,
+   applied here for the first time to a race between TWO DIFFERENT TABLES
+   (no natural lock contention exists between a `fields` UPDATE and a
+   `field_usages` INSERT, which is exactly why the original guarded-UPDATE-
+   alone approach did not close this one -- see both functions' own header
+   comments, "CONCURRENCY FIX," for the full derivation). Also closes the
+   REVERSE direction, which was not explicitly named as broken but is the
+   same invariant from the other side: if `archiveField` wins the lock
+   first, `rebuildFieldUsagesForStrategy` now re-checks (fresh, post-lock)
+   that every referenced field is still `state = 'active'` before
+   inserting, throwing `FieldNotFoundError` (reused from
+   `strategy-validation.ts`) rather than silently referencing an archived
+   field. DEADLOCK AVOIDANCE: a single strategy save can reference multiple
+   fields at once, each needing its own lock -- `rebuildFieldUsagesForStrategy`
+   acquires all of them in one CONSISTENT sorted order (plain lexicographic
+   string sort on the field ids) regardless of the caller-supplied array
+   order, so two concurrent calls referencing the same fields in opposite
+   orders cannot deadlock. Verified live: the tester's own exact
+   reproducing test file
+   (`lib/fields/__tests__/fields-repository.lifecycle.independent-verify.
+   live.test.ts`) was extended (not weakened) into two deterministic
+   directions (A: a concurrent insert wins the lock, archiveField correctly
+   loses with `FieldInUseError`, field stays active; B: archiveField wins
+   the lock, the concurrent strategy-save correctly loses with
+   `FieldNotFoundError`, never a live `field_usages` row referencing an
+   archived field) using `waitForBlockedQuery` (`strategy-repository.live.
+   test.ts`'s own established `pg_stat_activity`-polling technique, which
+   now genuinely applies here post-fix, unlike before) instead of a
+   fixed-timeout guess, PLUS a third new test proving two concurrent
+   multi-field saves referencing the same two fields in opposite orders
+   both complete without deadlocking. Full `lib/fields` suite (202/202,
+   up from 186 + the tester's own 14 -- 3 net new tests from expanding item
+   1 into three) re-run clean, no regression to either function's
+   non-concurrent behavior.
+2. **`FieldNameConflictError.name` collision (small, pre-existing since
+   Slice 03c, zero live impact).** The constructor parameter carrying the
+   colliding field's name was called `name`, silently clobbered by the
+   next line's `this.name = 'FieldNameConflictError'` (the ordinary
+   Error-class-name tag every class in this file sets) -- both targeted
+   the SAME property. Fixed: parameter renamed to `fieldName` (no longer a
+   public parameter-property itself), stored under a new, distinct public
+   property, `conflictingFieldName`. `this.name` is untouched, still
+   `'FieldNameConflictError'`. Grepped `app/` and every test file in this
+   repo before the fix (confirmed by the tester, re-confirmed here) -- no
+   caller read `.name` expecting the field name, so no call-site needed
+   updating. Both call sites (`createField`, `renameField`) needed zero
+   changes (positional args, order unchanged). Regression tests added
+   asserting `.conflictingFieldName` carries the real name AND `.name`
+   still reads `'FieldNameConflictError'`, in both the tester's own
+   collision-shape test and the two `createField` collision tests in
+   `fields-repository.independent-verify.live.test.ts`.
+
+Verification: `tsc --noEmit` clean, `eslint .` clean (0 errors, the same
+19 pre-existing warnings, no new ones), full `lib/fields` suite 202/202
+live-DB tests passing, `npm run build` succeeded on the FIRST attempt (no
+host-OOM recurrence this run -- checked memory before starting, ~5.66GB
+free of 16GB, no orphaned node/vitest/next processes before or after).
+Every test user this pass's own new/extended tests created was cleaned up
+via the established `deleteTestAuthUser` shared-connection pattern --
+confirmed directly against `auth.users` afterward, 0 stale `fields-iv-*`
+rows remain. No dev server started (backend-only fix, no UI surface, per
+this dispatch's own explicit scope -- documentation/UI/type-change/
+option-add-remove decisions this slice already made are untouched). Next:
+security-reviewer/qa gate sequence on Slice 03d (this fix folded into that
+same slice, not a new one), matching this module's own established
+four-gate sequence.
+
+**AT A GLANCE (2026-09-08, prior): Slice 03d (§4.5's field lifecycle --
+`renameField`/`archiveField`, backend only) is now CODED, coder pass
+only, NOT yet independently tested/security-reviewed/QA'd** -- see the
+Phase 3 status-table row above (search "Slice 03d") for the coder's own
+full write-up: exact function signatures, the type-change/option-add-
+remove judgment calls (both explicitly decided and documented, not
+silently assumed), 19 new live-DB tests (186/186 `lib/fields` total),
+clean `tsc`/`eslint`/`npm run build` (the build's own recurring host-OOM
+pattern did NOT recur this run). Next: tester -> security-reviewer -> qa
+gate sequence on Slice 03d, matching this module's own established
+sequence exactly (Slices 03a/03b/03c all passed the same four-gate chain
+before being called done). **Superseded by the entry above -- independent
+verification found a real concurrency gap, now fixed.**
+
+**AT A GLANCE (2026-09-04, prior): Both Slice 03a (field-
 registry schema + two critical erasure fixes) AND Slice 03b (strategy
 CRUD + versioning, §4.6) are FULLY DONE** — full coder → tester →
 security-reviewer → qa gate sequence passed on BOTH, both committed and
@@ -8510,6 +8625,789 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-09-08 -- QA GATE, Module 03 Slice 03d (field LIFECYCLE -- section
+  4.5's rename/archive, backend only), retrospeq-qa dispatch, the final
+  gate before commit per this repo's own coder to tester to
+  security-reviewer to qa sequence. PASS on all 6 items, no blocking
+  finding, one worsening-but-already-tracked infra note on npm run build:
+  1. Spec fidelity to section 4.5 -- PASS. Re-read the literal field
+     lifecycle table (03-field-registry-and-strategy.md lines 196-208)
+     against the actual code. renameField matches "Safe. Id is stable;
+     the name is display only" exactly -- the UPDATE only ever touches
+     name, never id, and runs with no entitlement gate and no
+     state equals active restriction (a reasonable reading, since section
+     4.5 names no such restriction and renaming an archived fields label
+     is harmless). archiveField matches "Blocked if any rule references
+     it, naming the rules. Otherwise archives -- captured history is
+     retained" -- fetchFieldUsageDependents checks BOTH
+     field_usages.used_by branches (strategy and rule, per the schemas
+     own used_by column and section 9s own FIELD_IN_USE row) and names
+     the actual dependents; the write is a soft-delete (state archived,
+     archived_at set to now), never a real DELETE, so trade_captures
+     history stays valid forever, per section 4.5s own "captured history
+     is retained" framing. Both of the two documented judgment calls are
+     reasonable readings of a table that genuinely does not spell either
+     one out: (a) NOT auto-archiving the old field on a type change is
+     consistent with section 4.5s row describing an outcome ("creates a
+     new field with a new id"), not a mandate to retire the old one, and
+     leaves the old fields own history independently valid, matching the
+     modules own "captured history is retained" posture elsewhere;
+     (b) deferring pick_one/pick_many option add/remove is reasonable
+     given it needs a config jsonb shape (a per-option soft-archive
+     marker) this schema does not have today, and has zero live callers
+     (no field-editor UI exists).
+  2. Both judgment calls documented properly -- PASS. Read both the
+     in-file comments (fields-repository.ts lines roughly 958-1030,
+     "section 4.5 -- decisions this slice made explicit, not silently")
+     and the matching PROGRESS.md write-up (Phase-status table, search
+     "Slice 03d") side by side -- a future reader gets the same reasoning
+     from either one without re-deriving it: the type-change call gives
+     three independent numbered reasons (spec does not say the old field
+     is auto-archived; old history stays valid on its own terms; a caller
+     that wants both effects can already compose createField plus
+     archiveField explicitly) and the option-deferral call names exactly
+     what new config shape work is missing and why it is out of this
+     dispatchs own scope. Matches the bar Slice 10as percentile choice
+     and Slice 03bs entitlement-reuse decision (ADR 0018) already set --
+     reasoning-first, not a bare "decided X."
+  3. Concurrency-bug find-and-fix documentation -- PASS, spot-checked
+     against the actual decision-log entries themselves, not a
+     chat-relayed summary. Read all four 2026-09-08 entries directly:
+     the original INDEPENDENT VERIFICATION entry correctly states the
+     root cause (a field_usages INSERT takes a FOR KEY SHARE tuple lock
+     on the referenced fields row; archiveFields guarded UPDATE takes
+     FOR NO KEY UPDATE; Postgres's own lock matrix does not consider
+     those two modes to conflict, so a concurrent uncommitted
+     field_usages insert is invisible to the not-exists subquery) with a
+     genuine empirical two-connection reproduction, not a theoretical
+     claim; the CODER FOLLOW-UP entry correctly describes the fix
+     (pg_advisory_xact_lock keyed on hashtext of the field id as the
+     first statement of both archiveFields and
+     rebuildFieldUsagesForStrategys own transactions, a post-lock fresh
+     state re-check closing the reverse direction, and sorted
+     lexicographic lock acquisition order for deadlock avoidance across
+     multi-field saves); the SECOND-PASS INDEPENDENT RE-VERIFICATION
+     entry correctly reports PASS on all 7 re-derived items plus
+     genuinely new coverage (a 3-way archive/edit/edit race, an empirical
+     version-guard/field-lock interaction probe) with no new gap; the
+     SECURITY REVIEW GATE entry correctly reports PASS 5/5 with its own
+     independently-derived keyspace-collision, lock-ordering,
+     lock-input-provenance, RLS, and FieldNameConflictError-leak
+     analysis. All four entries are internally consistent with each
+     other and with the code as it actually exists today (independently
+     confirmed by direct reading of fields-repository.ts and
+     strategy-repository.ts, not assumed from the prose) -- no
+     discrepancy found between what any entry claims and what the code
+     does.
+  4. One genuine, clean npm run build -- PASS, via the same
+     diagnostic-then-revert protocol the second-pass tester used, with an
+     honest note that the DEFAULT commands own reliability is worsening,
+     not improving, as this slices gate sequence has gone on. Ran the
+     literal, unmodified npm run build twice before any diagnostic
+     change -- both failed with this sessions own well-known host-memory
+     worker-crash signature (exit code 3221226505, then 2147483651;
+     roughly 5.2GB of 16GB free both times, confirmed via
+     Get-CimInstance Win32_OperatingSystem, no orphaned node/next
+     processes via tasklist either time). Applied the SAME temporary
+     experimental.cpus set to 2 diagnostic the second-pass tester used to
+     next.config.ts -- succeeded cleanly on the first attempt (compiled,
+     typechecked, generated all 24 routes). Reverted next.config.ts
+     immediately after, confirmed via git diff --stat next.config.ts and
+     git status --porcelain next.config.ts both showing nothing. Ran the
+     literal default command twice MORE after reverting, out of due
+     diligence -- both failed again with the identical crash signature.
+     Net: FOUR consecutive default-command failures across this one QA
+     pass (matching, not merely echoing, the second-pass testers own
+     four-failure count from earlier the same day), against the coders
+     own two EARLIER clean first-attempt builds from earlier in this same
+     slices history -- the diagnostic-assisted build is the only clean
+     pass obtained THIS dispatch, and it corroborates (does not merely
+     repeat) the standing conclusion that this is genuine host memory
+     pressure, not a code regression: tsc/Turbopacks own compile plus
+     typecheck phase completed cleanly every single one of the four
+     failed attempts before the later "Collecting page data" phase
+     crashed. Flagging plainly rather than glossing over: the literal
+     default command has now failed on every attempt by every dispatch
+     AFTER the coders own two passes today -- worth the owners attention
+     as the experimental.cpus permanent-lowering question already raised
+     by the second-pass tester, not a new ask, just reinforced evidence.
+  5. Standard non-negotiables -- PASS. Grepped
+     lib/fields/fields-repository.ts and lib/fields/strategy-repository.ts
+     for rule_evaluations, xp_, adherence, currency-or-P&L, and points:
+     only doc-comment cross-references (adherence-display.tss own join
+     shape cited as precedent, a pre-existing deleteAllFieldsForUser
+     comment listing rule_evaluations as a table this function
+     deliberately does NOT touch) -- zero write paths, zero imports. No
+     compound-rule (AND/OR) shape anywhere -- this module never touches
+     the rule-expression engine at all. No currency/P&L surface -- this
+     is backend field-registry lifecycle code with no dashboard
+     rendering involved.
+  6. No untracked half-built gap -- PASS. Checked promotion
+     (sections 4.4/6.1), trigger-condition authoring (section 4.7), the
+     field-cap warning (section 4.8), pick_one/pick_many option
+     add/remove, and any UI directly against the spec sections named --
+     all confirmed genuinely out of THIS slices own scope (rename/archive
+     only) and already logged as future sub-slices in both this file and
+     the codes own header comments, not silently left ambiguous.
+  Independently re-ran rather than trusted the reported counts: npx
+  vitest run lib/fields -- 218 passed / 0 failed / 0 skipped across 11
+  files (exact match to the second-pass testers own count); tsc
+  --noEmit clean; eslint . clean, 0 errors, the same 19 pre-existing
+  warnings (byte-identical list). Module 03 Slice 03d clears the QA
+  gate -- PASS, ready to commit. Field rename/archive/type-change/
+  promotion (section 4.5s remaining rows), the field-cap warning
+  (section 4.8), trigger-condition authoring (section 4.7), and any UI
+  all remain future sub-slices, unchanged in scope.
+
+- 2026-09-08 -- SECURITY REVIEW GATE, Module 03 Slice 03d (field
+  LIFECYCLE, §4.5 rename/archive), the concurrency-fix build the two
+  2026-09-08 entries below this one describe and the second-pass
+  independent re-verification above them already covered end to end.
+  This is the security-reviewer's OWN dedicated gate, per its dispatch's
+  explicit framing -- blocking authority, does not re-trust the tester's
+  own re-verification for items it can independently check itself.
+  **PASS on all 5 focus items**, verified by direct code reading
+  (`lib/fields/strategy-repository.ts`, `lib/fields/fields-repository.ts`,
+  `supabase/migrations/20260902010000_field_registry_schema.sql`,
+  `lib/supabase/direct.ts`) plus live-DB test re-execution, not by
+  trusting either the coder's fix report or the tester's own two
+  independent-verification passes:
+  1. **Advisory-lock key-choice collision analysis -- PASS, no
+     correctness risk, confirmed beyond what the prior reviews already
+     established.** Confirmed directly: every `pg_advisory_xact_lock`
+     call site in this repo (`strategy-repository.ts` L277 and
+     `fields-repository.ts` L931, both field-id-keyed; `severity-
+     lifecycle-repository.ts` L230 and `rules-repository.ts` L333, both
+     user-id-keyed) uses the single-`bigint`-argument overload
+     (`hashtext(...)` returns `int4`, implicitly widened to `bigint`),
+     never the two-`int`-argument form -- so all four call sites genuinely
+     share ONE Postgres advisory-lock keyspace (Postgres's own lock-tag
+     internals give the single-bigint form and the two-int form disjoint
+     `objsubid` tags; this repo never uses the latter, so that potential
+     escape hatch is moot -- everything here really is one space).
+     `hashtext()` hashes raw bytes with no knowledge of the caller's
+     intended "kind" of string, so a `fields.id` (`'acct.<uuidv7>'`/
+     `'str.<uuidv7>'`) colliding with an unrelated `profiles.id` UUID
+     string's hash is possible in principle -- probability ~1/2^32 per
+     specific pair, the same order of magnitude the repo's own prior
+     reviews (Slice 10b's security-reviewer pass, PROGRESS.md L3483-3499;
+     this slice's own first- and second-pass tester re-verifications,
+     L8718-8727) already accepted for the user-id-only keyspace, now
+     re-confirmed to still hold with a THIRD keyspace (field ids) added.
+     Consequence, independently re-derived rather than re-quoted: harmless
+     extra serialization at worst, NEVER a correctness or authorization
+     problem, because advisory locks grant no access of their own -- every
+     guarded UPDATE/INSERT this repo pairs with a lock (`archiveField`'s
+     `where ... state = 'active' and not exists (...)`,
+     `rebuildFieldUsagesForStrategy`'s post-lock state re-check,
+     `promoteRuleSeverity`'s/`insertRuleAndVersion`'s own count guards)
+     still re-checks the REAL id/user_id in its own WHERE clause regardless
+     of which lock number was acquired to get there.
+     Went one step further than the prior reviews by checking the ONE new
+     wrinkle this slice introduces that neither Slice 10b's review nor the
+     tester's own re-verification explicitly traced: within a SINGLE
+     transaction, `insertStrategyAndVersion` (`strategy-repository.ts`
+     L495) acquires a user-id lock FIRST, then -- still inside the same
+     transaction, before commit -- calls `rebuildFieldUsagesForStrategy`
+     (L533), which acquires one or more field-id locks. Confirmed by
+     reading every call site in the repo that this is the ONLY function
+     that ever holds two DIFFERENT advisory-lock keyspaces open at once,
+     and confirmed the ordering is fixed and one-directional everywhere:
+     no code path acquires a field-id lock and then attempts a user-id
+     lock (`archiveField` acquires exactly one lock, its own field's,
+     ever; `applyStrategyEditVersion` acquires field-id locks only, no
+     user-id lock at all). A real (non-collision) deadlock between the two
+     keyspaces is therefore impossible by construction -- standard
+     lock-ordering discipline, one direction only, everywhere. Even in the
+     astronomically unlikely double-coincidence case (two independent
+     ~1/2^32 collisions lining up to form an actual wait-for cycle across
+     two concurrent transactions), Postgres's own deadlock detector (runs
+     every ~1s by default) would abort one side with a `deadlock_detected`
+     error rather than hang -- worst case is a transient, retryable
+     failure on a vanishingly rare coincidence, never silent corruption or
+     an authorization bypass. Confirms Slice 10b's own prior conclusion
+     ("no cycle is possible... neither ever holds a second lock while
+     waiting on another") still holds for the narrower two-user-id-lock-
+     sites case it was written about, and extends the same reasoning
+     (this review's own, not merely restated) to now cover the field-id
+     keyspace and the one new same-transaction nesting case this slice
+     actually introduces.
+  2. **Lock-input provenance -- PASS, both call sites hash a
+     server-validated, immutable field id, never raw client input.**
+     `archiveField(userId, fieldId)` (`fields-repository.ts` L908-931):
+     confirmed the `pg_advisory_xact_lock(hashtext($1::text))` statement
+     at L931 only ever runs AFTER `fetchFieldForLifecycleOp` (L909) has
+     already confirmed `fieldId` resolves to a real row owned by this
+     `userId` (throws `FieldRecordNotFoundError` otherwise, L910-912) and
+     after the dependents pre-check (L920-923) -- a caller cannot reach
+     the lock statement with an arbitrary, non-existent string; the only
+     "choice" a hostile caller retains is which of their OWN real field
+     ids to name, which is already-authorized access, not a lock-key
+     injection. `rebuildFieldUsagesForStrategy`'s field-id list
+     (`strategy-repository.ts` L258-277) is sourced from
+     `input.fields.map(f => f.fieldId)` in both `insertStrategyAndVersion`
+     and `applyStrategyEditVersion`, but by the time either reaches that
+     call, `createStrategy`/`editStrategy` have already run
+     `fetchFieldDefinitionsByIds` (scoped `user_id = $1 and state =
+     'active'`) and `validateCaptureMoments`, which throws
+     `FieldNotFoundError` (`strategy-validation.ts` L190-193) for any
+     `fieldId` absent from that user-scoped map -- confirmed by direct
+     read, not assumed. Every field id ever hashed is therefore always a
+     real `fields.id` value, server-generated once at `createField` time
+     via `retrospeq.uuid_generate_v7()` (`fields-repository.ts` L440) and
+     never re-derived or client-constructed afterward (§4.5: "Id is
+     stable"). At worst a DoS-adjacent concern (a hostile caller could in
+     principle brute-force a string that hashes to a target 32-bit value
+     to induce a targeted collision), explicitly the same low severity the
+     dispatch itself flagged -- not escalated, since advisory locks grant
+     no access.
+  3. **RLS/ownership on `archiveField` and `renameField` -- PASS,
+     independently re-confirmed against the actual migration and
+     connection-role code, not re-trusted from the tester's own pass.**
+     `20260902010000_field_registry_schema.sql` L206-227: `retrospeq.fields`
+     has `enable row level security` plus four real per-command owner
+     policies (`fields_owner_select`/`_insert`/`_update`/`_delete`, all
+     `user_id = auth.uid()`) -- confirmed live via
+     `lib/supabase/__tests__/field-registry-schema.rls.test.ts`, re-run
+     this pass (41 passed, 1 skipped -- the skip is the standard
+     `describe.skipIf(!env)` non-live-DB guard, not a gap). Both
+     `renameField` and `archiveField` run under `withUserConnection`
+     (`lib/supabase/direct.ts` L93-98, read directly: `set local role
+     authenticated` plus `request.jwt.claims` resolving `auth.uid()` to
+     the caller's own `userId` -- a genuine Postgres role/claims switch,
+     not an application-layer trust assumption), AND both carry an
+     explicit `where user_id = $1` predicate on every query
+     (`fetchFieldForLifecycleOp` L594-618, the rename UPDATE L764-770,
+     the archive UPDATE L933-943) -- real defense-in-depth, not redundant
+     dead code, matching this repo's own established
+     `fetchCurrentStrategyForEdit` precedent exactly. Cross-user access is
+     structurally a `FieldRecordNotFoundError` (never an existence-leaking
+     distinct error), confirmed by reading `fetchFieldForLifecycleOp`'s
+     own `and user_id = $1` clause and the RLS test file's own dedicated
+     cross-user cases (L256-270, L599-613).
+  4. **`FieldNameConflictError.conflictingFieldName` -- PASS, no new
+     information disclosure, no cross-user leak, both confirmed by
+     reading the code rather than assumed.** `conflictingFieldName`
+     carries the exact same `fieldName` string already baked into
+     `.message` at construction time (`fields-repository.ts` L202-220)
+     for both call sites (`createField`'s catch block L456-459,
+     `renameField`'s catch block L781-785) -- confirmed the fix touched
+     only `.name`/the new `.conflictingFieldName` property, not
+     `.message`'s own construction, so no caller gains any string they
+     could not already read off `.message`. Confirmed the "always the
+     calling user's own other field" claim directly against the schema,
+     not assumed: both partial unique indexes that can ever produce this
+     collision (`fields_unique_active_scoped`, `fields_unique_active_
+     unscoped`, migration L198-204) have `user_id` as a leading index
+     column, so a Postgres unique-violation on either can only ever fire
+     against an existing row belonging to the SAME `user_id` -- a
+     cross-user collision is not merely unlikely, it is structurally
+     impossible for this specific index shape.
+  5. **Standard non-negotiables -- PASS.** Grepped `lib/fields/` for
+     `rule_evaluations`/`xp_`/`adherence`/`eval(`/`new Function`: zero
+     write-path hits (three doc-comment cross-references to
+     `adherence-display.ts` for join-shape precedent only, no import, no
+     write). No compound-rule (`AND`/`OR`) shape anywhere in this module
+     -- it doesn't touch the rule-expression engine at all. Every
+     `client.query` call site in both `strategy-repository.ts` and
+     `fields-repository.ts` re-read directly: 100% parameterized
+     (`$1`/`$2`/...), the one `${role}` template-literal interpolation
+     in `lib/supabase/direct.ts` L67 is a fixed two-literal enum
+     (`'authenticated' | 'service_role'`) never derived from caller
+     input, not a SQL-injection surface.
+  Re-ran, live against the shared dev Supabase project, rather than
+  trusting the tester's own reported numbers: `fields-repository.
+  lifecycle.reverify2.live.test.ts` + `fields-repository.lifecycle.
+  independent-verify.live.test.ts` + `strategy-repository.live.test.ts`
+  (50/50 passed) and `field-registry-schema.rls.test.ts` (41 passed / 1
+  skipped) -- all green, no regression. Did not run `npm run build`, per
+  this dispatch's own explicit instruction, given this session's own
+  separately-tracked host-memory-exhaustion pattern; every item above is
+  verifiable by code reading and live-DB test execution alone, and none
+  of the 5 items depends on a production build succeeding. No Node/vitest
+  process left running after this pass (confirmed via `tasklist`).
+  **Module 03 Slice 03d clears the security gate -- PASS, no blocking
+  finding.**
+
+- 2026-09-08 -- SECOND-PASS INDEPENDENT RE-VERIFICATION (COMPLETE, FROM
+  SCRATCH), Module 03 Slice 03d (field LIFECYCLE -- §4.5's rename/archive),
+  dispatched separately again after the coder's follow-up fix (the
+  `pg_advisory_xact_lock(hashtext(field id))` fix in BOTH `archiveField`
+  (`lib/fields/fields-repository.ts`) and `rebuildFieldUsagesForStrategy`
+  (`lib/fields/strategy-repository.ts`), plus the `FieldNameConflictError`
+  `.name`/`.conflictingFieldName` fix -- see the two 2026-09-08 entries
+  directly below this one for the full original-gap-and-fix history this
+  entry re-verifies). Per this dispatch's own explicit instruction to
+  re-derive everything independently rather than trust the fix report --
+  **PASS on all 7 numbered items, no new gap found, plus one genuinely new
+  class of coverage added (a 3-way archiveField/editStrategy/editStrategy
+  mixed race, and an explicit empirical probe of the version-guard/
+  field-lock interaction) that neither the coder's own tests nor the first-
+  pass independent verification attempted:**
+  1. **Both TOCTOU-fix directions re-derived with FRESH real two-connection
+     adversarial timing, via `editStrategy` (not `createStrategy`, unlike
+     every existing test in this repo) as the field-referencing side --
+     PASS, both directions.** New file:
+     `lib/fields/__tests__/fields-repository.lifecycle.reverify2.live.test.ts`.
+     Direction A (edit wins): a manually-driven raceConn replaying
+     `archiveField`'s own exact lock-then-guarded-UPDATE sequence is forced
+     to release (roll back) once it observes the real, concurrent
+     `editStrategy` call genuinely blocked on the SAME per-field advisory
+     lock (`waitForBlockedQuery`, live `pg_stat_activity` polling, not a
+     fixed timeout) -- the real `editStrategy` call then correctly completes,
+     `field_usages` row present, field stays active. Direction B (archive
+     wins): a raceConn deterministically wins the lock FIRST (acquired
+     synchronously before the concurrent call ever starts, avoiding the
+     nondeterministic-ordering bug my own first draft of this test had --
+     see below), replays `archiveField`'s own real archiving UPDATE, THEN
+     the real `editStrategy` call is started concurrently and observably
+     blocks on the same lock; once raceConn commits the archive,
+     `editStrategy` correctly rejects with `FieldNotFoundError`. **New check
+     beyond the first-pass file:** confirmed the REAL `editStrategy` call's
+     WHOLE transaction rolled back on this rejection, not just the
+     `field_usages` insert -- `strategies.current_version` stayed at 1, no
+     orphaned `strategy_versions` version-2 row was ever committed, the
+     strategy's name was never overwritten. **A genuine bug in my OWN first
+     draft of Direction B, caught and fixed before trusting the result:** my
+     first attempt started the real `archiveField` call and the raceConn's
+     manual sequence "concurrently" with no forced ordering, assuming
+     `archiveField` would win the lock because it was fired first --
+     `archiveField` actually does two preliminary DB reads
+     (`fetchFieldForLifecycleOp`, `fetchFieldUsageDependents`) before ever
+     reaching its own lock statement, so in practice the raceConn's shorter
+     raw-SQL sequence usually reached the lock FIRST, the opposite of the
+     scenario the test's own name claimed -- my test then deadlocked against
+     itself (an `await` on the real call that could only resolve after a
+     `raceConn.commit()` my own code hadn't reached yet), hanging for the
+     full 25s test timeout. Root-caused via the actual timeout output (not
+     assumed), fixed by making the lock-acquisition order deterministic
+     (raceConn takes the lock synchronously, in my own test code, BEFORE the
+     concurrent real call is ever started) -- the same technique the
+     coder's/first-pass tester's own working tests already used, which I
+     had deviated from in my first draft. Reported here in full rather than
+     silently fixed and left unmentioned, since a subtle test-harness
+     ordering bug producing a false hang is exactly the kind of thing this
+     whole re-verification exercise exists to catch.
+  2. **No regression to Slice 03b's own optimistic-concurrency guarantee;
+     no widened/narrowed window causes an incorrect outcome -- PASS,
+     confirmed empirically, not just by re-running old tests.** Full
+     `lib/fields` suite re-run (see item 6) -- includes
+     `strategy-repository.live.test.ts`'s own GENUINE two-connection
+     `applyStrategyEditVersion` proof and `strategy-repository.independent-
+     verify.live.test.ts`'s own prior re-derivation (a DIFFERENT mechanism,
+     `Promise.all` same-stale-version double-submit, not a held-transaction
+     lock) -- both still pass unmodified, no regression. Beyond re-running:
+     a genuinely NEW empirical probe (this dispatch's own explicit ask) --
+     forced a real `editStrategy` call to block mid-transaction on a
+     contended field lock (raceConn holds the field's advisory lock first)
+     WHILE that call was still holding its own uncommitted version-bump
+     (supersede UPDATE + new `strategy_versions` row + `strategies.
+     current_version` update) open, then fired a SECOND real `editStrategy`
+     call at the SAME stale `expectedVersion` while the first was still
+     blocked. Result: the new per-field lock genuinely WIDENS the WALL-CLOCK
+     window call #2 spends blocked (it now waits behind both the
+     strategy_versions row lock AND, transitively, however long call #1's
+     own field-lock wait takes) but does NOT change the correctness
+     guarantee -- call #2 still deterministically loses with
+     `StrategyEditConflictError` once call #1 finishes, `current_version`
+     ends at exactly 2 (never a phantom 3), no hang. Also traced through by
+     reading the code directly: the field-lock acquisition inside
+     `rebuildFieldUsagesForStrategy` happens strictly AFTER
+     `applyStrategyEditVersion`'s own version-conflict guard has already
+     been evaluated and won within the same transaction -- a caller that
+     LOSES the version race throws and rolls back before ever reaching the
+     field lock, so the two mechanisms never interact in a way that could
+     let a version-conflict be masked or a phantom version be created.
+     Separately noted, not a blocker: every advisory lock in this codebase
+     (`promoteRuleSeverity`'s user-keyed lock, `insertStrategyAndVersion`'s
+     user-keyed lock, `insertRuleAndVersion`'s user-keyed lock, and this
+     slice's own field-keyed locks) shares ONE 32-bit `hashtext()` keyspace
+     -- a hash collision between, say, a user id and an unrelated field id
+     is theoretically possible and would cause only harmless EXTRA
+     serialization (never a correctness problem, since every guarded
+     UPDATE's own WHERE clause still scopes strictly to the real id) --
+     already correctly documented as such in `archiveField`'s own header,
+     re-confirmed here rather than re-flagged as new.
+  3. **Deadlock-avoidance re-derived via `editStrategy` (not
+     `createStrategy`), PLUS a genuinely new 3-way mix -- PASS, no
+     deadlock in either scenario.** Two concurrent `editStrategy` calls on
+     DIFFERENT strategies referencing the SAME two fields in OPPOSITE order
+     both completed (`newVersion: 2` for both, all 4 expected `field_usages`
+     rows present). **New coverage beyond both the coder's and first-pass
+     tester's own tests:** a 3-way mix -- two such `editStrategy` calls
+     (opposite field order) PLUS a THIRD, fully concurrent `archiveField`
+     call on one of the same two fields, all three fired together via
+     `Promise.allSettled` -- no hang, no `deadlock detected` error from any
+     of the three outcomes, and the core invariant this whole slice exists
+     to protect held regardless of which side won: never both "field X is
+     archived" AND "a live `field_usages` row references field X." Confirmed
+     by direct code reading, not just empirically, why no cycle is possible:
+     `archiveField` only ever acquires ONE lock (its own field's), so it can
+     never be a link in a wait-for cycle requiring two mutually-held
+     resources; the two `editStrategy` calls both acquire their two field
+     locks in the SAME globally-consistent sorted order, so between THEM no
+     cycle is possible either.
+  4. **`FieldNameConflictError.conflictingFieldName`/`.name` re-derived, a
+     second fresh collision fixture (both `createField` and `renameField`
+     paths) -- PASS.** `.name` reads `'FieldNameConflictError'` in both
+     cases; `.conflictingFieldName` carries the real colliding name
+     (`'Gamma Quartz'`, `'Delta Quartz'` -- names distinct from every prior
+     pass's fixtures) in both cases.
+  5. **Full re-derivation, item-for-item, all fresh fixtures (distinct
+     `fields-rv2-*` test-user prefix, distinct derived-field ids
+     `drv.day_of_week`/`drv.order_type`/`drv.planned_rr`/`drv.session` --
+     the 3 previously-unused derived ids in this repo's own 9-row catalogue,
+     plus one deliberate re-use across a fresh user, harmless since these
+     rows are per-user) -- PASS on every sub-item:** derived-field block on
+     both rename/archive plus a raw `service_role` UPDATE/DELETE bypass
+     attempt; pruning-rule-on-rename (a fresh plural variant, "Sessions" for
+     canonical "Session," plus "Hold times" for "Hold time," plus a control
+     case); idempotent double-archive timestamp stability across a real
+     1.5s gap; RLS/ownership under fresh cross-user fixtures including a raw
+     RLS-scoped SELECT and a raw attacker-role UPDATE attempt; `FieldInUseError`
+     naming a real dependent strategy, then succeeding once the reference is
+     removed via a real `editStrategy` call (not just `archiveField` in
+     isolation).
+  6. **Full suite re-run myself, exact counts confirmed -- PASS.**
+     `npx vitest run lib/fields`: 218 passed / 0 failed / 0 skipped (202
+     pre-existing + 16 new, all in the new `reverify2` file above) -- ran
+     TWICE, once isolated (confirming the new file's own 16/16 clean) and
+     once as part of the full `lib/fields` suite (confirming no
+     interference/leakage between files). `tsc --noEmit`: clean. `eslint .`:
+     clean, 0 errors, the same 19 pre-existing warnings (unrelated files,
+     confirmed by diffing the warning list against the coder's own last
+     report). `npm run build`: hit this session's own well-documented
+     host-memory build-worker crash (`Zone Allocation failed - process out
+     of memory`, `exit code: 3221226505`) on FOUR consecutive attempts in a
+     row this run (worse than the single-retry recovery every prior entry
+     in this ledger reports) -- confirmed via `tasklist`/`wmic` before each
+     attempt that free memory was consistently ~5.3-5.7GB of 16GB with NO
+     orphaned node/vitest/next processes, i.e. genuine host memory pressure
+     from OTHER running applications (Edge WebView2 instances, Chrome,
+     M365Copilot, confirmed by process list), not a leak from this
+     dispatch's own work. To distinguish "real build regression" from "this
+     host cannot currently spare enough memory for 11 parallel Turbopack
+     page-data-collection workers" (`next build`'s own default worker count
+     is `cpus - 1` = 11 on this 12-core host, confirmed by reading
+     `node_modules/next/dist/build/index.js`'s own `getNumberOfWorkers`),
+     ran ONE temporary, diagnostic-only build with `experimental.cpus: 2`
+     added to `next.config.ts` -- succeeded cleanly (compiled, typechecked,
+     generated all 24 routes) on the very first attempt at reduced
+     parallelism. This config change was NOT a proposed fix and was
+     REVERTED immediately after (confirmed via `git diff next.config.ts`
+     showing no changes) -- it exists only as a diagnostic to confirm the
+     four real-build-script failures were host-memory infra flakiness, not
+     a code regression from this slice's own changes. Reporting the four
+     genuine `npm run build` failures honestly rather than only the
+     diagnostic pass: **`npm run build` (the actual, unmodified command)
+     did NOT succeed during this dispatch** -- this is worse infra luck
+     than every prior entry in this ledger, and is flagged here rather than
+     glossed over, even though the diagnostic strongly suggests (and `tsc`/
+     Turbopack's own compile+typecheck phase, which completed successfully
+     all four times before the worker crash, corroborates) there is no real
+     code-level build regression.
+  7. **Memory hygiene -- PASS, with an honest note.** Checked memory before
+     starting (~5.6GB free) and after every `npm run build` attempt (stayed
+     ~5.3-5.7GB throughout, never trending toward exhaustion from THIS
+     dispatch's own work) -- `tasklist` confirmed no orphaned node/vitest/
+     next processes at any point, including immediately after this dispatch's
+     own final actions. All three fresh test users this dispatch's own new
+     fixtures created (`fields-rv2-race`, `fields-rv2-deadlock`,
+     `fields-rv2-window`, `fields-rv2-conflict`, `fields-rv2-derived`,
+     `fields-rv2-x-owner`/`fields-rv2-x-attacker`) cleaned up via the
+     established `deleteTestAuthUser` shared-connection pattern, confirmed
+     directly against `auth.users` afterward via a raw query for both this
+     pass's `fields-rv2-*` prefix AND the first pass's `fields-iv-*` prefix
+     -- 0 stale rows for either. No dev server started (backend-only slice,
+     no UI surface, nothing to screenshot).
+  **Net call: Slice 03d's coder follow-up fix is SOUND -- both TOCTOU-fix
+  directions hold under fresh, genuinely adversarial two-connection timing
+  (via a different code path, `editStrategy`, than every existing test in
+  this repo used), the fix does not regress or unsafely interact with Slice
+  03b's own optimistic-concurrency guarantee (only a harmless wall-clock
+  widening, confirmed empirically), the lexicographic lock-ordering
+  genuinely prevents deadlock including in a novel 3-way mix, and the
+  `FieldNameConflictError` fix is correct in both directions. The ONE real
+  gap this pass surfaces is NOT in the application code -- it is that
+  `npm run build` (the literal, unmodified command) failed four consecutive
+  times this run on pure host-memory grounds, confirmed via a reverted
+  diagnostic to be infra, not a code regression, but genuinely not
+  demonstrated to pass as the actual command exists today on THIS host in
+  THIS dispatch. Recommend a follow-up owner decision on whether
+  `experimental.cpus` should be permanently lowered in `next.config.ts` for
+  this development machine -- NOT decided here, since that is a build-
+  performance/infra tradeoff outside a test-verification dispatch's own
+  scope, and is flagged rather than silently applied.** New test file (not
+  yet reviewed by security-reviewer/qa): `lib/fields/__tests__/fields-
+  repository.lifecycle.reverify2.live.test.ts` (16 tests, live DB). Next:
+  this fix + both independent-verification passes are ready for the
+  security-reviewer/qa gate sequence on Slice 03d as a whole, matching this
+  module's own established four-gate sequence -- unresolved before that
+  gate: someone should attempt `npm run build` again on a less memory-
+  constrained run to get one genuine, non-diagnostic-assisted clean pass
+  before calling this slice fully done end-to-end.
+
+- 2026-09-08 -- INDEPENDENT VERIFICATION, Module 03 Slice 03d (field
+  LIFECYCLE -- §4.5's rename/archive), dispatched separately from the coder
+  who built `renameField`/`archiveField` in `lib/fields/fields-repository.ts`.
+  Per this dispatch's own 8-point instruction -- **PASS on 7 of 8 items, ONE
+  real, specific, confirmed-not-theorized concurrency gap on item 1 (a
+  genuine finding, reported plainly), plus one incidental real bug found
+  while probing item 6 (also reported plainly, not folded silently into a
+  "pass"):**
+  1. **TOCTOU probe against `archiveField`'s guarded UPDATE -- REAL GAP
+     FOUND, empirically reproduced against the live DB, not simulated.**
+     Read the guarded UPDATE's own SQL first (`... where state = 'active'
+     and not exists (select 1 from field_usages ...) returning archived_at`)
+     before attempting to defeat it, per this dispatch's own instruction.
+     Checked Postgres's own row-lock conflict matrix BEFORE writing a test
+     (not assumed): `field_usages(user_id, field_id) references fields
+     (user_id, id)` makes an INSERT into `field_usages` take a `FOR KEY
+     SHARE` tuple lock on the referenced `fields` row; the guarded UPDATE
+     (touching only `state`/`archived_at`, neither part of the PK) takes a
+     `FOR NO KEY UPDATE` tuple lock -- and `FOR KEY SHARE` does NOT conflict
+     with `FOR NO KEY UPDATE` in Postgres's own lock matrix. Net effect:
+     there is no lock contention between the two statements at all, so
+     `waitForBlockedQuery`/`pg_stat_activity`-polling (this session's usual
+     "genuine two-connection" technique, `strategy-repository.live.test.ts`'s
+     own precedent) has nothing to observe -- confirmed this is a real
+     structural fact about the two statements, not a limitation of the test
+     technique. Built the race the only way it can actually be proven
+     instead: a real second `pg` connection opens `begin`, inserts a real
+     `field_usages` row (replaying the exact statement
+     `rebuildFieldUsagesForStrategy` issues, referencing a REAL, previously
+     committed `createStrategy` strategy) and holds it UNCOMMITTED, while
+     the real `archiveField(...)` call runs concurrently on its own
+     connection, then commits the held insert and inspects final state.
+     **Empirical, reproducible result:** `archiveField` completes
+     successfully (does not throw `FieldInUseError`) because its own
+     UPDATE's MVCC snapshot (taken at that statement's own start, READ
+     COMMITTED) cannot see the still-uncommitted `field_usages` row -- the
+     `not exists` check passes, the archive commits, and the `field_usages`
+     insert goes on to commit for real moments later. Final DB state
+     confirmed directly (not inferred): `fields.state = 'archived'` AND a
+     live, committed `field_usages` row referencing that same field both
+     exist simultaneously -- exactly the inconsistency this dispatch asked
+     the probe to look for ("a field ending up archived WHILE a strategy
+     still references it"). **This is a real gap, not a false alarm**: the
+     "single guarded UPDATE closes the TOCTOU window" pattern that
+     genuinely worked for Slice 7's hard-cap race and Slice 10b's create-cap
+     race worked there because both of THOSE races have natural lock
+     contention (both sides write/lock the SAME row or advisory-lock key)
+     forcing serialization; this race's two sides touch DIFFERENT tables
+     with no such contention, so a single guarded UPDATE on `fields` alone
+     cannot see a concurrent, not-yet-committed write to `field_usages` --
+     no ordinary SQL-level guard on the `fields` table closes this without
+     either (a) `SELECT ... FOR UPDATE`-locking every relevant
+     `field_usages` row from inside the SAME transaction as the archive
+     (forcing real serialization against `rebuildFieldUsagesForStrategy`'s
+     own writes), or (b) `SERIALIZABLE` isolation for this specific
+     transaction. **Not fixed by me** -- per this dispatch's own scope
+     (independent verification, not a fix dispatch) -- flagged here as a
+     real, closeable gap for a near-term coder follow-up, with the exact
+     mechanism and a reproducing regression test already in hand
+     (`lib/fields/__tests__/fields-repository.lifecycle.independent-verify.
+     live.test.ts`, "GENUINE two-connection TOCTOU probe" describe block).
+     Practical exposure today is narrow (requires a real concurrent
+     archive-vs-strategy-save race, a genuinely possible but not everyday
+     interleaving) but the failure mode itself (silent, no error surfaced to
+     either caller) is exactly the class this session has treated as a real
+     finding every other time it's turned up (Slice 7, Slice 10b, Slice
+     10f).
+  2. **Derived-field block re-derived, fresh fixtures, both operations, PLUS
+     a raw service_role bypass attempt -- PASS.** `renameField`/`archiveField`
+     against `drv.risk_pct`/`drv.hold_seconds` (different ids than the
+     coder's own `drv.session`/`drv.direction`) both throw a clean
+     `FieldDerivedImmutableError` with no raw trigger text
+     (`fields_forbid_derived_update`/`_delete`, `raise exception`, `23514`)
+     reaching the caller, row untouched either way. Additionally -- per this
+     dispatch's own instruction to check under service_role, matching this
+     migration's own header instruction to test "adversarially under BOTH
+     authenticated and service_role" -- read `forbid_derived_field_update`/
+     `forbid_derived_field_delete`'s own plpgsql body directly first
+     (confirmed: no role check anywhere in either trigger function) and then
+     confirmed empirically via `asRole(db, 'service_role', ...)`: a raw
+     UPDATE/DELETE on `drv.instrument`/`drv.news_nearby` issued as
+     service_role (bypassing both the repository AND RLS entirely) is still
+     rejected by the trigger itself, rows untouched.
+  3. **Pruning-rule-on-rename re-derived with the SPECIFIC gap-class variants
+     Slice 03c's own tester found -- PASS, fix confirmed to reach the rename
+     path, not just create.** Slice 03c's independent verification (2026-09-04
+     entry, above) found the ORIGINAL pruning-rule matcher had zero tolerance
+     for word-order swaps/plain plurals, even of its own curated/canonical
+     names ("Days of week," "Type of order" among the named examples).
+     `field-validation.ts`'s own header now documents the fix
+     (`normalizeForMatch`: stopword-strip + token-sort + conservative
+     plural-strip, applied identically to both sides of every comparison).
+     Re-derived independently: `renameField(..., 'Days of week')`,
+     `renameField(..., 'Type of order')`, and one additional case of my own
+     (`renameField(..., 'Instruments')`, plural of canonical "Instrument")
+     all correctly throw `FieldDuplicatesDerivedError`, fresh field/name
+     fixtures throughout, no write happens. A control case (renaming to a
+     genuinely unrelated name, "Setup quality") confirms the fix is not
+     over-blocking either. Since `checkPruningRule` is one shared function
+     called by both `createField` and `renameField` with no path-specific
+     branching (confirmed by reading the call site in `renameField`
+     directly, not assumed from the function being "shared"), this
+     result was expected, but is now independently EMPIRICALLY confirmed
+     on the rename path specifically, not just inferred from the create-path
+     fix.
+  4. **Idempotent double-archive timestamp integrity -- PASS.** Archived a
+     fresh field, waited a REAL 1.5s elapsed gap (long enough that a bug
+     re-setting `archived_at` to a second, later `now()` could not be masked
+     by two calls landing in the same DB-clock millisecond), archived again
+     -- `archivedAt` identical both from the function's own return value AND
+     independently re-read from the row directly. Confirms `archiveField`'s
+     own early-return branch (`if (current.state === 'archived') return {
+     fieldId, archivedAt: current.archivedAt! }`) is a genuine, correct
+     no-op, not merely fast enough in the coder's own sequential test to
+     have looked like one.
+  5. **RLS/ownership re-verified, fresh cross-user fixtures, both operations
+     -- PASS.** Fresh two-user fixtures (distinct from the coder's own),
+     confirmed both `renameField`/`archiveField` reject a cross-user attempt
+     with `FieldRecordNotFoundError` and leave the row unchanged, PLUS two
+     checks beyond the coder's own file: (a) a raw RLS-scoped SELECT as the
+     attacker's own `authenticated` role returns zero rows for the owner's
+     field (RLS itself, not just `withUserConnection`'s application-layer
+     scoping); (b) a raw UPDATE attempt AS the attacker's own authenticated
+     role, directly targeting the owner's field id for archive, affects ZERO
+     rows under RLS's own `fields_owner_select`/`_update` predicate.
+  6. **`renameField` collision reuses `FieldNameConflictError` correctly --
+     PASS on the specific question asked, but surfaced a real, previously-
+     uncaught bug in that shared class along the way.** Fresh collision
+     fixtures (both an unscoped `account`-kind collision and a
+     `strategy_var`-scoped collision under a real strategy) confirm
+     `renameField` throws the SAME `FieldNameConflictError` class
+     `createField` throws (not a new, differently-shaped error), with the
+     correct `.code` (`FIELD_NAME_CONFLICT`), correct `.ownerStrategyId`, and
+     a `.message` containing the real colliding name with no raw Postgres
+     text. **Incidental finding, confirmed empirically, not assumed:**
+     `FieldNameConflictError`'s own constructor signature is
+     `constructor(readonly name: string, readonly ownerStrategyId: ...)` --
+     clearly intended, matching every sibling error class in the same file
+     (`FieldKindScopeMismatchError.kind`, `FieldRecordNotFoundError.fieldId`),
+     to expose the colliding field's own name as a typed data field. It
+     never can: the very next constructor statement, `this.name =
+     'FieldNameConflictError'` (the ordinary "tag the error class for stack
+     traces" convention every class in this file uses), unconditionally
+     clobbers the parameter-property assignment, because both target the
+     SAME property -- `Error.prototype.name` and the constructor's own
+     `name` parameter collide. `.message` is unaffected (the real name was
+     already baked into the string passed to `super()` before the
+     collision), so no prior test caught this -- every existing test only
+     ever asserted `instanceof`/`.message`, never `.name`. Pre-dates this
+     slice (the class itself is Slice 03c's own `createField` code, only
+     REUSED by this slice's `renameField`) and has zero live production
+     impact today (grepped `app/` -- no route consumes this error's `.name`
+     as data yet, since no field-editor API/UI exists), but is a real,
+     reproducible latent defect for whichever future API-route slice reaches
+     for `err.name` expecting the field name. Documented as a permanent
+     regression test (not silently worked around) in this file. Recommend a
+     follow-up rename of the constructor parameter (e.g. to `fieldName`,
+     matching the sibling classes' naming pattern) next time
+     `fields-repository.ts` is touched.
+  7. **Full suite re-run independently -- PASS, exact counts confirmed, not
+     trusted.** `npx vitest run lib/fields`: 200 passed (186 from the
+     coder's own suite across 8 files, unchanged, plus my own 14 new tests
+     in `fields-repository.lifecycle.independent-verify.live.test.ts`) / 0
+     failed / 0 skipped (live DB env vars present via `.env.local`). This
+     already covers every `field_usages`-touching suite in the repo --
+     `strategy-repository.live.test.ts` (including its own two GENUINE
+     two-connection races) and `strategy-repository.independent-verify.
+     live.test.ts` both live under `lib/fields` and ran as part of the same
+     invocation; confirmed via grep that no file outside `lib/fields`
+     imports or touches `field_usages`. `tsc --noEmit`: clean. `eslint .`:
+     clean, 0 errors, same 19 pre-existing warnings as Slice 03c's own
+     independent-verification run (unrelated files). `npm run build`: FIRST
+     attempt hit this session's own well-known host-memory build-worker
+     crash signature (`Next.js build worker exited with code:
+     3221226505`, ~5.5GB free at the time) -- immediate RETRY on the exact
+     same tree succeeded cleanly (compiled, typechecked, generated all 24
+     routes) with no code changes in between, confirming the first failure
+     was infra flakiness, not a real build regression. Reporting both
+     attempts honestly rather than only the passing one.
+  8. **Memory hygiene -- PASS.** Checked memory before starting (~5.6GB free
+     of 16GB) and confirmed no orphaned node/vitest/next processes running
+     at any point (`tasklist` checked before starting, immediately after the
+     live-DB test run, and again after the build retry -- empty every time,
+     nothing to kill). Used the established `deleteTestAuthUser`
+     shared-connection cleanup pattern for every one of the 8 fresh test
+     users this dispatch's own new fixtures created (`fields-iv-race`,
+     `fields-iv-derived`, `fields-iv-pruning`, `fields-iv-double-archive`,
+     `fields-iv-x-owner`/`fields-iv-x-attacker`, `fields-iv-collision`),
+     matching the coder's own file's `afterAll`/`cleanupUser` shape exactly,
+     no new cleanup mechanism invented. No dev server started (backend-only
+     slice, no UI surface, nothing to screenshot).
+  **Net call: `renameField` is sound -- name validation, the §4.1 pruning-
+  rule fix genuinely reaching the rename path, collision handling, the
+  derived-field block (including under service_role), and RLS all
+  independently re-verified with fresh fixtures and no gap found on any of
+  them (beyond the incidental `FieldNameConflictError.name` bug, itself
+  harmless today). `archiveField`'s derived-field block, idempotent
+  double-archive behavior, and RLS are equally sound. `archiveField`'s
+  TOCTOU guard against a concurrent `field_usages` write is the one real,
+  confirmed gap -- narrow in practical exposure but real, empirically
+  reproduced, and silent (no error to either caller) when it happens. Not a
+  blocker for calling the rest of this slice's write paths correct, but
+  this specific gap should NOT be reported to the owner as closed.** New
+  test file (not yet committed by me -- reporting only, per this dispatch's
+  own scope): `lib/fields/__tests__/fields-repository.lifecycle.
+  independent-verify.live.test.ts` (14 tests, live DB). Next: a coder
+  follow-up to actually close the TOCTOU gap (most direct fix: have
+  `archiveField`'s own transaction take a `SELECT ... FOR UPDATE` lock on
+  every matching `field_usages` row, or an advisory lock keyed on the field
+  id, that `rebuildFieldUsagesForStrategy` also acquires before its own
+  insert -- forcing the same real serialization Slice 7/10b's own guards
+  rely on -- rather than trusting the `not exists` subquery alone) and a
+  rename of `FieldNameConflictError`'s `name` parameter; then
+  security-reviewer/qa gate sequence on Slice 03d as already planned.
+
+- 2026-09-08 -- CODER FOLLOW-UP, Module 03 Slice 03d -- closes the
+  independent-verification gap directly above. `pg_advisory_xact_lock
+  (hashtext(field id))` added as the first statement of BOTH `archiveField`'s
+  guarded-UPDATE transaction (`fields-repository.ts`) and
+  `rebuildFieldUsagesForStrategy`'s insert transaction
+  (`strategy-repository.ts`, the sole `field_usages`-insert code path, used
+  by both `createStrategy`/`editStrategy`) -- per-FIELD key (not per-user;
+  two different fields must not contend with each other), matching this
+  session's own established `promoteRuleSeverity`/Slice-10b lock-based
+  pattern but applied for the first time to a race between two DIFFERENT
+  tables with no natural lock contention. Reverse direction also closed:
+  `rebuildFieldUsagesForStrategy` re-checks every referenced field's
+  `state` fresh, immediately after acquiring its lock, and throws
+  `FieldNotFoundError` (reused from `strategy-validation.ts`) rather than
+  inserting a `field_usages` row for a field a concurrent `archiveField`
+  call just archived. Multi-field deadlock avoided by acquiring all of a
+  single call's own field locks in one consistent sorted (lexicographic)
+  order, not caller-supplied order -- verified live with a dedicated test
+  (two concurrent multi-field saves referencing the same two fields in
+  opposite orders, both complete, neither hangs). The tester's own exact
+  reproducing test file was extended (not weakened, not deleted) into two
+  deterministic directions using `waitForBlockedQuery`
+  (`strategy-repository.live.test.ts`'s own `pg_stat_activity`-polling
+  technique -- now genuinely applicable here post-fix, since the fix turns
+  the race into a real, observable lock conflict where before there was
+  none to observe) -- both directions now resolve correctly and
+  deterministically (`FieldInUseError` when the reference wins,
+  `FieldNotFoundError` when the archive wins), never both sides silently
+  succeeding. `FieldNameConflictError`'s constructor parameter renamed
+  `name` -> `fieldName` (no longer itself a public property), stored under
+  a new, distinct `conflictingFieldName` public property; `this.name`
+  (the ordinary Error-class-name tag) left untouched. Grepped `app/` and
+  every test file before the fix, confirmed no caller read `.name`
+  expecting the field name -- no call-site changes needed. Full
+  `lib/fields` suite: 202/202 (186 coder + 16 tester's own file, up from
+  14 after extending item 1 into 3 tests), `tsc --noEmit` clean, `eslint .`
+  clean (0 errors, same 19 pre-existing warnings), `npm run build`
+  succeeded on the first attempt (no host-OOM recurrence this run). Every
+  test user created by the new/extended tests cleaned up via the
+  established `deleteTestAuthUser` shared-connection pattern, confirmed
+  directly against `auth.users` afterward (0 stale rows). Not marked
+  "done" by this coder -- next: security-reviewer/qa gate sequence on
+  Slice 03d as a whole (this fix folded into that same slice, not treated
+  as a separate one), per this module's own established four-gate
+  sequence.
 
 - 2026-09-08 -- QA GATE, Module 03 Slice 03c (field CREATION -- §4.1's
   pruning rule + §4.3's type/config validation). retrospeq-qa dispatch,

@@ -171,6 +171,13 @@ describe.skipIf(!env)('createField — both partial-unique-index collisions, fre
     expect(msg.toLowerCase()).not.toContain('duplicate key');
     expect(msg.toLowerCase()).not.toContain('23505');
     expect(msg.toLowerCase()).not.toContain('fields_unique_active');
+    // BUG FIX (2026-09-08) regression: `.conflictingFieldName` (not `.name`,
+    // which is always the fixed string `'FieldNameConflictError'`) must
+    // carry the real colliding name as data — see `fields-repository.ts`'s
+    // own `FieldNameConflictError` header for the full `.name`-collision
+    // history this replaces.
+    expect((err as FieldNameConflictError).conflictingFieldName).toBe('Independent-verify unscoped collider');
+    expect((err as FieldNameConflictError).name).toBe('FieldNameConflictError');
   });
 
   it('collision on fields_unique_active_scoped (kind=strategy_var, owner_strategy_id IS NOT NULL) — clean FieldNameConflictError, no raw Postgres text anywhere in the message', async () => {
@@ -189,6 +196,8 @@ describe.skipIf(!env)('createField — both partial-unique-index collisions, fre
     expect(msg.toLowerCase()).not.toContain('duplicate key');
     expect(msg.toLowerCase()).not.toContain('23505');
     expect(msg.toLowerCase()).not.toContain('fields_unique_active');
+    expect((err as FieldNameConflictError).conflictingFieldName).toBe('Independent-verify scoped collider');
+    expect((err as FieldNameConflictError).name).toBe('FieldNameConflictError');
   });
 
   it('a scoped collision under a DIFFERENT strategy does not collide (the scoped index is per-owner_strategy_id, not per-user)', async () => {
