@@ -1337,6 +1337,90 @@ protection, not merely a one-off connectivity blip.
 
 ---
 
+## Strategy-builder create leaves an orphaned, empty strategy behind (`STRATEGY_BUILDER_PARTIAL`)
+
+**Source:** Module 03 (Field Registry & Strategy) §5.1/§5.2's strategy
+list + strategy-creation builder UI, this slice's own genuine partial-write
+window — see `docs/adr/0027-strategy-builder-two-phase-create.md` (and its
+2026-09-09 Addendum) for the full derivation. Owning code:
+`app/(app)/strategies/actions.ts`'s `createStrategyFromBuilder`.
+
+**UPDATE (2026-09-09) — this is now a narrower, two-independent-failures
+residual case, not the original broad gap.** When step 2 or step 3 fails
+after the shell (step 1) already committed, `createStrategyFromBuilder` now
+FIRST attempts a compensating delete of the exact orphaned shell
+(`deleteOrphanedStrategyShell`, `lib/fields/strategy-repository.ts` — see
+docs/adr/0027's Addendum for the full reasoning and its own guard shape).
+In the common case (a single genuine infrastructure failure between the
+shell committing and `editStrategy` completing — still, per the
+pre-validation pass below, the only realistic way to reach this window at
+all), that compensating delete succeeds: the orphaned `strategies` row
+(and any real `trigger_conditions` rows step 2 already committed, which
+cascade-delete with it) are genuinely removed, and the trader sees a
+plain, retryable `STRATEGY_BUILDER_CREATE_FAILED` saying nothing was
+saved — true, and no on-call action needed. **`STRATEGY_BUILDER_PARTIAL`
+itself is now reachable ONLY when the compensating delete ALSO fails** — a
+second, independent infrastructure failure on top of the first (or the
+shell no longer matches the exact orphan shape `deleteOrphanedStrategyShell`
+guards on, for some other reason) — at which point this entry's original
+manual-cleanup guidance below still applies, unchanged.
+
+**What this means operationally:** when a trader's builder submission
+includes at least one trigger condition, saving it is NOT one atomic write
+— it is `createStrategy` (an empty shell, version 1) → `createTriggerCondition`
+once per trigger → `editStrategy` (the real content, version 2), three
+sequential calls inside one Server Action invocation, each opening its own
+`withUserConnection` (there is no single Postgres transaction spanning all
+three — they touch two different repository files with no shared
+connection). Every legitimate validation failure (a bad name, invalid
+trigger text, an incompatible capture moment) is caught by a pre-validation
+pass BEFORE the first of the three calls ever runs, so this window is
+reachable in practice only by a genuine mid-flight infrastructure failure
+(a dropped connection, a transient DB error) between steps, not by a
+trader's own input mistake.
+
+**How to check:** `createStrategyFromBuilder` logs server-side via
+`console.error` prefixed `[strategies/actions:createStrategyFromBuilder]`
+at every stage of this path — grep application logs for that prefix.
+Seeing `partial failure after creating strategy shell ...` alone (no
+follow-up `compensating delete itself threw` or `compensating delete did
+not remove orphaned shell` line right after it) means cleanup succeeded —
+nothing further to do, the trader's own retry is sufficient. Seeing
+`compensating delete itself threw` or `compensating delete did not remove
+orphaned shell` immediately after means this is the narrower residual
+case and `STRATEGY_BUILDER_PARTIAL` was actually returned to the trader —
+that is the signal worth alerting on now, not the mere presence of a
+"partial failure" log line. A live check for a specific trader: `select
+id, name, current_version from retrospeq.strategies where user_id = $1 and
+current_version = 1` joined against `strategy_versions` at `version = 1`
+with `jsonb_array_length(fields) = 0 and jsonb_array_length(triggers) = 0`
+— a strategy matching that shape that the trader did not knowingly create
+empty (Module 08's own future silent default strategy is the ONE
+legitimate reason a version-1, all-empty strategy should exist,
+distinguishable via `is_default = true`) is a stranded partial-create
+artifact that survived a failed compensating-delete attempt.
+
+**Action:** currently manual, same as before, but now reached far less
+often (only when the compensating delete itself independently fails).
+There is still no trader-facing delete path and still no general-purpose
+`archiveStrategy`/`deleteStrategy` feature (deliberately out of scope, see
+docs/adr/0027's own "alternatives considered and rejected" and its
+Addendum) — resolving a report of this residual case requires a direct,
+reviewed database operation: retry `delete from retrospeq.strategies where
+id = $1 and user_id = $2 and current_version = 1 and is_default = false`
+(cascade covers `strategy_versions`/`trigger_conditions`/`field_usages`
+automatically per the existing schema — the same guarded shape
+`deleteOrphanedStrategyShell` itself uses) — do not attempt this without
+confirming the strategy is genuinely empty and genuinely not
+`is_default = true` first.
+
+**What does not yet exist to fully automate this:** no live Supabase
+project, so there is no scheduled query flagging these automatically today
+— this entry documents what to look at once one exists, matching every
+other "no live project yet" entry in this file.
+
+---
+
 ## Detection engine `detections` recompute failing after a sync
 
 **Source:** Module 05 (Analytics & Findings) §4.13 — "Detection engine |

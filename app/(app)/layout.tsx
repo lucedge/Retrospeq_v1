@@ -83,6 +83,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/rules" className="rq-sub underline">
             Rules
           </Link>
+          {/* Module 03 (Field Registry & Strategy) strategy-builder UI
+              slice: before this link, `/strategies` had no UI entry point
+              anywhere in this shell — same gap Slice 10e's own `/rules`
+              link closed for Module 04. */}
+          <Link href="/strategies" className="rq-sub underline">
+            Strategies
+          </Link>
           <Link href="/plan" className="rq-sub underline">
             Plan
           </Link>

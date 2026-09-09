@@ -458,6 +458,87 @@ export async function fetchCurrentStrategyForEdit(
 }
 
 // ---------------------------------------------------------------------
+// Strategy-builder UI slice (2026-09-09) — the strategy LIST read. Nothing
+// before this slice needed one: every prior Module 03 slice was
+// backend-only (this file's own header, "no UI, no field-creation flow, no
+// trigger-condition authoring UI yet"), so no caller ever needed "every
+// strategy this user owns, with enough summary data to render a list row."
+// ---------------------------------------------------------------------
+
+export interface StrategyListItem {
+  strategyId: string;
+  name: string;
+  isDefault: boolean;
+  state: 'active' | 'archived';
+  currentVersion: number;
+  /** §4.8's field-cap count is CAPTURED fields only (derived/note
+   *  excluded) — this is deliberately NOT that count. This is a plain
+   *  `jsonb_array_length` of the current version's own `fields[]` snapshot
+   *  (every entry in that array is already a `strategy_var`/`account`
+   *  field a trader explicitly added; derived fields are never written
+   *  into it at all — see `fields-repository.ts`'s own
+   *  `fetchFieldsForUser` header on why derived fields never appear in a
+   *  picker or a saved fields[] array). For a strategy built through THIS
+   *  slice's own builder, the two counts are therefore always equal in
+   *  practice (nothing here ever adds a `note`-typed field to a strategy
+   *  either, since the field picker this slice ships only offers
+   *  `account`-kind fields — see `StrategyBuilder.tsx`'s own header) —
+   *  named plainly as `fieldCount`, not `capturedFieldCount`, so a future
+   *  reader isn't misled into assuming this already applies §4.8's own
+   *  note/derived exclusion logic if that stops being true. */
+  fieldCount: number;
+  triggerCount: number;
+  createdAt: string;
+}
+
+interface StrategyListRow {
+  id: string;
+  name: string;
+  is_default: boolean;
+  state: 'active' | 'archived';
+  current_version: number;
+  field_count: number;
+  trigger_count: number;
+  created_at: string;
+}
+
+/**
+ * Every strategy this user owns (active AND archived — §5.1's own list of
+ * builder/screen elements names a plain "strategy list," and §4.5's
+ * archive framing elsewhere in this module is always about FIELDS, never
+ * about hiding a trader's own archived strategies from their own list;
+ * `StrategiesPage` decides how to render the `state` distinction, this
+ * read does not pre-filter it away), newest first, joined against each
+ * one's own CURRENT (non-superseded) `strategy_versions` row for the two
+ * summary counts a list row needs. Real RLS via `withUserConnection`
+ * (`strategies_owner`), matching every other read in this file.
+ */
+export async function fetchStrategiesForUser(userId: string): Promise<StrategyListItem[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<StrategyListRow>(
+      `select s.id, s.name, s.is_default, s.state, s.current_version, s.created_at,
+              coalesce(jsonb_array_length(sv.fields), 0) as field_count,
+              coalesce(jsonb_array_length(sv.triggers), 0) as trigger_count
+         from retrospeq.strategies s
+         join retrospeq.strategy_versions sv on sv.strategy_id = s.id and sv.version = s.current_version
+        where s.user_id = $1
+        order by s.created_at desc`,
+      [userId],
+    );
+    return res.rows.map((row) => ({
+      strategyId: row.id,
+      name: row.name,
+      isDefault: row.is_default,
+      state: row.state,
+      currentVersion: row.current_version,
+      fieldCount: row.field_count,
+      triggerCount: row.trigger_count,
+      createdAt: row.created_at,
+    }));
+  });
+}
+
+// ---------------------------------------------------------------------
 // createStrategy's low-level, atomic write
 // ---------------------------------------------------------------------
 
@@ -739,6 +820,82 @@ export interface EditStrategyResult {
   newVersion: number;
   triggerCountWarning: boolean;
   capturedFieldCount: number;
+}
+
+// ---------------------------------------------------------------------
+// deleteOrphanedStrategyShell — compensating delete for
+// createStrategyFromBuilder's own genuine partial-failure window
+// (docs/adr/0027's Addendum, 2026-09-09). NOT a general-purpose
+// archiveStrategy/deleteStrategy — that remains explicitly out of scope
+// (real product surface, ADR 0027's own "alternatives considered and
+// rejected"). This is a single, narrow cleanup call for the EXACT shell
+// `createStrategyFromBuilder` itself just created moments earlier, in the
+// same Server Action invocation, when the next step (createTriggerCondition
+// or editStrategy) then failed.
+// ---------------------------------------------------------------------
+
+/**
+ * Deletes `strategyId` ONLY if it still matches the exact orphaned-shell
+ * shape `docs/runbook.md`'s own manual-cleanup query already identifies:
+ * owned by `userId`, `current_version = 1`, that version's own `fields`/
+ * `triggers` JSONB snapshot both empty, and NOT `is_default` (Module 08's
+ * future silent default strategy is the one legitimate reason a version-1,
+ * all-empty strategy should exist).
+ *
+ * The guard lives entirely in the query's own WHERE/EXISTS clauses, not in
+ * application-layer trust — matching this repo's established "the WHERE
+ * clause IS the safety check" convention (`confirmDay`'s/`splitTrade`'s/
+ * `joinTrades`'s/`resolveAmbiguousGroupingAsSingle`'s own guarded UPDATEs,
+ * `lib/ingestion/confirm.ts` and `lib/ingestion/split-join.ts`). A strategy
+ * that has ANY real content, or is the default strategy, or is not at
+ * version 1, is never touched by this function no matter what `strategyId`
+ * a caller passes it.
+ *
+ * Deliberately checks the CURRENT version's own `fields`/`triggers` JSONB
+ * (always `[]`/`[]` for this specific shell, by construction —
+ * `createStrategyFromBuilder`'s shell call is always
+ * `createStrategy({ fields: [], triggers: [] })`), NOT whether real
+ * `retrospeq.trigger_conditions` rows exist for this strategy. This is
+ * deliberate: when `createTriggerCondition` (step 2) succeeds for one or
+ * more conditions before `editStrategy` (step 3) fails, real
+ * `trigger_conditions` rows DO exist for this shell — those are exactly as
+ * orphaned as the shell itself and must be cleaned up too, not treated as
+ * a reason to preserve the shell. `strategy_versions`/`trigger_conditions`/
+ * `field_usages` all cascade from `strategies` on delete (this file's own
+ * header, and `20260902010000_field_registry_schema.sql`'s FK
+ * definitions) — one DELETE is sufficient, no explicit child cleanup
+ * needed.
+ *
+ * Returns `true` if a row was actually deleted, `false` if the given
+ * `strategyId` no longer matches the exact orphan shape (already cleaned
+ * up, already edited into a real version 2, or never existed) — never
+ * throws for a non-match, only for a genuine infrastructure failure
+ * (connection error, etc.), which the caller must handle explicitly (see
+ * `app/(app)/strategies/actions.ts`'s own `createStrategyFromBuilder`
+ * header for how a failed cleanup attempt falls back to the pre-existing
+ * `STRATEGY_BUILDER_PARTIAL` error path rather than being masked).
+ */
+export async function deleteOrphanedStrategyShell(userId: string, strategyId: string): Promise<boolean> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query(
+      `delete from retrospeq.strategies s
+        where s.id = $1
+          and s.user_id = $2
+          and s.current_version = 1
+          and s.is_default = false
+          and exists (
+            select 1
+              from retrospeq.strategy_versions sv
+             where sv.strategy_id = s.id
+               and sv.version = 1
+               and jsonb_array_length(sv.fields) = 0
+               and jsonb_array_length(sv.triggers) = 0
+          )
+        returning s.id`,
+      [strategyId, userId],
+    );
+    return (res.rowCount ?? 0) === 1;
+  });
 }
 
 export async function editStrategy(input: EditStrategyInput): Promise<EditStrategyResult> {

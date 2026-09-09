@@ -1480,3 +1480,73 @@ export async function findPromotionCandidates(
     return candidates;
   });
 }
+
+// =======================================================================
+// Strategy-builder UI slice (2026-09-09) — the first real READ this file
+// exposes for a field PICKER. Nothing before this slice needed a "every
+// active field this user owns, grouped by kind" read: every prior Module
+// 03 slice was backend-only (see this file's own Slice 03c/03d/03e
+// headers), so no UI ever needed to LIST fields, only to look up specific
+// ones by id (`fetchFieldDefinitionsByIds`, `strategy-repository.ts`) or
+// mutate one already known by id (`renameField`/`archiveField`/
+// `promoteField`).
+// =======================================================================
+
+export interface FieldPickerEntry {
+  fieldId: string;
+  name: string;
+  kind: AnyFieldKind;
+  dataType: FieldDataType;
+  config: {
+    options?: string[];
+    min?: number;
+    max?: number;
+    step?: number;
+    unit?: string;
+  };
+}
+
+/**
+ * Every ACTIVE field this user owns, across all three kinds, for §5.1/§5.2's
+ * strategy-builder field picker: `derived` (rendered as the "recorded
+ * automatically" informational chips — §1.1: "Derived fields never appear
+ * in any picker," so a caller must NOT offer these as selectable, only
+ * display them for context, exactly as §5.2's own reference markup shows
+ * `.chips--static` with no `<input>` at all for that group), `account`
+ * (the real "shared across your strategies" checkbox list), and
+ * `strategy_var` (private to whichever strategy owns them — a NEW
+ * strategy's own builder has none yet by construction, since a
+ * `strategy_var` field's `owner_strategy_id` must reference an
+ * already-existing strategy; a future strategy-EDIT slice, not built here,
+ * is where this kind becomes relevant to a picker). Ordered `kind, name`
+ * so a caller can group by kind directly off the array without a second
+ * sort pass. Scoped to `state = 'active'` — an archived field, per §4.5,
+ * "stops being offered," matching every other active-only read in this
+ * file (`fetchFieldUsageDependents`'s own sibling reasoning does not apply
+ * here since this read has no dependency question to answer, just
+ * "offerable right now").
+ */
+export async function fetchFieldsForUser(userId: string): Promise<FieldPickerEntry[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{
+      id: string;
+      name: string;
+      kind: AnyFieldKind;
+      data_type: FieldDataType;
+      config: FieldPickerEntry['config'] | null;
+    }>(
+      `select id, name, kind, data_type, config
+         from retrospeq.fields
+        where user_id = $1 and state = 'active'
+        order by kind, name`,
+      [userId],
+    );
+    return res.rows.map((row) => ({
+      fieldId: row.id,
+      name: row.name,
+      kind: row.kind,
+      dataType: row.data_type,
+      config: row.config ?? {},
+    }));
+  });
+}

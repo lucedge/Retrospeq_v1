@@ -462,6 +462,46 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 03 (Field Registry & Strategy) §5.1's strategy list —
+   * `app/(app)/strategies/actions.ts`'s `fetchStrategyList`. Read-only end
+   * to end (`fetchStrategiesForUser` writes nothing), fetched once per page
+   * load with no client-side re-fetch trigger — same shape and reasoning
+   * as `ruleList`/`adherenceDisplay` above, reuses that exact budget.
+   */
+  strategyList: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
+  /**
+   * Module 03 §5.1/§5.2's strategy-builder field picker —
+   * `app/(app)/strategies/actions.ts`'s `fetchFieldPickerOptions`. Read-only
+   * (`fetchFieldsForUser` writes nothing), fetched once per builder page
+   * load — same "once per page load, no client re-fetch trigger" shape as
+   * `strategyList`/`ruleList`/`adherenceDisplay`, reuses that budget.
+   */
+  fieldPicker: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
+  /**
+   * Module 03 §4.6/§4.7's strategy-builder SAVE —
+   * `app/(app)/strategies/actions.ts`'s `createStrategyFromBuilder`. A
+   * real, Pro-gated write (a new `strategies` + `strategy_versions` row,
+   * plus — when the builder collected at least one trigger condition — one
+   * `trigger_conditions` INSERT per condition and a follow-up
+   * `strategy_versions` edit, see that action's own header for the full
+   * two-phase-write reasoning) — structurally the same class as
+   * `createRule` (a new financially/behaviourally significant record, not
+   * a settings edit), and a trader plausibly retries this a few times while
+   * getting a brand-new strategy's name/triggers/fields right in one
+   * sitting, so this reuses `createRule`'s exact moderate budget rather
+   * than inventing a new number.
+   */
+  strategyCreate: {
+    ip: { limit: 30, windowSeconds: 3600 },
+    email: { limit: 20, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;
