@@ -275,6 +275,26 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // commit that introduces the call, per the entries directly above's own
   // cautionary note.
   'lib/analytics/render-repository.ts',
+  // Module 05 (Analytics & Findings) edge engine, §4.1-4.3/§4.13: the
+  // entire DB access layer (`fetchActiveStrategiesForUser`,
+  // `fetchStrategyFieldSpecs`, `fetchEligibleTradesForStrategy`,
+  // `fetchCapturesForTrades`, `writeFindingsForStrategy`,
+  // `recomputeEdgeFindingsForUser`) runs under `withServiceRoleConnection`
+  // for the same reason as `distributions-repository.ts`'s own established
+  // precedent (already listed above via `lib/rules/adherence-repository.ts`'s
+  // entry): this is a BACKGROUND recompute triggered from
+  // `lib/ingestion/sync.ts`'s post-sync hook, with no authenticated session
+  // at the call site to scope `withUserConnection` to. Every query is
+  // explicitly scoped to the caller-supplied `userId`, never trusting RLS
+  // to narrow it, matching every other entry in this list — see this
+  // file's own header comment for the isolation-boundary reasoning
+  // (`lib/analytics/edge-engine/repository.ts` never queries `rules`/
+  // `rule_versions`/`rule_evaluations`/`adherence_weekly`, §7.5). Missed
+  // in the original slice's own commit and closed here by
+  // `retrospeq-qa`'s own gate (2026-09-09) — same "added in the same
+  // commit that introduces the call" cautionary note the entries above
+  // already carry, restated because it was missed once more despite it.
+  'lib/analytics/edge-engine/repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

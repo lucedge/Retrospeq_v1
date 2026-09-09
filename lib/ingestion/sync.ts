@@ -29,6 +29,7 @@ import { matchArmEvent, type ArmDirection, type CandidateEntryFill } from './arm
 import { lockPreEntryCaptures } from './trade-captures';
 import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
 import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
+import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -1206,6 +1207,29 @@ export async function runSync(
   } catch (err) {
     console.error(
       `[sync] operand_distributions recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; the preview engine will read stale distributions until the next successful recompute:`,
+      err,
+    );
+  }
+
+  // Module 05 (Analytics & Findings) §4.13: "Edge engine | Nightly per
+  // user + on demand before weekly review." Same standing infra gap as
+  // `operand_distributions` above (no cron/scheduler exists in this repo
+  // yet — PROGRESS.md "Infra gaps") — this is the real "on demand" half,
+  // not a fake nightly trigger. Deliberately NON-BLOCKING and
+  // best-effort, identical posture to the `operand_distributions` call
+  // immediately above (a genuinely successful sync must never be
+  // reported as failed because a downstream, already-committed
+  // side-effect recompute had a problem) — logged loudly on failure, per
+  // `docs/runbook.md`'s new "edge engine recompute failed after sync"
+  // entry. Independent of (and does not depend on) the
+  // `operand_distributions` call above — Module 04 and Module 05 read
+  // disjoint tables (§7.5's isolation boundary), so one recompute failing
+  // has no bearing on whether the other should run.
+  try {
+    await recomputeEdgeFindingsForUser(account.user_id);
+  } catch (err) {
+    console.error(
+      `[sync] edge engine findings recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; findings will read stale until the next successful recompute:`,
       err,
     );
   }

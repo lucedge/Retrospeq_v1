@@ -108,7 +108,9 @@ file-redirect workaround is used.
 
 ---
 
-## This machine's virtual memory is too tight for `npm run build` to complete reliably — confirmed a persistent pattern, not a one-off, worth a durable fix
+_(RESOLVED 2026-09-09 — no longer needs your input: the recurring `npm run build` OOM crash (`STATUS_ACCESS_VIOLATION`, "Collecting page data" phase, five+ occurrences across Modules 04/08) is now fixed at the code level, not the Windows-system level this entry originally asked you to decide on. `next.config.ts`'s `experimental.cpus` is now permanently capped to 2 (was previously only a diagnostic workaround, reverted after each use) — this host has 12 cores but only ~5-6GB typically-free RAM, so the default worker count (`os.cpus().length - 1` = 11) reliably exhausted commit-charge headroom; capping to 2 workers stays well under that ceiling. Verified: 4+ independent diagnostic builds across separate coder/tester/security-reviewer/qa dispatches on 2026-09-08/09 all passed cleanly on the first attempt once capped, after the uncapped default failed repeatedly in the same session; re-confirmed once more with a genuine clean `npm run build` after making the change permanent. No page-file resize or other machine-wide setting was needed after all — a code-level fix fully resolves this without requiring the owner action originally requested here. Original entry preserved below for history/context, not because it's still open.)_
+
+## [HISTORICAL, RESOLVED ABOVE] This machine's virtual memory is too tight for `npm run build` to complete reliably — confirmed a persistent pattern, not a one-off, worth a durable fix
 
 **What's needed:** A decision from you on the durable fix — most likely
 increasing this machine's page file size (Windows: System Properties →

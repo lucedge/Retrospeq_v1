@@ -1,0 +1,93 @@
+-- Module 05 (Analytics & Findings) -- CONCURRENCY FIX for `findings`
+-- supersession (docs/adr/0024-findings-supersession-write-semantics.md).
+--
+-- BUG (found by an independent live-DB concurrency probe, 2026-09-09,
+-- `tmp/edge-engine-concurrency-probe.mjs`, verified via genuine
+-- `pg_stat_activity` lock-wait polling, not a timing guess): two
+-- concurrent `writeFindingsForStrategy` calls racing to write a finding
+-- for the SAME `(user_id, strategy_id, field_id, segment)` tuple could
+-- both commit a fresh `state = 'active'` row for that tuple. Root cause:
+-- ADR 0024's insert+update CTE is atomic WITHIN one transaction (its own
+-- "no window where a crash could leave both rows active" claim is true
+-- and remains true) but nothing at the DB level enforced "at most one
+-- active row per tuple" ACROSS transactions. Under READ COMMITTED, each
+-- transaction's own UPDATE-the-old-row-to-superseded step only sees rows
+-- already committed as of ITS OWN statement's snapshot -- neither
+-- transaction's INSERT is visible to the other before commit, so both
+-- transactions' UPDATE steps match (and supersede) only the pre-existing
+-- row, and both INSERTs succeed, leaving two simultaneously `active` rows
+-- for the identical tuple. This is a genuinely different failure class
+-- than a crash mid-write (which ADR 0024 already analyzed and closed);
+-- ADR 0024's original analysis never considered CONCURRENT writers at
+-- all, only sequential re-runs (`repository.live.test.ts`'s own
+-- pre-existing test), which structurally cannot expose this race.
+--
+-- FIX (this migration, layer 1 of 2 -- layer 2 is an application-level
+-- `pg_advisory_xact_lock` in `writeFindingsForStrategy` itself,
+-- `lib/analytics/edge-engine/repository.ts`, serializing concurrent
+-- writers for the SAME tuple so this constraint is never actually hit in
+-- normal operation): a PARTIAL UNIQUE INDEX enforcing "at most one
+-- `state = 'active'` row per `(user_id, strategy_id, field_id, segment)`
+-- tuple" at the database level -- belt AND suspenders, matching this
+-- repo's own established posture elsewhere (a guarded UPDATE alone was
+-- judged insufficient for Module 03's `archiveField`/
+-- `rebuildFieldUsagesForStrategy` cross-table race too, fixed with BOTH a
+-- lock and, where applicable, a real constraint). Even with the
+-- advisory-lock fix in place, this constraint is the thing that turns
+-- ANY future bypass of that lock (a bug, a different code path, a manual
+-- admin script) into a LOUD constraint-violation error at write time
+-- rather than a silent duplicate-active-row corruption -- exactly the
+-- "fail loudly, never simulate success" posture this project's own
+-- AGENTS.md requires.
+--
+-- `segment` is `jsonb`, not text -- a plain B-tree (and therefore a
+-- UNIQUE index) IS supported directly on `jsonb` columns in PostgreSQL:
+-- `jsonb` has a default b-tree operator class (equality/ordering derived
+-- from the type's own internal, key-order-independent binary
+-- representation), unlike `json`. Confirmed this is NOT the GIN-only
+-- `jsonb_ops`/`jsonb_path_ops` opclass situation (those are for
+-- containment/existence queries, not needed here) -- plain
+-- `create unique index ... (col)` on a `jsonb` column works exactly like
+-- any other equality-comparable type, and two `jsonb` values that are
+-- semantically identical (e.g. `{"op":"eq","value":"a"}` vs
+-- `{"value":"a","op":"eq"}`, different KEY ORDER in the input) correctly
+-- compare as EQUAL under `jsonb`'s own `=` operator (it normalizes on
+-- storage), so this index cannot be defeated by key-order variance in
+-- how a caller happens to construct the JSON.
+--
+-- `strategy_id`/`field_id` are nullable (`on delete set null` per this
+-- table's own composite FKs) -- standard SQL/Postgres treats NULL as
+-- distinct from every other NULL for uniqueness purposes, so multiple
+-- `active` rows with a null `strategy_id` (or `field_id`) would NOT
+-- violate this index. This is accepted as a real but practically
+-- irrelevant gap: every actual write path
+-- (`writeFindingsForStrategy`/`recomputeEdgeFindingsForUser`) always
+-- supplies a real, non-null `strategy_id`/`field_id` at insert time --
+-- both only ever become null LATER, via a referenced strategy/field being
+-- deleted after the fact (§3.1's own `on delete set null` design), a
+-- state this index's write-time race does not occur in (nothing writes
+-- NEW findings rows for an already-nulled tuple).
+-- NON-DEFERRABLE (plain, ordinary unique index) is the CORRECT and final
+-- choice here, not an oversight -- a DEFERRABLE version was attempted
+-- first and abandoned: PostgreSQL's `ALTER TABLE ... ADD CONSTRAINT ...
+-- UNIQUE USING INDEX ... DEFERRABLE` does NOT support PARTIAL indexes
+-- ("<name> is a partial index", confirmed live against this exact index
+-- this session) -- a partial unique index can ONLY ever be a plain,
+-- immediately-checked index in PostgreSQL, deferring is structurally
+-- unavailable for it. Given that constraint, `writeFindingsForStrategy`
+-- (`lib/analytics/edge-engine/repository.ts`) was instead restructured to
+-- never let two `active` rows for the same tuple coexist even
+-- momentarily: it now UPDATEs the prior `active` row to `superseded`
+-- FIRST (in its own statement), THEN INSERTs the new `active` row second,
+-- THEN (if a prior row existed) a third statement points that prior row's
+-- `superseded_by` at the new row's id -- see that function's own header
+-- for the full sequencing rationale and why a single combined CTE
+-- statement (the ADR 0024 original shape, or various same-statement
+-- reordering attempts) cannot safely replace this without either
+-- reintroducing the same-instant-conflict problem (non-deferrable index)
+-- or relying on PostgreSQL's explicitly UNSPECIFIED execution order for
+-- independent (non-data-dependent) data-modifying CTEs within one
+-- statement.
+create unique index if not exists findings_active_tuple_uidx
+  on retrospeq.findings (user_id, strategy_id, field_id, segment)
+  where state = 'active';

@@ -1264,3 +1264,73 @@ assuming the problem is elsewhere). If a kill switch flip (`enabled =
 false`) does not appear to take effect for up to 60 seconds after being
 applied, that is the cache working as designed, not a bug — re-check
 after the TTL window before escalating.
+
+## Edge engine `findings` recompute failing after a sync
+
+**Source:** Module 05 (Analytics & Findings) §4.13 — "Edge engine |
+Nightly per user + on demand before weekly review." Owning code:
+`lib/analytics/edge-engine/repository.ts`'s `recomputeEdgeFindingsForUser`,
+called from `lib/ingestion/sync.ts`'s `runSync` immediately after the
+existing `operand_distributions` recompute (see that entry above, same
+file, same call site, same failure MODE — this entry is the Module 05
+analog, not a different mechanism).
+
+**What this means operationally:** wired as a best-effort, non-blocking
+side effect of a successful sync, for the identical reason
+`operand_distributions`'s own entry above documents: a recompute failure
+must never turn an already-committed, genuinely successful sync into a
+reported failure. By construction this is invisible to the trader and to
+`sync_runs.status` — the only trace is a `console.error` line prefixed
+`[sync] edge engine findings recompute failed after sync for user <id>
+(account <id>, syncRunId <id>)`. Left unaddressed, this trader's
+`findings` rows go stale: the strategy screen and weekly review (once
+those surfaces exist and read `findings`) keep showing whatever was last
+successfully computed — which, for a trader who has never had a
+successful recompute yet, is nothing at all, correctly rendering as
+`find.insufficient`/"not enough data yet" rather than an error. This is
+the intended fail-closed behaviour (§9: "Silence over wrongness,
+always"), but a PERSISTENT recompute failure (not just a transient one)
+means a trader's findings silently stop reflecting new trades entirely,
+indistinguishable from home page from "genuinely not enough data yet."
+
+**Independent of the `operand_distributions` recompute** — Module 04 and
+Module 05 read disjoint tables (§7.5's isolation boundary: this engine
+never touches `rules`/`rule_versions`/`rule_evaluations`/
+`adherence_weekly`), so one recompute failing has no bearing on whether
+the other succeeds, and both run as two separate best-effort `try/catch`
+blocks in `runSync` — a failure in one never prevents the other from
+being attempted.
+
+**Nightly recompute is NOT built** — the identical, already-tracked infra
+gap `operand_distributions`'s own entry documents (no cron/scheduler
+exists in this repo yet, PROGRESS.md "Infra gaps") — not a new gap, not
+duplicated here as though it were. Until nightly exists, a sync-time
+failure is the ONLY way a trader's findings get refreshed at all.
+
+**How to check:** grep application logs for `[sync] edge engine findings
+recompute failed after sync` — every occurrence names the affected
+`user_id`/`account_id`/`syncRunId` directly. A quick live check for a
+specific trader: compare `findings.computed_at` (most recent `active` row
+per strategy) against that account's most recent `sync_runs.finished_at`
+— a `computed_at` meaningfully older than the latest successful sync
+means either this recompute failed, or (a brand-new strategy, or a
+strategy whose trades never cleared the sample gate) it has genuinely
+never produced a finding yet — the latter is Module 05's own "not enough
+data yet" being correct, not a symptom, so check trade counts against
+`SAMPLE_MIN_SEGMENT_N`/`SAMPLE_MIN_BASELINE_N` (`lib/analytics/edge-engine/gates.ts`)
+before assuming a failure.
+
+**New failure signature to watch for, 2026-09-09 (concurrency fix,
+`docs/adr/0024-findings-supersession-write-semantics.md`'s Addendum):** a
+`duplicate key value violates unique constraint "findings_active_tuple_uidx"`
+error inside this same recompute failure log line means the
+`pg_advisory_xact_lock`-based serialization in `writeFindingsForStrategy`
+was bypassed somehow (a bug, or a future write path that doesn't go
+through this function) — the constraint is doing its job (failing loudly
+instead of silently duplicating an `active` row), but seeing it at all is
+itself the alertable signal, since in normal operation the lock should
+make this constraint unreachable. Treat a recurring occurrence of this
+specific error text as higher priority than an ordinary transient
+recompute failure — it indicates two writers raced for the same
+`(user_id, strategy_id, field_id, segment)` tuple outside the lock's
+protection, not merely a one-off connectivity blip.
