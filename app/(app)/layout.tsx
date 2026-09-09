@@ -90,6 +90,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/strategies" className="rq-sub underline">
             Strategies
           </Link>
+          {/* Module 03 fields management screen: before this link, `/fields`
+              had no UI entry point anywhere in this shell — same gap the
+              `/strategies` link above closed for the strategy list. */}
+          <Link href="/fields" className="rq-sub underline">
+            Fields
+          </Link>
           <Link href="/plan" className="rq-sub underline">
             Plan
           </Link>

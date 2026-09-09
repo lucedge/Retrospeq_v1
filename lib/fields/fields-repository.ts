@@ -472,7 +472,10 @@ export async function createField(input: CreateFieldInput): Promise<CreatedField
  *  `CreatableFieldKind` above (which is narrower — the two kinds
  *  `createField` is ever asked to WRITE). The lifecycle reads below need
  *  to see `'derived'` too, precisely so they can recognise and reject it. */
-type AnyFieldKind = 'derived' | CreatableFieldKind;
+// Exported (fields management screen, 2026-09-09) so a UI-facing read
+// (`ManagedFieldEntry`, below) can describe a field's kind without
+// re-declaring the same three-member union under a second name.
+export type AnyFieldKind = 'derived' | CreatableFieldKind;
 
 /**
  * §9's own error-code table has no row for "the field id a caller supplied
@@ -1547,6 +1550,87 @@ export async function fetchFieldsForUser(userId: string): Promise<FieldPickerEnt
       kind: row.kind,
       dataType: row.data_type,
       config: row.config ?? {},
+    }));
+  });
+}
+
+// =======================================================================
+// Fields management screen (2026-09-09) — §4.5/§6.1's field lifecycle UI
+// (view every field grouped by derived/custom, rename/archive/promote).
+// The FIRST read this file exposes that needs EVERY field a user owns,
+// active AND archived, with enough metadata to drive lifecycle actions.
+//
+// Deliberately NOT a reuse of `fetchFieldsForUser` above (rather than
+// adding an `includeArchived` flag to that function) — the two reads serve
+// genuinely different callers with different correctness requirements:
+// `fetchFieldsForUser` is a PICKER read (a strategy builder must never
+// offer an archived field, and has no reason to know which strategy
+// currently owns a `strategy_var` field — it only needs "is this offerable
+// right now"), while this one is a MANAGEMENT read (a trader must be able
+// to see an archived field to understand their own history, and needs
+// `ownerStrategyId` to render "only in <strategy name>" for a
+// `strategy_var` row). Bolting an optional flag onto the picker read would
+// make ONE function serve two different contracts silently — a future
+// caller of `fetchFieldsForUser` could pass the flag by mistake and start
+// offering an archived field in a picker, exactly the bug class §4.5's own
+// "stops being offered" line exists to prevent. Two small, narrowly-scoped
+// reads, each obviously correct for its one caller, matches this file's
+// own established precedent (`fetchFieldUsageDependents` vs.
+// `fetchFieldForLifecycleOp` are likewise two separate reads rather than
+// one parameterised one).
+// =======================================================================
+
+export interface ManagedFieldEntry {
+  fieldId: string;
+  name: string;
+  kind: AnyFieldKind;
+  dataType: FieldDataType;
+  config: FieldPickerEntry['config'];
+  /** Non-null only for `kind = 'strategy_var'` (§3.1's own schema
+   *  comment) — the owning strategy's id, for a management UI to resolve
+   *  and display that strategy's name (a name lookup this repository does
+   *  not itself perform — see `strategy-repository.ts`'s own
+   *  `fetchStrategiesForUser`, which the calling Server Action composes
+   *  alongside this read). */
+  ownerStrategyId: string | null;
+  state: 'active' | 'archived';
+  archivedAt: string | null;
+}
+
+/**
+ * Every field this user owns, of every kind and state, ordered `kind, name`
+ * (same ordering convention `fetchFieldsForUser` already establishes, so a
+ * caller can group directly off the array). Real RLS via
+ * `withUserConnection` (`fields_owner_select`), matching every other read
+ * in this file.
+ */
+export async function fetchFieldsForManagement(userId: string): Promise<ManagedFieldEntry[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{
+      id: string;
+      name: string;
+      kind: AnyFieldKind;
+      data_type: FieldDataType;
+      config: FieldPickerEntry['config'] | null;
+      owner_strategy_id: string | null;
+      state: 'active' | 'archived';
+      archived_at: string | null;
+    }>(
+      `select id, name, kind, data_type, config, owner_strategy_id, state, archived_at
+         from retrospeq.fields
+        where user_id = $1
+        order by kind, name`,
+      [userId],
+    );
+    return res.rows.map((row) => ({
+      fieldId: row.id,
+      name: row.name,
+      kind: row.kind,
+      dataType: row.data_type,
+      config: row.config ?? {},
+      ownerStrategyId: row.owner_strategy_id,
+      state: row.state,
+      archivedAt: row.archived_at,
     }));
   });
 }

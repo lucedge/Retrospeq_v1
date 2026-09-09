@@ -502,6 +502,78 @@ export const RATE_LIMITS = {
     ip: { limit: 30, windowSeconds: 3600 },
     email: { limit: 20, windowSeconds: 3600 },
   },
+  /**
+   * Module 03 §4.5/§6.1's fields management screen —
+   * `app/(app)/fields/actions.ts`'s `fetchFieldsList`. Read-only end to end
+   * (`fetchFieldsForManagement` writes nothing), fetched once per page load
+   * with no client-side re-fetch trigger — same shape and reasoning as
+   * `strategyList`/`ruleList`/`adherenceDisplay`, reuses that exact budget.
+   */
+  fieldList: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
+  /**
+   * `app/(app)/fields/new/actions.ts`-adjacent `fetchStrategyOptionsForFieldCreate`
+   * — the strategy picker for a `strategy_var` field's `ownerStrategyId`.
+   * Read-only, once per field-creation page load — same shape as
+   * `fieldPicker`/`fieldList` above, reuses that budget.
+   */
+  fieldCreateOptions: {
+    ip: { limit: 90, windowSeconds: 3600 },
+    email: { limit: 60, windowSeconds: 3600 },
+  },
+  /**
+   * `app/(app)/fields/actions.ts`'s `createFieldAction` — Module 03 §4.1/
+   * §4.3's field-creation pipeline (`lib/fields/fields-repository.ts`'s
+   * `createField`). A real, Pro-gated write (a new `fields` row) — same
+   * structural class as `createRule`/`strategyCreate` (a new
+   * financially/behaviourally significant record, not a settings edit,
+   * and also the real backstop against a free-plan trader hammering this
+   * action to probe past the `fields.custom` entitlement gate) — reuses
+   * that exact moderate budget.
+   */
+  fieldCreate: {
+    ip: { limit: 30, windowSeconds: 3600 },
+    email: { limit: 20, windowSeconds: 3600 },
+  },
+  /**
+   * `app/(app)/fields/actions.ts`'s `renameFieldAction` — §4.5's "Rename a
+   * field: Safe. Id is stable; the name is display only." Mutates an
+   * EXISTING `fields` row's own label rather than creating a new record —
+   * structurally the same class as `editRule`/`promoteRule`/`demoteRule`/
+   * `retireRule` (restructures/relabels an existing row) — reuses their
+   * identical moderate budget.
+   */
+  fieldRename: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  /**
+   * `app/(app)/fields/actions.ts`'s `archiveFieldAction` — §4.5's "Remove a
+   * field," a one-way, no-un-archive-path state transition (this file's own
+   * `retireRule` doc comment on the analogous rulebook case: "One-way ...
+   * no `reactivateRule`... anywhere"). Same moderate budget as
+   * `retireRule`/`fieldRename` above, not a tighter destructive-action one —
+   * this only archives the REGISTRY row (captured history is explicitly
+   * retained, §4.5), it does not delete any trader data.
+   */
+  fieldArchive: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
+  /**
+   * `app/(app)/fields/actions.ts`'s `promoteFieldAction` — §4.5's
+   * "Promote strategy_var -> account," a metadata-only flip on an existing
+   * row (`lib/fields/fields-repository.ts`'s `promoteField`, "same field
+   * id, all history intact"). Same moderate budget as `fieldRename`/
+   * `fieldArchive` above — mutates an existing row's own lifecycle
+   * columns, never creates a new financial/behavioural record.
+   */
+  fieldPromote: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;
