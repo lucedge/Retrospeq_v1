@@ -30,6 +30,7 @@ import { lockPreEntryCaptures } from './trade-captures';
 import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
 import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
 import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
+import { recomputeDetectionsForUser } from '@/lib/analytics/detection-engine/repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -1230,6 +1231,28 @@ export async function runSync(
   } catch (err) {
     console.error(
       `[sync] edge engine findings recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; findings will read stale until the next successful recompute:`,
+      err,
+    );
+  }
+
+  // Module 05 (Analytics & Findings) §4.13: "Detection engine | Nightly
+  // per user | Windowed over the last 90 days." Same standing infra gap
+  // (no cron/scheduler exists yet — PROGRESS.md "Infra gaps") and the
+  // identical best-effort, non-blocking, independently-try/catch'd
+  // posture as the `operand_distributions`/edge-engine calls above — a
+  // genuinely successful sync must never be reported as failed because a
+  // downstream, already-committed side-effect recompute had a problem.
+  // Logged loudly on failure, per `docs/runbook.md`'s new "detection
+  // engine recompute failed after sync" entry. Independent of both calls
+  // above (Module 05's own edge/detection engines never read Module 04's
+  // rule tables, §7.5's isolation boundary, and don't read each other's
+  // output either) — one recompute failing has no bearing on whether
+  // either of the other two succeed.
+  try {
+    await recomputeDetectionsForUser(account.user_id);
+  } catch (err) {
+    console.error(
+      `[sync] detection engine recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; detections will read stale until the next successful recompute:`,
       err,
     );
   }

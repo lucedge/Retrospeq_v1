@@ -200,15 +200,36 @@ describe('Module 04/05 ESLint import boundary (docs/adr/0021)', () => {
     );
   });
 
-  it('KNOWN RESIDUAL RISK (b), documented not fixed: a re-export indirection through a file OUTSIDE lib/analytics/ still fully defeats the boundary', async () => {
-    // This test intentionally asserts the BYPASS SUCCEEDS (zero lint
-    // output), not that it fails -- it is a canary for a documented,
-    // accepted gap (docs/adr/0021 "Consequences" / "Known residual
-    // risk"), not a passing security control. If this test ever starts
-    // failing (i.e. the re-export chain below starts tripping the rule),
-    // that means the boundary mechanism changed shape -- update this
-    // test AND the ADR together rather than treating a green run here as
-    // "still an open gap, nothing to see."
+  it('ESLINT-SPECIFIC LIMITATION (b), CLOSED at the overall-boundary level by dependency-cruiser (2026-09-09) -- a re-export indirection through a file OUTSIDE lib/analytics/ still fully defeats ESLint alone, but is now caught by npm run check:import-boundaries', async () => {
+    // UPDATED 2026-09-09 (retrospeq-security-reviewer, Module 05
+    // detection-engine slice): this test still intentionally asserts the
+    // ESLint-level BYPASS SUCCEEDS (zero lint output from
+    // no-restricted-imports/no-restricted-syntax) -- that half of the
+    // finding is permanently true by construction (see the 'Why this
+    // can't be closed by no-restricted-imports / no-restricted-syntax at
+    // all' comment below) and is NOT what closes the real risk. The
+    // overall Module 04/05 boundary is now closed by a SECOND,
+    // complementary tool: .dependency-cruiser.cjs's
+    // 'analytics-cannot-reach-rules' rule (to: { reachable: true }),
+    // run via 'npm run check:import-boundaries', which resolves the
+    // actual transitive module graph (not literal specifier strings) and
+    // DOES report this exact re-export shape as a violation -- verified
+    // directly by the security-reviewer reconstructing this same fixture
+    // shape (lib/analytics/... -> lib/entitlements/.../reexport.ts ->
+    // lib/rules/operand-catalogue.ts) and confirming depcruise exits
+    // non-zero with the full chain in its output, then a clean run on
+    // real lib/analytics/** code. This test therefore no longer documents
+    // an ACCEPTED, OPEN gap in the whole boundary system (PROGRESS.md's
+    // 2026-09-08 PASS's binding condition -- 'must be closed before
+    // Module 05's edge/detection engine slices land real analytic
+    // computation' -- fired with this exact slice and is now satisfied);
+    // it documents a known, permanent, compensated-for LIMITATION of the
+    // ESLint half specifically. If this test ever starts failing (i.e.
+    // the re-export chain below starts tripping an ESLint rule), that
+    // means the ESLint mechanism changed shape -- update this test AND
+    // docs/adr/0021 together. If npm run check:import-boundaries ever
+    // stops catching this same shape, THAT is the real regression to
+    // treat as a live security gap, not this test.
     //
     // Why this can't be closed by `no-restricted-imports` /
     // `no-restricted-syntax` at all: both are single-file syntactic

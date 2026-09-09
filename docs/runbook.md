@@ -1334,3 +1334,81 @@ specific error text as higher priority than an ordinary transient
 recompute failure — it indicates two writers raced for the same
 `(user_id, strategy_id, field_id, segment)` tuple outside the lock's
 protection, not merely a one-off connectivity blip.
+
+---
+
+## Detection engine `detections` recompute failing after a sync
+
+**Source:** Module 05 (Analytics & Findings) §4.13 — "Detection engine |
+Nightly per user | Windowed over the last 90 days." Owning code:
+`lib/analytics/detection-engine/repository.ts`'s `recomputeDetectionsForUser`,
+called from `lib/ingestion/sync.ts`'s `runSync` immediately after the edge
+engine's own recompute (see "Edge engine `findings` recompute failing
+after a sync" above — same call site, same file, same failure MODE, this
+entry is the detection-engine analog, not a different mechanism).
+
+**What this means operationally:** wired as a best-effort, non-blocking
+side effect of a successful sync, for the identical reason every other
+recompute entry in this file documents — a recompute failure must never
+turn an already-committed, genuinely successful sync into a reported
+failure. Invisible to the trader and to `sync_runs.status` by construction;
+the only trace is a `console.error` line prefixed `[sync] detection engine
+recompute failed after sync for user <id> (account <id>, syncRunId <id>)`.
+Left unaddressed, a trader's `detections` rows go stale — Module 06's
+future weekly review (once it exists and reads `detections`) keeps showing
+whatever was last successfully computed, which for a trader who has never
+had a successful recompute yet is nothing at all — the same intended
+fail-closed/"not enough evidence yet" behaviour every other recompute entry
+in this file describes, not an error state.
+
+**Independent of the edge-engine recompute immediately above it** — the
+two engines never read each other's output (§1: "Two engines that never
+speak to each other") and both run as two separate best-effort `try/catch`
+blocks in `runSync`, so one failing has no bearing on whether the other
+succeeds.
+
+**A gate-failed analytic never writes a row, by design — do not confuse
+this with a recompute FAILURE.** Per `docs/adr/0030-detection-engine-
+occurrence-definitions.md`, an analytic whose volume or rate gate fails on
+a given run produces NO row at all for that run — this is the correct,
+intended "meaningful on frequency alone, and this isn't frequent enough
+yet" behaviour (`gates.ts`'s own header), not a bug and not something this
+runbook entry's failure signature (below) will ever mention. Only a
+genuine thrown exception during the fetch/compute/write path (a dead
+connection, a real Postgres error, a bug) produces the `[sync] detection
+engine recompute failed after sync` log line this entry is about.
+
+**Nightly recompute is NOT built** — the identical, already-tracked infra
+gap `operand_distributions`'/the edge engine's own entries document (no
+cron/scheduler exists in this repo yet, PROGRESS.md "Infra gaps") — not a
+new gap. Until nightly exists, a sync-time failure is the ONLY way a
+trader's detections get refreshed at all.
+
+**How to check:** grep application logs for `[sync] detection engine
+recompute failed after sync` — every occurrence names the affected
+`user_id`/`account_id`/`syncRunId` directly. A quick live check for a
+specific trader: compare each `detections.computed_at` (most recent
+`active` row per `analytic_id`) against that account's most recent
+`sync_runs.finished_at` — meaningfully stale suggests either a recompute
+failure, or (more commonly, and correct) that the trader's own occurrences
+have never cleared the volume/rate gates for that analytic yet, which is
+NOT a symptom to chase — check occurrence counts against
+`VOLUME_MIN_OCCURRENCES` (`lib/analytics/detection-engine/gates.ts`)
+before assuming a failure.
+
+**Failure signature to watch for — supersession constraint violation:** a
+`duplicate key value violates unique constraint
+"detections_active_analytic_uidx"` error inside this same recompute
+failure log line means the `pg_advisory_xact_lock`-based serialization in
+`writeDetectionsForUser` was bypassed somehow (a bug, or a future write
+path that doesn't go through this function) — same alertable-in-itself
+signature class as `findings_active_tuple_uidx`'s own entry above; treat a
+recurring occurrence as higher priority than an ordinary transient
+recompute failure, since in normal operation the lock should make this
+constraint unreachable.
+
+**What does not yet exist to fully automate this:** no live Supabase
+project for a scheduled/nightly job (see above), and no Module 06 weekly
+review surface yet to actually consume `detections` — this entry documents
+what to look at once both exist, matching every other "no live project
+yet" entry in this file.
