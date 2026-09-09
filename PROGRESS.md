@@ -31,19 +31,69 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-09, RESUME -- supersedes every "AT A GLANCE"
-note below, all of which are now HISTORICAL): the commit-and-push job
-the previous entry left for itself is DONE and verified, and the next
-task is decided.** Verified rather than assumed: `git status` is clean,
-`HEAD` is `f226bb0` ("Module 05: edge engine core statistics (section
-4.1-4.3)"), and `origin/main` resolves to the same SHA -- so Module
-05's core-statistics changeset is both committed and actually pushed to
-`github.com/lucedge/Retrospeq_v1`. Nothing was left mid-write. The
-trigger-condition (§4.7) entry's own self-assigned job (the
-`trigger-conditions-repository.live.test.ts` 20s->60s timeout bump) is
-likewise already in the tree -- both of the two most recent entries'
-trailing to-dos are closed, and neither is still outstanding despite
-each entry's text still reading as if it were.
+**AT A GLANCE (2026-09-09, RESUME 2 -- supersedes every "AT A GLANCE"
+note below, all of which are now HISTORICAL): Module 05's detection
+engine slice (§4.4 + the §4.5 v1 catalogue) is FULLY DONE, committed,
+and pushed.** This resumed a slice whose coder stage had already
+finished in a prior session that died before any gate ran (see the
+"RESUME" entry immediately below for that history). This session ran
+the full remaining tester -> security-reviewer -> qa chain (all PASS,
+dated 2026-09-09 Decision-log entries -- search "TESTER GATE" and the
+two entries immediately after it), then committed as `9fef8c9` and
+pushed. **Verified, not assumed**: `HEAD` and `origin/main` both
+resolve to `9fef8c9` ("Module 05: detection engine (section 4.4 gates
++ section 4.5 v1 catalogue)").
+
+**A real gap was found and deliberately NOT fixed as part of this
+slice**: `rule_proposable` (§5's own mechanism for enforcing "the count
+tier never proposes a rule on frequency alone") does not exist in code
+or schema. Not currently exploitable (zero downstream readers of
+`detections` exist anywhere in the repo today), so this was correctly
+scoped as a tracked Infra-gaps entry with a binding condition ("must be
+added before any code reads `detections`"), not a blocker for this
+slice's own PASS -- but it IS a real piece of unfinished spec-mandated
+work. Whoever builds Module 06's rule-proposal surface (or any other
+future reader of `detections`) MUST add it first; do not let a consumer
+get built and re-derive the flag ad hoc.
+
+**This working tree is SHARED with a separate, concurrent Claude
+session that built Module 03 strategy-builder UI, uncommitted, and has
+stood down holding its own changes** (`app/(app)/strategies/**`,
+`docs/adr/0027-strategy-builder-two-phase-create.md`,
+`lib/fields/hedge-words.ts`, diffs in
+`lib/fields/{fields,strategy,trigger-conditions}-repository.ts`,
+`lib/rate-limit/config.ts`, `app/(app)/layout.tsx`, and a
+`STRATEGY_BUILDER_PARTIAL` section of `docs/runbook.md`). Confirmed via
+`git status` immediately after this session's own push: none of it was
+touched, committed, or pushed by this session -- it is exactly as that
+other session left it. **Whoever resumes next should check `git
+status` first before assuming a clean tree**: if that work is still
+sitting there uncommitted, it needs its OWN gate chain (it has not been
+tester/security-reviewer/qa reviewed as far as this session could tell)
+before being committed -- do not sweep it into an unrelated commit, and
+do not assume this entry's own "done" scope covers it.
+
+**Next task, not yet decided by this session -- genuinely open, no hard
+blocker either way**: Module 03's remaining UI (the concurrent
+session's own in-flight work above, if still present, plus the §4.8
+field-cap warning UI) versus Module 05's remaining scope (§4.6
+improvement detection, §4.11 decay checking, §4.10 the weekday canary,
+`rule_proposable`'s own addition per the binding condition above,
+shadow-harness wiring for real analytics). Orchestrator's call, per
+this build's own standing judgment-call convention.
+
+**AT A GLANCE (2026-09-09, RESUME -- HISTORICAL, superseded above): the
+commit-and-push job the previous entry left for itself is DONE and
+verified, and the next task is decided.** Verified rather than assumed:
+`git status` is clean, `HEAD` is `f226bb0` ("Module 05: edge engine core
+statistics (section 4.1-4.3)"), and `origin/main` resolves to the same
+SHA -- so Module 05's core-statistics changeset is both committed and
+actually pushed to `github.com/lucedge/Retrospeq_v1`. Nothing was left
+mid-write. The trigger-condition (§4.7) entry's own self-assigned job
+(the `trigger-conditions-repository.live.test.ts` 20s->60s timeout
+bump) is likewise already in the tree -- both of the two most recent
+entries' trailing to-dos are closed, and neither is still outstanding
+despite each entry's text still reading as if it were.
 
 **Next task decided: Module 05's detection engine (§4.4 + the §4.5 v1
 catalogue), NOT Module 03's UI.** Both were genuinely unblocked --
