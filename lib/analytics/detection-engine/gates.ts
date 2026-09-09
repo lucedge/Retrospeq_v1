@@ -1,4 +1,9 @@
-import type { AccountOccurrenceSummary, DetectionClassification, DetectionComputationResult, DetectionTier } from './types';
+import type {
+  AccountOccurrenceSummary,
+  DetectionClassification,
+  DetectionComputationResult,
+  DetectionTier,
+} from './types';
 export type { AccountOccurrenceSummary, DetectionClassification, DetectionComputationResult, DetectionTier };
 
 /**
@@ -92,6 +97,28 @@ export const DETECTION_WINDOW_DAYS = 90;
 export const VOLUME_MIN_OCCURRENCES = 5;
 export const PERSISTENCE_MIN_DISTINCT_DAYS = 3;
 export const PERSISTENCE_MIN_CALENDAR_WEEKS = 2;
+
+/**
+ * §4.6 — "a pattern that was above base rate for >= 4 weeks and has been
+ * absent for >= 4 weeks." Two independent constants, both new for this
+ * slice (see `gates.ts`'s own `computeImprovementDetection` and
+ * `docs/adr/0031-detection-direction-and-rule-proposable.md`):
+ *
+ *  - `IMPROVEMENT_PRIOR_PERSISTENCE_MIN_CALENDAR_WEEKS` — the persistence
+ *    gate's calendar-week floor, RAISED from the standard
+ *    `PERSISTENCE_MIN_CALENDAR_WEEKS` (2) to 4 for the PRIOR sub-window
+ *    only. `PERSISTENCE_MIN_DISTINCT_DAYS` (the >=3 distinct-days floor)
+ *    is UNCHANGED — §4.6 only names weeks, never days, as the elevated
+ *    bar.
+ *  - `IMPROVEMENT_RECENT_ABSENCE_DAYS` — the width of the trailing
+ *    "has it stopped" sub-window, splitting `DETECTION_WINDOW_DAYS` (90)
+ *    at `now - 28d`: `[now-90d, now-28d)` is the PRIOR sub-window (must
+ *    show the elevated pattern), `[now-28d, now)` is the RECENT
+ *    sub-window (must show literal zero occurrences — "you haven't done
+ *    it," not a fuzzy below-baseline-rate comparison).
+ */
+export const IMPROVEMENT_PRIOR_PERSISTENCE_MIN_CALENDAR_WEEKS = 4;
+export const IMPROVEMENT_RECENT_ABSENCE_DAYS = 28;
 
 /**
  * §4.4's own "count" vs "count_outcome" table: "count_outcome | ... |
@@ -195,9 +222,28 @@ export interface ComputeDetectionInput {
   rMultipleByTradeId: ReadonlyMap<string, number | null>;
 }
 
-/** `null` return = "nothing to write" — see this file's header, "WHAT
- *  HAPPENS WHEN VOLUME OR RATE FAILS." */
-export function computeDetection(input: ComputeDetectionInput): DetectionComputationResult | null {
+/** The three-gate/classification/tier core, minus `ruleProposable` and
+ *  `direction` — those two are call-site concerns (§4.6's dispatch: an
+ *  improvement's `ruleProposable` is hardcoded `false` regardless of what
+ *  this core would otherwise compute), not part of the shared gate math
+ *  itself. */
+export type DetectionCoreResult = Omit<DetectionComputationResult, 'ruleProposable' | 'direction'>;
+
+/**
+ * The shared volume/rate/persistence/tier core — extracted so
+ * `computeDetection` (the standard, §4.4 path) and
+ * `computeImprovementDetection` (§4.6's inverted-window path) run the
+ * IDENTICAL gate math, parameterized only by how many calendar weeks the
+ * persistence gate requires. `computeDetection` below passes
+ * `PERSISTENCE_MIN_CALENDAR_WEEKS` (2, unchanged) and remains a thin
+ * wrapper with byte-identical public behaviour to before this refactor —
+ * proven by every pre-existing test in `gates.test.ts`/
+ * `gates.property.test.ts`/`detection-engine.test.ts` passing unchanged.
+ *
+ * `null` return = "nothing to write" — see this file's header, "WHAT
+ * HAPPENS WHEN VOLUME OR RATE FAILS."
+ */
+function computeDetectionCore(input: ComputeDetectionInput, persistenceMinCalendarWeeks: number): DetectionCoreResult | null {
   const merged = mergeAccountSummaries(input.accounts);
   const occurrences = merged.occurrenceServerDays.length;
 
@@ -223,10 +269,13 @@ export function computeDetection(input: ComputeDetectionInput): DetectionComputa
   // --- Persistence gate -> classification (does NOT gate whether a row
   // is written at all, only which classification it gets — see this
   // file's header for why this is the one gate with a THIRD, non-null
-  // outcome). ---
+  // outcome). `persistenceMinCalendarWeeks` is the ONLY axis this core
+  // varies on between the standard and improvement paths — the distinct-
+  // days floor (`PERSISTENCE_MIN_DISTINCT_DAYS`) is never parameterized;
+  // §4.6 only raises the WEEKS bar, never the days one. ---
   const distinctServerDays = new Set(merged.occurrenceServerDays);
   const distinctWeeks = new Set([...distinctServerDays].map(isoWeekStart));
-  const persistencePassed = distinctServerDays.size >= PERSISTENCE_MIN_DISTINCT_DAYS && distinctWeeks.size >= PERSISTENCE_MIN_CALENDAR_WEEKS;
+  const persistencePassed = distinctServerDays.size >= PERSISTENCE_MIN_DISTINCT_DAYS && distinctWeeks.size >= persistenceMinCalendarWeeks;
   const classification: DetectionClassification = persistencePassed ? 'pattern' : 'incident';
 
   // --- Tier + outcome comparison ---
@@ -257,5 +306,139 @@ export function computeDetection(input: ComputeDetectionInput): DetectionComputa
     outcomeBaselineAvgR,
     tier,
     classification,
+  };
+}
+
+/**
+ * §4.4's standard, "currently elevated" detection path — thin wrapper over
+ * `computeDetectionCore` with the standard 2-calendar-week persistence
+ * floor. `direction` is always `'active'`; `ruleProposable` is §6.2's own
+ * formula ("count -> describe only / count_outcome -> rule proposable,"
+ * with the incident branch drawn explicitly as `rule_proposable = false`):
+ * `classification === 'pattern' && tier === 'count_outcome'`.
+ *
+ * `null` return = "nothing to write" — see this file's header, "WHAT
+ * HAPPENS WHEN VOLUME OR RATE FAILS."
+ */
+export function computeDetection(input: ComputeDetectionInput): DetectionComputationResult | null {
+  const core = computeDetectionCore(input, PERSISTENCE_MIN_CALENDAR_WEEKS);
+  if (core === null) return null;
+  return {
+    ...core,
+    ruleProposable: core.classification === 'pattern' && core.tier === 'count_outcome',
+    direction: 'active',
+  };
+}
+
+export interface ComputeImprovementDetectionInput {
+  analyticId: string;
+  /** `now - 90d` — the PRIOR sub-window's own lower bound, and the
+   *  RETURNED result's own `windowFrom` (the improvement statement spans
+   *  the full 90-day lookback, not just the prior sub-window). */
+  priorWindowFrom: string;
+  /** `now - 28d` — the PRIOR sub-window's own upper bound AND the RECENT
+   *  sub-window's own lower bound (the two sub-windows are adjacent, not
+   *  overlapping). */
+  priorWindowTo: string;
+  /** `now` — the RECENT sub-window's own upper bound, and the RETURNED
+   *  result's own `windowTo`. */
+  recentWindowTo: string;
+  /** Per-account occurrence summaries computed over `[priorWindowFrom,
+   *  priorWindowTo)` — i.e. each detector called with `windowFromIso =
+   *  priorWindowFrom, windowToIso = priorWindowTo`. Baseline within these
+   *  summaries is therefore still "everything strictly before
+   *  `priorWindowFrom`" (own full prior history), unaffected by the upper
+   *  bound — see `occurrence-detectors.ts`'s own header for why an upper
+   *  bound never touches baseline classification. */
+  priorAccounts: readonly AccountOccurrenceSummary[];
+  /** Per-account occurrence summaries computed over `[priorWindowTo,
+   *  recentWindowTo)` — each detector called with `windowFromIso =
+   *  priorWindowTo, windowToIso = recentWindowTo`. Only `windowOccurrences`
+   *  (and its own `windowCandidates`) is consulted here — this sub-window's
+   *  own gate/rate/baseline concepts are irrelevant to the absence check,
+   *  which only asks "were there ANY occurrences in this 28-day span." */
+  recentAccounts: readonly AccountOccurrenceSummary[];
+  rMultipleByTradeId: ReadonlyMap<string, number | null>;
+}
+
+/**
+ * §4.6 — "Same computation, inverted window: a pattern that was above base
+ * rate for >= 4 weeks and has been absent for >= 4 weeks." Reuses
+ * `computeDetectionCore` (never reimplements the gate math) over the PRIOR
+ * sub-window with the raised 4-week persistence floor, then checks the
+ * RECENT sub-window for literal zero occurrences ("you haven't done it,"
+ * not a below-baseline-rate comparison).
+ *
+ * `null` return = "nothing to write" — either the prior window never
+ * showed a genuinely persistent (>= 4 week) elevated pattern in the first
+ * place, or the pattern is still ongoing (the recent window has at least
+ * one occurrence) — same "null = nothing to write" convention as
+ * `computeDetection`.
+ */
+export function computeImprovementDetection(input: ComputeImprovementDetectionInput): DetectionComputationResult | null {
+  const priorCore = computeDetectionCore(
+    {
+      analyticId: input.analyticId,
+      windowFrom: input.priorWindowFrom,
+      windowTo: input.priorWindowTo,
+      accounts: input.priorAccounts,
+      rMultipleByTradeId: input.rMultipleByTradeId,
+    },
+    IMPROVEMENT_PRIOR_PERSISTENCE_MIN_CALENDAR_WEEKS,
+  );
+  // Didn't clear volume/rate at all -- nothing to say "you used to do
+  // this" about.
+  if (priorCore === null) return null;
+
+  // FLAGGED CORRECTION TO THIS SLICE'S OWN DISPATCH TEXT (documented per
+  // AGENTS.md's "fix drift deliberately, log the reconciliation" -- not a
+  // silent deviation): the dispatch's own design assumed "if [the core]
+  // returns null (didn't qualify as an elevated pattern for >=4 weeks),
+  // return null" was the ONLY check needed, on the theory that clearing
+  // >=4-week persistence was baked into whether the core returns null at
+  // all. That is NOT how `computeDetectionCore` actually works --
+  // `null` is returned ONLY for a volume or rate gate failure (this file's
+  // own header, "WHAT HAPPENS WHEN VOLUME OR RATE FAILS"); the persistence
+  // gate NEVER makes the core return null, it only flips `classification`
+  // between 'pattern' and 'incident' while still returning a real object.
+  // So a prior-window pattern that clears volume/rate but has FEWER than
+  // `IMPROVEMENT_PRIOR_PERSISTENCE_MIN_CALENDAR_WEEKS` distinct weeks
+  // comes back as a non-null, `classification: 'incident'` result here --
+  // NOT null. An 'incident' is explicitly NOT "a pattern that was above
+  // base rate for >= 4 weeks" (§4.6's own wording), so this function
+  // additionally treats a non-'pattern' classification the SAME as a null
+  // core result: nothing to say "you used to do this" about. Proven
+  // reachable (not a dead branch) by `gates.improvement.test.ts`'s own
+  // "does NOT qualify as an improvement" tests.
+  if (priorCore.classification !== 'pattern') return null;
+
+  // Recent-window absence check -- literal zero, not "below baseline rate".
+  const recentMerged = mergeAccountSummaries(input.recentAccounts);
+  const recentOccurrences = recentMerged.occurrenceServerDays.length;
+  if (recentOccurrences !== 0) return null; // still ongoing -- not improved
+
+  return {
+    analyticId: input.analyticId,
+    occurrences: priorCore.occurrences,
+    // Spans the FULL 90-day lookback, not just the prior sub-window --
+    // §4.6's own dispatch instruction.
+    windowFrom: input.priorWindowFrom,
+    windowTo: input.recentWindowTo,
+    distinctDays: priorCore.distinctDays,
+    baseRate: priorCore.baseRate,
+    outcomeAvgR: priorCore.outcomeAvgR,
+    outcomeBaselineAvgR: priorCore.outcomeBaselineAvgR,
+    tier: priorCore.tier,
+    classification: priorCore.classification,
+    // HARDCODED FALSE, regardless of tier/classification -- an improvement
+    // can never propose a rule. §6.2's rule-proposal flow is specifically
+    // for a CURRENTLY-elevated pattern ("count_outcome -> rule proposable
+    // -> Module 06 prompt"); proposing a rule to prevent something that
+    // already stopped doesn't fit that flow anywhere in the spec. This is
+    // the one place `ruleProposable` deliberately does NOT follow the
+    // standard `classification === 'pattern' && tier === 'count_outcome'`
+    // formula `computeDetection` uses.
+    ruleProposable: false,
+    direction: 'improved',
   };
 }

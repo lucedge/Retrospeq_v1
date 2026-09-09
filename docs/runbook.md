@@ -1462,6 +1462,21 @@ genuine thrown exception during the fetch/compute/write path (a dead
 connection, a real Postgres error, a bug) produces the `[sync] detection
 engine recompute failed after sync` log line this entry is about.
 
+**§4.6 "improvement detection" (`direction = 'improved'` rows) runs inside
+this SAME recompute call, not a separate one** — `computeDetectionsForUserId`
+runs the standard (§4.4) computation, then the improvement (§4.6) one for
+every `analytic_id` the standard pass did NOT already produce a result for
+this run (`docs/adr/0031-detection-direction-and-rule-proposable.md`'s own
+mutual-exclusivity tie-break), and writes both through the identical
+`writeDetectionsForUser` path. There is no separate log line, failure
+mode, or "improvement recompute failed" message — a thrown exception
+anywhere in either computation surfaces through the exact same `[sync]
+detection engine recompute failed after sync` line this entry is about.
+Symmetric to the standard-path note above: an analytic whose PRIOR
+sub-window never clears the raised 4-week persistence floor, or whose
+RECENT 28 days aren't literally silent, produces NO improvement row either
+— also not a bug, not something this entry's failure signature covers.
+
 **Nightly recompute is NOT built** — the identical, already-tracked infra
 gap `operand_distributions`'/the edge engine's own entries document (no
 cron/scheduler exists in this repo yet, PROGRESS.md "Infra gaps") — not a

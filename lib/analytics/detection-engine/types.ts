@@ -48,6 +48,12 @@ export interface DetectionTradeRow {
 
 export type DetectionTier = 'count' | 'count_outcome';
 export type DetectionClassification = 'incident' | 'pattern';
+/** §4.6 — 'active' is the standard (current-behaviour) computation path;
+ *  'improved' is the inverted-window computation (`gates.ts`'s
+ *  `computeImprovementDetection`) — a pattern that was elevated for >= 4
+ *  weeks and has been absent for >= 4 weeks. See
+ *  `docs/adr/0031-detection-direction-and-rule-proposable.md`. */
+export type DetectionDirection = 'active' | 'improved';
 
 /** Canonical shared types below — `gates.ts` (the pure gate/merge logic)
  *  and `occurrence-detectors.ts` (the pure per-account detectors) both
@@ -103,4 +109,15 @@ export interface DetectionComputationResult {
   outcomeBaselineAvgR: number | null;
   tier: DetectionTier;
   classification: DetectionClassification;
+  /** §5's `DetectionPayload.rule_proposable` — "false for count-tier and
+   *  for incidents ... the single flag that prevents an incident or a bare
+   *  count from becoming a rule prompt." Computed centrally here, never
+   *  re-derived by a downstream reader (`gates.ts`'s `computeDetection`/
+   *  `computeImprovementDetection` set this; `writeDetectionsForUser`
+   *  persists it verbatim). See `docs/adr/0031-detection-direction-and-
+   *  rule-proposable.md`. */
+  ruleProposable: boolean;
+  /** §4.6 — 'active' (the standard path, always) or 'improved' (the
+   *  inverted-window path). See `DetectionDirection`'s own doc comment. */
+  direction: DetectionDirection;
 }

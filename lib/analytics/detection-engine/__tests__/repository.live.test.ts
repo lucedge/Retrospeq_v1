@@ -301,6 +301,115 @@ describe.skipIf(!env)('lib/analytics/detection-engine/repository.ts (live DB)', 
     const dailyLossBreach = computation.results.find((r) => r.analyticId === 'seq.daily_loss_breach');
     expect(dailyLossBreach).toBeUndefined(); // no baseline history, no equity -> nothing to write
   }, 30_000);
+
+  it(
+    '§4.6 improvement detection end-to-end: a real engineered PRIOR-window seq.reentry_after_loss ' +
+      'pattern that has been genuinely absent for the RECENT 28 days writes a direction: "improved", ' +
+      'rule_proposable: false row via the exact same write path',
+    async () => {
+      if (!env) return;
+      const { id: userId } = await createTestAuthUser(envBundle, 'detection-repo-improved');
+      cleanupUserIds.push(userId);
+      const accountId = await seedAccount(userId);
+
+      const now = Date.now();
+      const daysAgo = (n: number) => new Date(now - n * 24 * 60 * 60 * 1000);
+
+      // FIXTURE DESIGN NOTE: the STANDARD engine's own window is UNBOUNDED
+      // above ([now-90d, now)) -- it always includes every trade the
+      // improvement engine's own PRIOR sub-window does, plus everything in
+      // the RECENT 28 days too. If the recent window contributed ONLY
+      // silence (zero candidates, not just zero occurrences), the standard
+      // engine would see the IDENTICAL occurrences/candidates/rate as the
+      // prior-window-alone computation and would ALSO fire (with a lower,
+      // easier-to-clear 2-week persistence floor) -- which the mutual-
+      // exclusivity tie-break would then correctly, but unhelpfully for
+      // THIS test's own purpose, skip improvement for. To get a genuine
+      // 'improved' result while the standard engine finds NOTHING, this
+      // fixture adds a burst of SLOW (non-fast, still real "loss
+      // immediately preceded" CANDIDATES) re-entries in the recent 28
+      // days -- diluting the STANDARD window's own rate below baseRate
+      // (so the standard engine's rate gate fails, producing no result at
+      // all) while leaving the PRIOR sub-window's own rate (computed over
+      // a narrower window that never sees these recent dilution trades)
+      // untouched and still comfortably above baseRate. This is a genuine,
+      // realistic trading pattern, not a contrived one: "used to
+      // re-enter fast after every loss, now still trades on after a loss
+      // but no longer FAST" is exactly the kind of behavioural change §4.6
+      // exists to notice.
+
+      // Baseline (strictly before now-90d, own history only): 5 loss ->
+      // candidate pairs, 2 fast (occurrences) and 3 slow -- baseRate = 0.4.
+      const baselineAnchorsDaysAgo = [150, 145, 140, 135, 130];
+      for (let i = 0; i < baselineAnchorsDaysAgo.length; i++) {
+        const lossOpen = daysAgo(baselineAnchorsDaysAgo[i]);
+        const lossClose = new Date(lossOpen.getTime() + 5 * 60 * 1000);
+        const isFast = i < 2; // first 2 anchors are fast (occurrences), remaining 3 are slow
+        const gapMs = isFast ? 30 * 1000 : 5 * 60 * 1000;
+        await seedTrade(userId, accountId, { openedAt: lossOpen, closedAt: lossClose, outcome: 'loss' });
+        await seedTrade(userId, accountId, { openedAt: new Date(lossClose.getTime() + gapMs), outcome: 'win' });
+      }
+
+      // PRIOR sub-window ([now-90d, now-28d)): fast re-entries spread
+      // across 4 distinct weeks (>= IMPROVEMENT_PRIOR_PERSISTENCE_MIN_
+      // CALENDAR_WEEKS), well clear of the 28-day recent boundary --
+      // priorRate = 8/8 = 1.0, comfortably above baseRate (0.4).
+      const priorAnchorsDaysAgo = [85, 71, 57, 43]; // 14 days apart -- 4 distinct ISO weeks, all >28 days ago
+      for (const daysBack of priorAnchorsDaysAgo) {
+        for (let i = 0; i < 2; i++) {
+          const lossOpen = new Date(daysAgo(daysBack).getTime() + i * 3 * 60 * 60 * 1000);
+          const lossClose = new Date(lossOpen.getTime() + 5 * 60 * 1000);
+          const reentryOpen = new Date(lossClose.getTime() + 30 * 1000); // 30s -- well under the 90s threshold
+          await seedTrade(userId, accountId, { openedAt: lossOpen, closedAt: lossClose, outcome: 'loss' });
+          await seedTrade(userId, accountId, { openedAt: reentryOpen, outcome: 'win' });
+        }
+      }
+
+      // RECENT sub-window ([now-28d, now)): literal ZERO fast-re-entry
+      // OCCURRENCES (the improvement engine's own absence check) but 16
+      // SLOW re-entry CANDIDATES -- diluting the standard window's rate to
+      // 8/(8+16) = 0.333, which does NOT clear baseRate (0.4), so the
+      // standard engine produces NO result for this analytic at all.
+      for (let day = 3; day < 19; day++) {
+        const lossOpen = daysAgo(day);
+        const lossClose = new Date(lossOpen.getTime() + 5 * 60 * 1000);
+        const slowReentryOpen = new Date(lossClose.getTime() + 5 * 60 * 1000); // 5 min -- well over the 90s threshold
+        await seedTrade(userId, accountId, { openedAt: lossOpen, closedAt: lossClose, outcome: 'loss' });
+        await seedTrade(userId, accountId, { openedAt: slowReentryOpen, outcome: 'win' });
+      }
+
+      const { computeDetectionsForUserId, writeDetectionsForUser } = await import('../repository');
+      const computation = await computeDetectionsForUserId(userId);
+
+      // No STANDARD (direction: 'active') result for this analytic -- the
+      // dilution above pushed its own rate gate below baseRate.
+      const activeReentry = computation.results.find(
+        (r) => r.analyticId === 'seq.reentry_after_loss' && r.direction === 'active',
+      );
+      expect(activeReentry).toBeUndefined();
+
+      const reentryResult = computation.results.find(
+        (r) => r.analyticId === 'seq.reentry_after_loss' && r.direction === 'improved',
+      );
+      expect(reentryResult).toBeDefined();
+      expect(reentryResult!.classification).toBe('pattern');
+      expect(reentryResult!.occurrences).toBe(8); // the 4 prior anchors x 2 fast re-entries each
+      expect(reentryResult!.ruleProposable).toBe(false); // hardcoded override -- an improvement never proposes a rule
+
+      await writeDetectionsForUser(userId, computation.results);
+      const row = await db.query<{ direction: string; rule_proposable: boolean; classification: string; state: string }>(
+        `select direction, rule_proposable, classification, state
+           from retrospeq.detections
+          where user_id = $1 and analytic_id = 'seq.reentry_after_loss' and state = 'active'`,
+        [userId],
+      );
+      expect(row.rows).toHaveLength(1);
+      expect(row.rows[0].direction).toBe('improved');
+      expect(row.rows[0].rule_proposable).toBe(false);
+      expect(row.rows[0].classification).toBe('pattern');
+    },
+    60_000,
+  );
 });
 
 describe.skipIf(!!env)('lib/analytics/detection-engine/repository.ts RLS/live suite — skipped', () => {

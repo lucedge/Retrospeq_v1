@@ -116,3 +116,17 @@ even with nothing to supersede it WITH — and rejected for two reasons:
   running the recompute twice back-to-back with unchanged input data
   correctly supersedes the first run's row and leaves exactly one `active`
   row per `(user_id, analytic_id)`.
+
+## Addendum, 2026-09-09: the "stale forward row" gap this ADR flagged is now closed — see `docs/adr/0031`
+
+The "Consequences" section above named the exact open question a future
+§4.6 slice would need to resolve: what happens to a stale `active` row
+once a pattern genuinely improves. `docs/adr/0031-detection-direction-and-
+rule-proposable.md` is that resolution — §4.6's inverted-window
+improvement computation (`gates.ts`'s `computeImprovementDetection`,
+`detection-engine.ts`'s `computeAllImprovementDetectionsForUser`) is now
+built, and it closes the gap via a mutual-exclusivity tie-break (at most
+one result, either `direction`, per `analytic_id` per run) rather than
+inventing a new supersession key — `(user_id, analytic_id)` and
+`detections_active_analytic_uidx` remain sufficient, unchanged. See ADR
+0031 for the full reasoning; not restated here.

@@ -295,6 +295,23 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // commit that introduces the call" cautionary note the entries above
   // already carry, restated because it was missed once more despite it.
   'lib/analytics/edge-engine/repository.ts',
+  // Module 05 (Analytics & Findings) detection engine, §4.4-4.6/§4.13: the
+  // entire DB access layer (`fetchAccountsForUser`, `fetchEligibleTradesByAccount`,
+  // `writeDetectionsForUser`) runs under `withServiceRoleConnection` for the
+  // identical reason `lib/analytics/edge-engine/repository.ts`'s own entry
+  // above documents — a BACKGROUND recompute triggered from `lib/ingestion/
+  // sync.ts`'s post-sync hook, no authenticated session at the call site.
+  // Every query is explicitly scoped to the caller-supplied `userId`, never
+  // trusting RLS to narrow it (this file's own header comment). Missed in
+  // the original slice's own commit (`9fef8c9`, "Module 05: detection
+  // engine (section 4.4 gates + section 4.5 v1 catalogue)") and closed here
+  // by `retrospeq-tester`'s own independent-verification gate (2026-09-09,
+  // reviewing the §4.6 improvement-detection slice) — same "missed once
+  // more despite the cautionary note" pattern the `edge-engine/repository.ts`
+  // entry immediately above already flags, found by actually running the
+  // full repo-wide suite rather than only the scoped `detection-engine`
+  // directory the coder's own dispatch reported against.
+  'lib/analytics/detection-engine/repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

@@ -69,8 +69,44 @@ export const RISK_SPREAD_IQR_FENCE_MULTIPLIER = 1.5;
  *  reason, not independently derived. */
 export const RISK_SPREAD_MIN_BASELINE_SAMPLE = 5;
 
-function isInWindow(iso: string, windowFromIso: string): boolean {
-  return iso >= windowFromIso;
+/**
+ * §4.6's own refactor — every detector below now accepts an OPTIONAL
+ * `windowToIso` so it can compute occurrences for a BOUNDED sub-window
+ * (the improvement computation's own `[now-90d, now-28d)` prior window and
+ * `[now-28d, now)` recent window — `gates.ts`'s `computeImprovementDetection`)
+ * as well as the original unbounded `[windowFromIso, +infinity)` window.
+ *
+ * THE BUG TO AVOID, EXPLICITLY: before this refactor, `baseline` was
+ * inferred as `!isInWindow(...)` — the boolean complement of "in window."
+ * The instant an upper bound exists, that inference is WRONG: a trade
+ * strictly AT OR AFTER `windowToIso` is neither "in window" (it's past the
+ * bounded sub-window entirely) NOR genuinely "baseline" (baseline must
+ * stay "strictly before `windowFromIso`," unaffected by `windowToIso`) —
+ * folding it into baseline by taking the boolean complement would corrupt
+ * the baseline rate/threshold with data that was never meant to describe
+ * "the trader's prior history," it was meant to describe "the OTHER
+ * bounded sub-window this same call happens not to be computing right
+ * now." Every detector therefore does a genuine THREE-way classification
+ * (`classifyWindowMembership` below) and EXCLUDES an 'after' verdict from
+ * every count entirely, rather than silently treating it as baseline.
+ *
+ * REGRESSION INVARIANT: when `windowToIso` is omitted, `classifyWindowMembership`
+ * can never return `'after'` (there is no upper bound to be at-or-after),
+ * so the three-way split collapses to EXACTLY the original two-way
+ * baseline/window split, byte for byte — every existing test in
+ * `occurrence-detectors.test.ts` proves this for the windowToIso-omitted
+ * case.
+ */
+function isBeforeWindow(iso: string, windowFromIso: string): boolean {
+  return iso < windowFromIso;
+}
+
+type WindowMembership = 'baseline' | 'window' | 'after';
+
+function classifyWindowMembership(iso: string, windowFromIso: string, windowToIso?: string): WindowMembership {
+  if (isBeforeWindow(iso, windowFromIso)) return 'baseline';
+  if (windowToIso !== undefined && iso >= windowToIso) return 'after';
+  return 'window';
 }
 
 function emptySummary(accountId: string): AccountOccurrenceSummary {
@@ -108,6 +144,7 @@ export function computeReentryOccurrences(
   accountId: string,
   trades: readonly DetectionTradeRow[],
   windowFromIso: string,
+  windowToIso?: string,
 ): AccountOccurrenceSummary {
   if (trades.length < 2) return emptySummary(accountId);
 
@@ -121,7 +158,9 @@ export function computeReentryOccurrences(
   for (let i = 1; i < trades.length; i++) {
     const prev = trades[i - 1];
     const curr = trades[i];
-    const inWindow = isInWindow(curr.openedAt, windowFromIso);
+    const membership = classifyWindowMembership(curr.openedAt, windowFromIso, windowToIso);
+    if (membership === 'after') continue; // outside the bounded sub-window entirely -- neither window nor baseline
+    const inWindow = membership === 'window';
     if (inWindow) windowEligibleTradeIds.push(curr.id);
 
     if (prev.outcome !== 'loss') continue;
@@ -166,6 +205,7 @@ export function computeTradesPerDayOccurrences(
   accountId: string,
   trades: readonly DetectionTradeRow[],
   windowFromIso: string,
+  windowToIso?: string,
 ): AccountOccurrenceSummary {
   const byDay = new Map<string, DetectionTradeRow[]>();
   for (const t of trades) {
@@ -177,8 +217,18 @@ export function computeTradesPerDayOccurrences(
 
   const baselineDayCounts: number[] = [];
   for (const [day, dayTrades] of byDay) {
-    const dayIsWindow = dayTrades.some((t) => isInWindow(t.openedAt, windowFromIso));
-    if (!dayIsWindow) baselineDayCounts.push(dayTrades.length);
+    // A day is excluded from the baseline MEDIAN computation if it has ANY
+    // trade that is not purely 'baseline' membership (window OR after) —
+    // "a straddling day is excluded from the baseline median computation
+    // entirely" (this function's own pre-existing, DISCOVERED behaviour,
+    // now generalised from the old two-way `isInWindow` check to the new
+    // three-way one — see this file's header, "THE BUG TO AVOID," for why
+    // 'after' must be treated the SAME as 'window' here, not folded into
+    // baseline).
+    const dayHasNonBaselineTrade = dayTrades.some(
+      (t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) !== 'baseline',
+    );
+    if (!dayHasNonBaselineTrade) baselineDayCounts.push(dayTrades.length);
     void day;
   }
   const baselineMedian = median(baselineDayCounts);
@@ -191,14 +241,21 @@ export function computeTradesPerDayOccurrences(
   const baselineCandidates = baselineDayCounts.length;
 
   for (const [day, dayTrades] of byDay) {
-    const dayIsWindow = dayTrades.every((t) => isInWindow(t.openedAt, windowFromIso));
-    // A day whose trades straddle the window boundary (some before, some
-    // after `windowFromIso`) is treated as a BASELINE day if ANY of its
-    // trades predate the window — the day as a whole started before the
-    // observation period began, so its own trade count is not purely a
-    // "recent" fact. Symmetric with `dayIsWindow` above requiring EVERY
-    // trade to be in-window for the day to count as a window day.
-    const dayHasBaselineTrade = dayTrades.some((t) => !isInWindow(t.openedAt, windowFromIso));
+    // Three-way per-day classification (see this file's header): a day is
+    // a WINDOW day only if EVERY trade is 'window' membership (none
+    // baseline, none after). A day whose trades straddle the window
+    // boundary (some before `windowFromIso`) is treated as a BASELINE day
+    // if ANY of its trades predate the window — the day as a whole started
+    // before the observation period began, so its own trade count is not
+    // purely a "recent" fact (baseline taint takes PRIORITY over any
+    // 'after' trades the same day might also have — same "spans all three
+    // buckets" case this file's header names). A day with ONLY window and
+    // 'after' trades (no baseline trade, not purely window either) is
+    // EXCLUDED ENTIRELY — see the trailing `else { continue }` below.
+    const dayIsWindow = dayTrades.every((t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) === 'window');
+    const dayHasBaselineTrade = dayTrades.some(
+      (t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) === 'baseline',
+    );
 
     if (dayIsWindow) {
       windowCandidates += 1;
@@ -211,6 +268,12 @@ export function computeTradesPerDayOccurrences(
       // Already counted in `baselineDayCounts` above.
       if (baselineMedian !== null && dayTrades.length > baselineMedian) baselineOccurrences += 1;
     }
+    // else: day has ONLY 'window' and 'after' trades (no baseline trade),
+    // and is not purely 'window' either — EXCLUDED ENTIRELY from both
+    // window and baseline counts (falls through, contributes nothing).
+    // Structurally UNREACHABLE when `windowToIso` is omitted (an 'after'
+    // verdict is impossible without an upper bound), matching the
+    // regression invariant this file's header documents.
   }
 
   return { accountId, windowOccurrences, occurrenceTradeIds, windowEligibleTradeIds, windowCandidates, baselineOccurrences, baselineCandidates };
@@ -241,6 +304,7 @@ export function computeConsecutiveLossesOccurrences(
   accountId: string,
   trades: readonly DetectionTradeRow[],
   windowFromIso: string,
+  windowToIso?: string,
 ): AccountOccurrenceSummary {
   if (trades.length <= CONSECUTIVE_LOSS_STREAK_THRESHOLD) return emptySummary(accountId);
 
@@ -253,7 +317,9 @@ export function computeConsecutiveLossesOccurrences(
 
   for (let i = CONSECUTIVE_LOSS_STREAK_THRESHOLD; i < trades.length; i++) {
     const curr = trades[i];
-    const inWindow = isInWindow(curr.openedAt, windowFromIso);
+    const membership = classifyWindowMembership(curr.openedAt, windowFromIso, windowToIso);
+    if (membership === 'after') continue; // outside the bounded sub-window entirely -- neither window nor baseline
+    const inWindow = membership === 'window';
     if (inWindow) windowEligibleTradeIds.push(curr.id);
 
     let streak = 0;
@@ -319,6 +385,7 @@ export function computeDailyLossBreachOccurrences(
   trades: readonly DetectionTradeRow[],
   windowFromIso: string,
   startingEquity: string | null,
+  windowToIso?: string,
 ): AccountOccurrenceSummary {
   // `decimal.js` for every running-P&L computation below — never a plain
   // JS float on `realized_pnl`/`starting_equity` — matching this repo's
@@ -348,10 +415,17 @@ export function computeDailyLossBreachOccurrences(
     return pct.lessThan(0) ? pct.abs().toNumber() : 0;
   }
 
+  // Excluded from the baseline THRESHOLD (median) computation if the day
+  // has ANY non-'baseline' trade (window OR after) — same generalisation
+  // of the old `.some(isInWindow)` two-way check as
+  // `computeTradesPerDayOccurrences`'s own median loop; see this file's
+  // header, "THE BUG TO AVOID."
   const baselineDayLosses: number[] = [];
   for (const [, dayTrades] of byDay) {
-    const dayIsWindow = dayTrades.some((t) => isInWindow(t.openedAt, windowFromIso));
-    if (!dayIsWindow) {
+    const dayHasNonBaselineTrade = dayTrades.some(
+      (t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) !== 'baseline',
+    );
+    if (!dayHasNonBaselineTrade) {
       const loss = finalDayLossPct(dayTrades);
       if (loss > 0) baselineDayLosses.push(loss);
     }
@@ -366,8 +440,15 @@ export function computeDailyLossBreachOccurrences(
   let baselineCandidates = 0;
 
   for (const [day, dayTrades] of byDay) {
-    const dayIsWindow = dayTrades.every((t) => isInWindow(t.openedAt, windowFromIso));
-    const dayHasBaselineTrade = dayTrades.some((t) => !isInWindow(t.openedAt, windowFromIso));
+    // Three-way per-day classification — same priority rule as
+    // `computeTradesPerDayOccurrences` (baseline taint wins over any
+    // 'after' trades the day might also have; a day with ONLY window and
+    // 'after' trades, no baseline trade, is excluded entirely — see the
+    // trailing comment after this if/else chain below).
+    const dayIsWindow = dayTrades.every((t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) === 'window');
+    const dayHasBaselineTrade = dayTrades.some(
+      (t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) === 'baseline',
+    );
 
     if (dayIsWindow) {
       windowCandidates += 1;
@@ -375,6 +456,11 @@ export function computeDailyLossBreachOccurrences(
     } else if (dayHasBaselineTrade) {
       baselineCandidates += 1;
     } else {
+      // Day has ONLY 'window' and 'after' trades (no baseline trade), and
+      // is not purely 'window' either — EXCLUDED ENTIRELY, matching
+      // `computeTradesPerDayOccurrences`'s identical case. Structurally
+      // UNREACHABLE when `windowToIso` is omitted (this `else` branch
+      // pre-dates this refactor as dead code for exactly that reason).
       continue;
     }
 
@@ -447,9 +533,12 @@ export function computeRiskSpreadOccurrences(
   accountId: string,
   trades: readonly DetectionTradeRow[],
   windowFromIso: string,
+  windowToIso?: string,
 ): AccountOccurrenceSummary {
   const withRisk = trades.filter((t): t is DetectionTradeRow & { riskPct: number } => t.riskPct !== null);
-  const baselineRiskValues = withRisk.filter((t) => !isInWindow(t.openedAt, windowFromIso)).map((t) => t.riskPct);
+  const baselineRiskValues = withRisk
+    .filter((t) => classifyWindowMembership(t.openedAt, windowFromIso, windowToIso) === 'baseline')
+    .map((t) => t.riskPct);
 
   if (baselineRiskValues.length < RISK_SPREAD_MIN_BASELINE_SAMPLE) return emptySummary(accountId);
 
@@ -468,7 +557,9 @@ export function computeRiskSpreadOccurrences(
   const baselineCandidates = baselineRiskValues.length;
 
   for (const t of withRisk) {
-    const inWindow = isInWindow(t.openedAt, windowFromIso);
+    const membership = classifyWindowMembership(t.openedAt, windowFromIso, windowToIso);
+    if (membership === 'after') continue; // outside the bounded sub-window entirely -- neither window nor baseline
+    const inWindow = membership === 'window';
     const isOutlier = t.riskPct < lowerFence || t.riskPct > upperFence;
     if (inWindow) {
       windowCandidates += 1;

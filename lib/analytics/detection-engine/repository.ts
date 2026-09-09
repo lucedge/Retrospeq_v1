@@ -1,8 +1,13 @@
 import 'server-only';
 import { withServiceRoleConnection } from '@/lib/supabase/direct';
 import { filterEligibleTrades, type EligibleTradeFact } from '../shadow-harness/eligible-trade';
-import { computeAllDetectionsForUser, DETECTION_ANALYTIC_IDS, type AccountTradesInput } from './detection-engine';
-import { DETECTION_WINDOW_DAYS } from './gates';
+import {
+  computeAllDetectionsForUser,
+  computeAllImprovementDetectionsForUser,
+  DETECTION_ANALYTIC_IDS,
+  type AccountTradesInput,
+} from './detection-engine';
+import { DETECTION_WINDOW_DAYS, IMPROVEMENT_RECENT_ABSENCE_DAYS } from './gates';
 import type { DetectionComputationResult, DetectionTradeRow } from './types';
 
 /**
@@ -145,12 +150,26 @@ export interface DetectionEngineComputation {
   accountsScanned: number;
 }
 
+/**
+ * Runs BOTH the standard (§4.4) and improvement (§4.6) computations for one
+ * user and concatenates their results — `computeAllImprovementDetectionsForUser`
+ * is called WITH this same run's own standard results (`standardResults`),
+ * never independently, so the mutual-exclusivity tie-break
+ * (`detection-engine.ts`'s own header) is always evaluated against the
+ * fresh, same-run standard output, not a stale prior run's.
+ */
 export async function computeDetectionsForUserId(userId: string): Promise<DetectionEngineComputation> {
   const [accounts, tradesByAccount] = await Promise.all([fetchAccountsForUser(userId), fetchEligibleTradesByAccount(userId)]);
 
   const now = new Date();
   const windowTo = now.toISOString();
   const windowFrom = new Date(now.getTime() - DETECTION_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // §4.6's own split point: `[windowFrom, priorWindowTo)` is the PRIOR
+  // sub-window, `[priorWindowTo, windowTo)` is the RECENT (absence-check)
+  // sub-window — `priorWindowTo` is deliberately the SAME instant as both
+  // sub-windows' shared boundary, matching `gates.ts`'s own
+  // `ComputeImprovementDetectionInput` doc comments.
+  const priorWindowTo = new Date(now.getTime() - IMPROVEMENT_RECENT_ABSENCE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   const accountInputs: AccountTradesInput[] = accounts.map((account) => ({
     accountId: account.id,
@@ -158,8 +177,16 @@ export async function computeDetectionsForUserId(userId: string): Promise<Detect
     trades: tradesByAccount.get(account.id) ?? [],
   }));
 
-  const results = computeAllDetectionsForUser({ accounts: accountInputs, windowFrom, windowTo });
-  return { results, accountsScanned: accounts.length };
+  const standardResults = computeAllDetectionsForUser({ accounts: accountInputs, windowFrom, windowTo });
+  const improvementResults = computeAllImprovementDetectionsForUser({
+    accounts: accountInputs,
+    priorWindowFrom: windowFrom,
+    priorWindowTo,
+    recentWindowTo: windowTo,
+    standardResults,
+  });
+
+  return { results: [...standardResults, ...improvementResults], accountsScanned: accounts.length };
 }
 
 // ---------------------------------------------------------------------
@@ -203,17 +230,21 @@ export async function computeDetectionsForUserId(userId: string): Promise<Detect
  * AVOIDANCE" comment documents for its own, genuinely input-order-
  * dependent case.
  *
- * A gate-failed analytic (no result for it this run) intentionally LEAVES
- * any existing `active` row untouched — see `gates.ts`'s own header
- * ("WHAT HAPPENS WHEN VOLUME OR RATE FAILS") for why nothing is written
- * for it at all. This is a real, flagged limitation, not an oversight: a
- * pattern that genuinely stopped (the trader fixed it) has no mechanism
- * in this slice to ever be marked `superseded`/retired — it stays
- * `active` indefinitely until a FUTURE detection for the same analytic
- * clears the gates again and genuinely supersedes it. §4.6's "detect
- * improvement too" (explicitly out of scope for this slice, per this
- * slice's own dispatch) is the natural home for closing this gap, not
- * invented here.
+ * A gate-failed analytic (no STANDARD result for it this run) intentionally
+ * LEAVES any existing `active` row untouched from THIS function's own
+ * perspective — see `gates.ts`'s own header ("WHAT HAPPENS WHEN VOLUME OR
+ * RATE FAILS") for why nothing is written for it at all. §4.6's own
+ * improvement computation (`computeAllImprovementDetectionsForUser`,
+ * `detection-engine.ts`) is what actually closes the gap ADR 0029's
+ * "Consequences" section flagged ("a future §4.6 slice ... makes an
+ * explicit, separate decision about what to do with the now-stale forward
+ * row") — see that function's own header for the mutual-exclusivity tie-
+ * break that makes a stale `active`-direction row eventually get
+ * superseded by a genuine `direction: 'improved'` row through this EXACT
+ * SAME write path, once the standard gates stop firing for that analytic
+ * and the prior/recent windows actually qualify. This function itself does
+ * not need to know or care which direction a row it's writing carries —
+ * the supersede-then-insert sequence below is identical either way.
  */
 export async function writeDetectionsForUser(userId: string, results: readonly DetectionComputationResult[]): Promise<void> {
   if (results.length === 0) return;
@@ -245,8 +276,8 @@ export async function writeDetectionsForUser(userId: string, results: readonly D
       await client.query(
         `insert into retrospeq.detections
            (user_id, analytic_id, occurrences, window_from, window_to, distinct_days, base_rate,
-            outcome_avg_r, outcome_baseline_avg_r, tier, classification, state)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')`,
+            outcome_avg_r, outcome_baseline_avg_r, tier, classification, rule_proposable, direction, state)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'active')`,
         [
           userId,
           result.analyticId,
@@ -259,6 +290,8 @@ export async function writeDetectionsForUser(userId: string, results: readonly D
           toNumeric(result.outcomeBaselineAvgR, 4),
           result.tier,
           result.classification,
+          result.ruleProposable,
+          result.direction,
         ],
       );
     }
