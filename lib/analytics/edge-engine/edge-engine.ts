@@ -70,7 +70,20 @@ export const NUMBER_FIELD_ANALYTIC_ID = 'find.number';
 const SESSION_FIELD_ID = 'drv.session';
 const SESSION_ANALYTIC_ID = 'find.session';
 
-function resolveAnalyticId(fieldId: string, dataType: FieldDataType): string | null {
+/**
+ * Exported (2026-09-11, strategy-detail-screen slice) so a read-only
+ * consumer (`lib/analytics/findings-service.ts`, the strategy screen's
+ * own per-field finding read) can derive the SAME analytic id a field
+ * would compute under, without either duplicating this switch or
+ * reaching into `findings` rows that may not exist yet (a field with
+ * zero eligible trades so far has no row to read an `analytic_id` off
+ * of at all — the "not enough data yet" empty state still needs a real,
+ * catalogue-matching id for its own `FindingPayload.analytic_id` and
+ * for `canRender`'s own gating check). One resolution function, one
+ * place a future field-type addition has to update, matching this
+ * file's own "STABLE analytic_id per computation" reasoning above.
+ */
+export function resolveAnalyticId(fieldId: string, dataType: FieldDataType): string | null {
   if (fieldId === SESSION_FIELD_ID) return SESSION_ANALYTIC_ID;
   switch (dataType) {
     case 'pick_one':

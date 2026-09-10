@@ -1,0 +1,85 @@
+-- Module 05 (Analytics & Findings) — seeds `retrospeq.analytic_config` for
+-- the SIX judgment-finding analytic ids the edge engine
+-- (`lib/analytics/edge-engine/`) actually computes and writes real
+-- `findings` rows for today: `find.pickone`, `find.rating`, `find.toggle`,
+-- `find.pickmany`, `find.session` (all named in `analytics-registry.md`
+-- §7's "Tier 0, judgment findings" table) plus `find.number`
+-- (`docs/adr/0023` — a real gap-fill id §7's own table never names).
+--
+-- WHY THIS IS REQUIRED, NOT OPTIONAL (same reasoning
+-- `20260909030000_detection_engine_seed_and_supersession.sql` already
+-- established for the detection engine's own five ids, reapplied here
+-- verbatim): `config-repository.ts`'s own documented behaviour is that a
+-- MISSING `analytic_config` row resolves to `not_found`, which
+-- `canRender` treats fail-closed — "nothing renders, ever" (§4.8). The
+-- edge engine has been computing and writing real `findings` rows for
+-- these six ids since its own slice landed (`writeFindingsForStrategy`),
+-- and the strategy-detail screen (`app/(app)/strategies/[id]/page.tsx`,
+-- `lib/analytics/findings-service.ts`) is the first real caller of
+-- `canRender(..., 'strategy')` for any of them — without this seed, every
+-- one of those six ids would be PERMANENTLY INVISIBLE to any user,
+-- regardless of plan, regardless of how much real data exists, with no
+-- error anywhere to reveal the gap. Found and closed in the same slice
+-- that built the first real reader, per this repo's own "fix spec/code
+-- drift deliberately, don't let it accumulate silently" convention
+-- (00-foundation §12). See docs/adr/0035 for the full reasoning.
+--
+-- VALUES — per `analytics-registry.md` §4's own status-lifecycle table
+-- ("beta: Shown to internal users and the 6-10 trader test cohort.
+-- Explicitly labelled.") and §7's literal per-id row:
+--
+--   | id             | status (§7) | plan (§7) | -> enabled | cohort_only |
+--   |----------------|-------------|-----------|------------|-------------|
+--   | find.pickone   | beta        | pro       | true       | true        |
+--   | find.rating    | beta        | pro       | true       | true        |
+--   | find.toggle    | beta        | pro       | true       | true        |
+--   | find.pickmany  | shadow      | pro       | true*      | true        |
+--   | find.session   | beta        | free      | true       | true        |
+--
+-- * `find.pickmany` is listed `shadow` in §7 (not yet promoted to beta),
+--   which per §4 means "never shown to any user" — but `analytic_config`
+--   has no `shadow`/`beta`/`live` status COLUMN of its own, only the
+--   `enabled`/`cohort_only`/`min_plan` booleans/text `canRender` actually
+--   evaluates (§3.1's literal DDL — confirmed against the live schema,
+--   `20260908010000`). A genuinely `shadow`-status analytic is represented
+--   in THIS table by having NO ROW AT ALL (`not_found` -> fail-closed,
+--   same "no config row" gap this whole migration exists to close for the
+--   OTHER five ids) — `writeShadowedFindings`/`shadow_runs` is the actual
+--   `shadow` computation path (§4.9), entirely separate from `findings`.
+--   `find.pickmany` is therefore DELIBERATELY NOT SEEDED here: doing so
+--   would promote it past `shadow` by fiat from a migration, contradicting
+--   §4's own promotion criteria (manual inspection, no misleading
+--   statements found) which nothing in this repo has actually performed
+--   for it yet. Its `findings` rows keep being computed and stored
+--   (`writeFindingsForStrategy` does not distinguish shadow from beta
+--   ids — a separate, pre-existing scope gap this migration does not
+--   attempt to fix), but `canRender` correctly keeps it invisible via the
+--   exact same `not_found` fail-closed path until a real promotion
+--   decision seeds it explicitly.
+--
+-- `find.number` (docs/adr/0023) has no registry row to read a status/plan
+-- off of at all — treated here as a sibling of the other four REAL
+-- (non-`find.pickmany`) judgment ids it shares its computation mechanism
+-- with (same edge engine, same gates, same segmentation pipeline, just a
+-- different field TYPE): `pro`/beta-cohort, matching `find.pickone`
+-- et al. rather than `find.pickmany`'s still-shadow status, since
+-- `find.number` has been live-computing findings since the SAME slice
+-- `find.pickone`/`find.rating`/`find.toggle` were built in (the edge
+-- engine's own core statistics slice), not held back the way
+-- `find.pickmany` explicitly was. See docs/adr/0023's Addendum.
+--
+-- `min_account_tier` — `'t0'` for all six: §7's own "needs" column never
+-- names a sync-tier requirement for any of them (field-capture data,
+-- not position-snapshot data), matching the detection-engine seed's own
+-- identical reasoning for its five T0 ids.
+--
+-- Idempotent via `on conflict do nothing`, matching
+-- `20260909030000`'s own established idempotent-seed convention.
+insert into retrospeq.analytic_config (analytic_id, enabled, min_plan, cohort_only, min_account_tier)
+values
+  ('find.pickone',  true, 'pro',  true, 't0'),
+  ('find.rating',   true, 'pro',  true, 't0'),
+  ('find.toggle',   true, 'pro',  true, 't0'),
+  ('find.session',  true, 'free', true, 't0'),
+  ('find.number',   true, 'pro',  true, 't0')
+on conflict (analytic_id) do nothing;

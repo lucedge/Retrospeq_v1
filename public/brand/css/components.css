@@ -380,3 +380,67 @@
   font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
   font-size: var(--rq-text-base); color: var(--rq-ink); margin: 0;
 }
+
+/* ---------- Finding ----------
+   Module 03 §5.1 (per-field finding state on the strategy screen) /
+   Module 05 §5.1 (the `FindingPayload` reference markup itself) both
+   name this markup directly (`.finding[data-confidence]`,
+   `.finding__statement`, `.finding__meta`) but, like every other
+   spec-named-but-unshipped block in this file before it, no rule ever
+   shipped the CSS -- added here for the strategy-detail screen (the
+   last remaining named-but-unbuilt Module 03 §5.1 UI element), not
+   invented independently of the spec that already named it.
+
+   FOUR REACHABLE STATES, not three: `insufficient`/`null-result`/
+   `confident` are §5.1's own three named examples; `provisional` is a
+   real, reachable confidence value (`gates.ts`: n between 20 and 40,
+   still cleared the effect+significance gates) with no dedicated
+   reference markup anywhere in either spec. Styled IDENTICALLY to
+   `confident` here -- both are a real, gate-cleared result, and the
+   sample-size distinction is already carried by the meta line's own
+   text ("14 trades - provisional") -- a documented judgment call, see
+   `lib/analytics/findings-payload.ts`'s own header / docs/adr/0035.
+
+   Same device this file already uses everywhere else: WEIGHT AND TINT
+   ONLY, never hue. `insufficient` (the normal, expected first-month
+   state -- "a feature," Module 05 §5.1's own comment) is the quietest,
+   faintest treatment in this file, on purpose -- it must never read as
+   an error. `null-result` is plain, neutral ink -- a first-class,
+   deliberately unstyled-as-bad result ("Null result: first-class, not
+   silence"). `confident`/`provisional` get the heaviest weight, the
+   same escalation device `.ambient__cell[data-state]`/`.adherence__hard`
+   already use for "this is the thing to look at" -- never a colour
+   swap, never red/green; there is still no --color-success/
+   --color-danger pair anywhere in this system. */
+.finding {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--rq-space-2) var(--rq-space-3);
+  border-radius: var(--rq-radius-md);
+  background: var(--rq-surface-2);
+  border-left: 3px solid var(--rq-line-strong);
+}
+.finding__statement {
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium);
+  color: var(--rq-ink); margin: 0;
+}
+.finding__meta {
+  font-size: var(--rq-text-sm); color: var(--rq-ink-faint); margin: 0;
+}
+.finding[data-confidence="insufficient"] {
+  border-left-color: var(--rq-line);
+  background: transparent;
+}
+.finding[data-confidence="insufficient"] .finding__statement {
+  color: var(--rq-ink-faint); font-weight: var(--rq-weight-regular);
+}
+.finding[data-confidence="null-result"] .finding__statement {
+  color: var(--rq-ink-soft); font-weight: var(--rq-weight-regular);
+}
+.finding[data-confidence="confident"],
+.finding[data-confidence="provisional"] {
+  border-left-color: var(--rq-ink);
+}
+.finding[data-confidence="confident"] .finding__statement,
+.finding[data-confidence="provisional"] .finding__statement {
+  font-weight: var(--rq-weight-bold);
+}

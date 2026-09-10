@@ -12,6 +12,11 @@ import { fetchStrategyList } from './actions';
  * CREATION only. Strategy edit UI, promotion UI, and field-creation UI are
  * all separate future sub-slices.
  *
+ * Each row's name now links to `/strategies/[id]` (2026-09-11) — §5.1's
+ * fifth element, "the strategy screen with per-field finding state,"
+ * added the same slice this link was wired in. See that route's own
+ * header for the read/`canRender` pipeline it composes.
+ *
  * §1: "the entire strategy module is Pro. Free users have one silent,
  * auto-created strategy with zero captured fields (Module 08)." Module 08
  * (onboarding) is not built in this repo yet, so a real free-plan user has
@@ -112,7 +117,9 @@ export default async function StrategiesPage() {
             return (
               <li key={s.strategyId} className="rq-card flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="rq-h2">{s.name}</h2>
+                  <h2 className="rq-h2">
+                    <Link href={`/strategies/${s.strategyId}`}>{s.name}</Link>
+                  </h2>
                   <span className={s.state === 'active' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
                     {s.state === 'active' ? 'Active' : 'Archived'}
                   </span>

@@ -48,6 +48,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# supabase CLI local state (records the CLI version last run against this
+# repo on this machine) - not build output, not app config, never shared
+/supabase/.temp/
+
 # local permission/trust settings - machine-specific, not for the cloud
 # routine or collaborators to inherit automatically. .claude/agents/ (the
 # job descriptions) stays tracked; only the settings files are ignored.

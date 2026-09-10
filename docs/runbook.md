@@ -1746,3 +1746,110 @@ strategy) the moment it determines the strategy's own eligible trades
 aren't ALL crypto-platform — see the ADR for why the classification unit
 is the STRATEGY (from its own eligible trades), not the user's whole
 account collection.
+
+## Judgment findings (`find.*`) render nothing for a Pro user outside the beta cohort — this is `cohort_only`, not a bug
+
+**Source:** Module 05 §4.8's `canRender` formula (`(NOT
+analytic_config[id].cohort_only OR user in cohort)`) combined with
+`20260911010000_findings_analytic_config_seed.sql` (this slice,
+2026-09-11), which seeds `find.pickone`/`find.rating`/`find.toggle`/
+`find.session`/`find.number` with `cohort_only = true` — matching
+`analytics-registry.md` §4's own "beta: Shown to internal users and the
+6–10 trader test cohort" status for every one of them. Owning code:
+`lib/analytics/cohort-repository.ts`'s `isUserInCohort` (checks
+`retrospeq.user_cohorts` for `cohort = 'beta_traders'`),
+`lib/analytics/findings-service.ts`'s `getStrategyFieldFindings` (the
+strategy-detail screen's own read — `app/(app)/strategies/[id]/page.tsx`
+— the first real caller of `canRender(..., 'strategy')` for any of
+these ids).
+
+**What this means operationally:** a Pro-plan trader with a strategy
+that has plenty of real, confirmed trades against a captured field can
+still see "Not enough data yet." on every single field, forever, with
+no error anywhere — NOT because the sample/effect/significance gates
+failed, but because `cohort_only = true` and that trader's `user_id` has
+no row in `retrospeq.user_cohorts` for `cohort = 'beta_traders'`. This
+is CORRECT per the registry's own "beta" definition (findings are only
+promoted to `live` — visible to all eligible users — per §4's own
+promotion criteria, which nothing in this repo has evaluated for real
+users yet, since there are no real production users yet — see
+PROGRESS.md's 2026-09-11 decision log), but it is easy to mistake for a
+genuine bug or a broken gate threshold if you don't know the cohort
+requirement exists, especially since `findings-payload.ts`'s
+`buildNoDataFindingPayload` renders IDENTICALLY whether the real cause
+is "zero rows computed yet," "row exists but is genuinely
+`insufficient`," or "row exists, is genuinely `confident`, but this
+trader isn't in the cohort" — by design (§4.8's fail-closed silence),
+but it means this specific cause is invisible from the rendered UI
+alone.
+
+**How to check:** for a specific trader reporting "findings never show
+up despite lots of data," first confirm real `findings` rows actually
+exist and are NOT `insufficient` for their strategy (`select
+analytic_id, field_id, confidence, n from retrospeq.findings where
+user_id = $1 and strategy_id = $2 and state = 'active'` — service-role
+or the trader's own authenticated connection, RLS-owner-scoped either
+way). If a `confident`/`provisional`/`null_result` row genuinely exists,
+check cohort membership next: `select 1 from retrospeq.user_cohorts
+where user_id = $1 and cohort = 'beta_traders'`. Zero rows there, with a
+real non-`insufficient` finding already computed, is this exact
+situation — not a statistics bug, not a config bug, just an un-cohorted
+Pro user hitting an intentionally beta-gated analytic.
+
+**Action:** there is no self-service opt-in path for a trader to join
+the beta cohort today — `retrospeq.user_cohorts` has no client-facing
+write policy (`docs/adr/0020`), so adding someone is a manual,
+operator-run `insert into retrospeq.user_cohorts (user_id, cohort)
+values ($1, 'beta_traders')`. This is expected/intended for the
+product's current pre-launch stage, not something to "fix" by flipping
+`cohort_only` to `false` in the seed migration — doing so would
+short-circuit the real shadow→beta→live promotion criteria
+(`analytics-registry.md` §4) these five ids have not yet actually
+cleared. Escalate only if a trader who IS confirmed in the cohort still
+sees no findings despite a genuinely confident row existing — that
+combination has no known-correct explanation and would point at a real
+`canRender`/config bug, not this expected gate.
+
+## `recordAnalyticRender` write failing silently on the strategy-detail screen
+
+**Source:** Module 05 §4.8's closing line — "Every successful render
+writes an `analytic_renders` row with the exact payload shown." Owning
+code: `lib/analytics/render-repository.ts`'s `recordAnalyticRender`
+(built in Slice 05a with no real caller — see that file's own header,
+"no real caller exists yet ... exercised directly by this slice's own
+tests only"); `lib/analytics/findings-service.ts`'s
+`getStrategyFieldFindings` (this slice, 2026-09-11) is the FIRST real
+caller anywhere in this repo, firing once per field on every strategy-
+detail page load for which a real (non-gated, non-empty) finding payload
+was shown.
+
+**What this means operationally:** same shape as the pre-existing
+`rule_overrides` write-failing-silently entry above, reapplied here —
+`recordAnalyticRender`'s own failure is caught and `console.error`-only
+(`[findings-service:getStrategyFieldFindings] recordAnalyticRender
+failed (render still shown):`) inside `getStrategyFieldFindings`,
+deliberately never blocking or degrading the actual finding shown to the
+trader (§4.8 describes the render itself, not its own audit log, as the
+thing that must never silently fail). A dropped row here means
+`retrospeq.analytic_renders` under-counts real renders for that
+analytic/user/surface combination — the audit trail §3.1 describes as
+"Makes 'was this ever wrong?' answerable" becomes incomplete, not
+wrong, for the affected renders (nothing about a missed log row corrupts
+or misattributes any OTHER row).
+
+**How to check:** grep application logs for `recordAnalyticRender
+failed`. A live cross-check for a specific user/analytic: compare how
+many times a real, non-gated finding should have rendered for them
+(not directly logged anywhere today, same limitation the
+`rule_overrides` entry above already notes for its own case) against
+`select count(*) from retrospeq.analytic_renders where user_id = $1 and
+analytic_id = $2 and surface = 'strategy'`.
+
+**Action:** an isolated failure is self-contained — it does not affect
+the trader's own experience or any other row. No retry/queue exists
+today (same posture as `rule_overrides`). If this table's completeness
+ever becomes load-bearing for a real product decision (e.g. driving the
+`analytics-registry.md` §4 promotion criteria — "output manually
+inspected on ≥ 10" real accounts — off of this table specifically), a
+missing-row gap here would need a real fix (retry, a queue, or a
+periodic reconciliation job) before being trusted for that purpose.

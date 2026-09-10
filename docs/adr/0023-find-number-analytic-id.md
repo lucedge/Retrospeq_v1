@@ -69,3 +69,20 @@ Alternatives considered and rejected:
   matching every other field-type id's own query shape.
 - `NUMBER_FIELD_ANALYTIC_ID` is exported from `edge-engine.ts` specifically
   so no second file re-guesses the string literal independently.
+
+## Addendum (2026-09-11, strategy-detail-screen slice)
+
+The "future slice... should add a `find.number` row" follow-up above is
+now partially closed: `20260911010000_findings_analytic_config_seed.sql`
+seeds a real `analytic_config` row for `find.number` (required for
+`canRender` to ever say yes for it at all — see that migration's own
+header and docs/adr/0035), treating it as a sibling of `find.pickone`/
+`find.rating`/`find.toggle`/`find.session` (`pro` plan, beta-cohort
+visibility) rather than of `find.pickmany` (still `shadow`, deliberately
+left unseeded) — reasoning is in the migration itself, not repeated here.
+
+`analytics-registry.md` §7's own table still has no literal row for
+`find.number` with a copy-reviewed worked-example statement — that part
+of this ADR's original Consequences section remains open. The config
+seed only makes the `find.number` analytic id VISIBLE at all; it does not
+retroactively author the registry documentation entry.
