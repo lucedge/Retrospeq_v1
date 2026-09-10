@@ -30,6 +30,7 @@ import { lockPreEntryCaptures } from './trade-captures';
 import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
 import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
 import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
+import { runDecayChecksForUser } from '@/lib/analytics/decay-engine/repository';
 import { recomputeDetectionsForUser } from '@/lib/analytics/detection-engine/repository';
 
 /**
@@ -1225,7 +1226,14 @@ export async function runSync(
   // entry. Independent of (and does not depend on) the
   // `operand_distributions` call above — Module 04 and Module 05 read
   // disjoint tables (§7.5's isolation boundary), so one recompute failing
-  // has no bearing on whether the other should run.
+  // has no bearing on whether the other should run. This call ALSO covers
+  // §4.12 asset-class suppression: `recomputeEdgeFindingsForUser` ->
+  // `writeFindingsForStrategy` (rendered segments) and ->
+  // `writeShadowedFindings` (suppressed segments, logged to `shadow_runs`
+  // instead of `findings`) both happen inside this same recompute, per
+  // strategy — there is no separate §4.12 call site to wire; a failure
+  // here means BOTH `findings` and any due suppression logging go stale
+  // together, which `docs/runbook.md`'s entry for this call documents.
   try {
     await recomputeEdgeFindingsForUser(account.user_id);
   } catch (err) {
@@ -1234,6 +1242,43 @@ export async function runSync(
       err,
     );
   }
+
+  // Module 05 §4.11/§4.13: "Decay checks | Triggered at every 30 new
+  // trades in a linked segment." Deliberately placed AFTER the edge-
+  // engine call immediately above, not before or in parallel — decay
+  // checking reads `findings` directly (it does not recompute anything
+  // itself; see `lib/analytics/decay-engine/repository.ts`'s own header
+  // for the full "recompute the finding" mechanics against this repo's
+  // findings-supersession model), so it needs the edge engine's fresh
+  // output to already be committed. Same standing infra gap as every
+  // other §4.13 job (no cron/scheduler exists yet — PROGRESS.md "Infra
+  // gaps") and the identical best-effort, non-blocking,
+  // independently-try/catch'd posture as every call in this function —
+  // `runDecayChecksForUser` is itself the real "every 30 new trades"
+  // throttle (called on every sync, but only actually re-evaluating a
+  // link when 30+ new segment trades have accrued since its own last
+  // check — see that function's header), not a fake per-sync trigger.
+  // In the current, real state of this repo `finding_rule_links` has
+  // zero rows for any user (Module 06's graduation flow that populates
+  // it doesn't exist yet), so this is a correct, cheap no-op on every
+  // call today — not a bug to chase. Logged loudly on failure, per
+  // `docs/runbook.md`'s new "decay check failed after sync" entry.
+  try {
+    await runDecayChecksForUser(account.user_id);
+  } catch (err) {
+    console.error(
+      `[sync] decay check failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; any due decay checks will be retried on the next successful sync:`,
+      err,
+    );
+  }
+
+  // Module 05 §4.12: asset-class suppression — "For crypto accounts,
+  // findings over [drv.session, drv.day_of_week] are computed but
+  // suppressed from render and logged to shadow_runs instead." No
+  // separate call site here — this is already inside the
+  // `recomputeEdgeFindingsForUser` call above (`writeShadowedFindings`,
+  // `lib/analytics/edge-engine/repository.ts`), which already exists and
+  // is already wired.
 
   // Module 05 (Analytics & Findings) §4.13: "Detection engine | Nightly
   // per user | Windowed over the last 90 days." Same standing infra gap

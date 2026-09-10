@@ -1301,6 +1301,21 @@ the other succeeds, and both run as two separate best-effort `try/catch`
 blocks in `runSync` — a failure in one never prevents the other from
 being attempted.
 
+**This entry also covers §4.12 asset-class suppression's `shadow_runs`
+writes, as of 2026-09-09** — see
+`docs/adr/0033-asset-class-suppression-classification.md`. There is no
+separate call site for asset-class suppression: `recomputeEdgeFindingsForUser`
+calls `writeFindingsForStrategy` (rendered segments) AND
+`writeShadowedFindings` (suppressed `drv.session`/`drv.day_of_week`
+segments, logged to `shadow_runs` instead of `findings`) for every
+strategy in the same loop, so a failure logged under this same
+`[sync] edge engine findings recompute failed after sync` line means
+BOTH a trader's `findings` AND any due suppression logging went stale
+together this cycle — there is nothing to check separately. See the
+short pointer entry below ("Asset-class suppression is no longer a
+separate sync-hook call") if searching for the old, now-removed
+`[sync] asset-class suppression failed after sync` log-line prefix.
+
 **Nightly recompute is NOT built** — the identical, already-tracked infra
 gap `operand_distributions`'s own entry documents (no cron/scheduler
 exists in this repo yet, PROGRESS.md "Infra gaps") — not a new gap, not
@@ -1511,3 +1526,189 @@ project for a scheduled/nightly job (see above), and no Module 06 weekly
 review surface yet to actually consume `detections` — this entry documents
 what to look at once both exist, matching every other "no live project
 yet" entry in this file.
+
+---
+
+## Decay check failed after sync
+
+**Source:** Module 05 (Analytics & Findings) §4.11/§4.13 — "Decay checks
+| Triggered at every 30 new trades in a linked segment." Owning code:
+`lib/analytics/decay-engine/repository.ts`'s `runDecayChecksForUser`,
+called from `lib/ingestion/sync.ts`'s `runSync` immediately after the
+existing edge-engine `findings` recompute (see that entry above, same
+file, adjacent call site — decay checking reads `findings` directly, it
+never recomputes anything itself, so it needs that call's fresh output
+already committed).
+
+**What this means operationally:** wired as a best-effort, non-blocking
+side effect of a successful sync, for the identical reason every other
+entry in this file's §4.13 job class documents — a recompute failure
+must never turn an already-committed, genuinely successful sync into a
+reported failure. By construction this is invisible to the trader and to
+`sync_runs.status` — the only trace is a `console.error` line prefixed
+`[sync] decay check failed after sync for user <id> (account <id>,
+syncRunId <id>)`. Left unaddressed, a due decay check simply doesn't run
+this cycle; it is retried on the next successful sync, since
+`finding_rule_links.trades_at_last_check`/`consecutive_decay_checks` are
+only ever advanced by a check that actually completed and wrote back —
+a failed attempt leaves the row exactly as it was, never half-updated
+(the per-link write in `applyDecayCheckResult` is one transaction).
+
+**Zero rows in `finding_rule_links` today, for every real user — this is
+correct, not a symptom.** Module 06 (Review & Graduation), the flow that
+actually populates this table when a finding graduates into a rule,
+does not exist yet in this repo. `runDecayChecksForUser` runs on every
+sync regardless (cheap: one `select ... where user_id = $1` that returns
+zero rows), and every subsequent step is skipped — this function
+returning `{ linksChecked: 0, decaySignalsEmitted: 0,
+linksSkippedDueToError: 0 }` on every call, for every user, is the
+expected steady state right now, not evidence the feature is broken.
+
+**"Not enough new trades yet" is also correct, silent, non-alertable
+behaviour** even once `finding_rule_links` rows exist: a link whose
+segment hasn't accrued 30 new trades since `trades_at_last_check` (or
+`trades_at_graduation`, before the first check) is skipped without a log
+line at all — see `docs/adr/0032-decay-check-delta-metric-and-trade-
+throttle.md` for the full throttle mechanics. Do not treat a link that
+hasn't been checked in a long time as a failure signal on its own —
+check the segment's own recent trade volume first.
+
+**How to check:** grep application logs for `[sync] decay check failed
+after sync` — every occurrence names the affected `user_id`/`account_id`/
+`syncRunId` directly. A quick live check for a specific link: compare
+`finding_rule_links.last_checked_at` against that user's most recent
+`sync_runs.finished_at` — meaningfully stale AND the linked segment has
+clearly accrued 30+ new trades since `trades_at_last_check` (join through
+the original `finding_id` to the current active `findings` row for that
+tuple, per the ADR's own "recompute the finding" mechanics, and compare
+its `n` against `trades_at_last_check`) together indicate a genuine
+recompute failure rather than the throttle correctly not having fired
+yet.
+
+**Independent of every other §4.13 job in this function** (edge engine,
+detection engine, `operand_distributions`) — each runs in its own
+separate `try/catch`; a decay-check failure never prevents any of the
+others from being attempted, and vice versa.
+
+**A known, accepted (not a failure symptom) race exists here — see
+`docs/adr/0032`'s own "Consequences" section:** this function's read
+(fetch the current active finding for a link's tuple) and write (advance
+the link / mark the finding decayed) are two separate transactions, not
+one locked span the way `writeFindingsForStrategy`'s per-tuple
+`pg_advisory_xact_lock` is. Two genuinely concurrent syncs for the same
+user (e.g. two accounts syncing at once) racing on the SAME link could
+in principle double-count or interleave a `consecutive_decay_checks`
+update — a real, named, accepted gap (zero-risk today, since
+`finding_rule_links` has no real rows yet), not something to "fix" by
+adding a lock without also restructuring the read/write split. Do not
+treat an occasional off-by-one `consecutive_decay_checks` value under
+heavy concurrent multi-account sync load as this log line's failure
+signature — the log line itself (a thrown/caught error) is the only
+alertable signal, not a suspicious-looking counter value on its own.
+
+---
+
+## Decay check failed for an individual link
+
+**Source:** Module 05 (Analytics & Findings) §4.11 — a SEPARATE, more
+targeted failure mode than "Decay check failed after sync" above.
+Owning code: `lib/analytics/decay-engine/repository.ts`'s
+`runDecayChecksForUser`, whose own per-link loop wraps each link's
+check-and-apply in its own `try/catch` (added 2026-09-10, see
+`docs/adr/0032-decay-check-delta-metric-and-trade-throttle.md`'s
+decision 5 for the full "throw at the pure boundary, catch at the
+orchestration boundary" reasoning).
+
+**How this differs from "Decay check failed after sync":** that entry
+covers the whole `runDecayChecksForUser` call failing (or never being
+reached at all) for a USER — a connectivity blip, a bug in the top-level
+`fetchFindingRuleLinksForUser` read, etc. THIS entry covers exactly one
+LINK's own check-and-apply throwing while every other link for that same
+user is processed normally. The two are distinguishable by the log line
+prefix: `[sync] decay check failed after sync for user <id> ...` (the
+whole-user failure, uncaught by `runDecayChecksForUser` itself) versus
+`[decay-engine] decay check failed for link finding_id=<id>
+rule_id=<id> user_id=<id> ...` (this entry — caught, contained, and the
+function continued to the next link).
+
+**What this means operationally:** a single link erroring does NOT abort
+the user's other links, does NOT propagate to `sync.ts`'s outer
+`try/catch`, and does NOT affect `sync_runs.status` — by design (see the
+ADR's decision 5: letting one corrupt link throw unhandled would block
+that SAME link, and therefore everyone who shares this call, on EVERY
+FUTURE SYNC, not just this one). The affected link's own row in
+`finding_rule_links` is left exactly as it was before this attempt
+(`applyDecayCheckResult` either fully commits or the whole per-link
+`try` block throws before touching the row at all — no partial write).
+`runDecayChecksForUser`'s own returned `linksSkippedDueToError` count
+(not the boolean success/failure of the call) is the observable signal.
+
+**Most likely real cause:** `evaluateDecayCheck`'s own deliberate throw
+on a non-positive `deltaAtGraduation` (ADR 0032 decision 4) — i.e. a
+`finding_rule_links` row whose `delta_at_graduation` is `<= 0`, which
+should be structurally impossible if Module 06's graduation flow (once
+built) only ever calls `createFindingRuleLink` for a `confidence =
+'confident'` finding, per §4.4/§4.6's own eligibility gate. Seeing this
+log line at all — for any link, ever — is worth investigating the
+CALLER that wrote the offending `finding_rule_links` row, not just
+retrying; the row will keep throwing on every future check until its own
+`delta_at_graduation` value is corrected or the row is removed. A
+plain Postgres connectivity error surfacing here (rather than the throw
+above) is a more ordinary transient failure, distinguishable by the
+error object logged alongside the message.
+
+**How to check:** grep application logs for `[decay-engine] decay check
+failed for link` — every occurrence names the exact `finding_id`/
+`rule_id`/`user_id`. Query that link directly:
+`select delta_at_graduation from retrospeq.finding_rule_links where
+finding_id = '<id>' and rule_id = '<id>'` — a non-positive value
+confirms the likely-cause above. A RECURRING occurrence for the SAME
+`finding_id`/`rule_id` pair across multiple syncs (not just one) is the
+alertable pattern — a one-off followed by silence for that same link
+suggests a transient issue that either resolved itself or the link
+having since been deleted (e.g. its parent `findings` row was superseded
+and later cleaned up).
+
+**Zero occurrences today, for every real user — correct, not a
+symptom.** `finding_rule_links` has no real rows in production yet
+(Module 06's graduation flow doesn't exist), so this per-link error path
+has never fired against real data — it exists to contain a failure mode
+that becomes reachable only once Module 06 starts writing rows.
+
+---
+
+## Asset-class suppression is no longer a separate sync-hook call — see the edge engine entry above
+
+**2026-09-09 correction (this same slice, before commit):** an earlier
+draft of this feature ran asset-class suppression as its own
+post-recompute step (a separate `lib/analytics/asset-class-suppression/
+repository.ts`, its own `try/catch` in `sync.ts`, its own runbook entry
+here). That draft was superseded before being committed — see
+`docs/adr/0033-asset-class-suppression-classification.md`'s "Decision"
+section, point 4. Suppression (§4.12) is now computed and written INSIDE
+`lib/analytics/edge-engine/repository.ts`'s own
+`computeEdgeFindingsForStrategyId`/`recomputeEdgeFindingsForUser` —
+`writeShadowedFindings` is called from the exact same function, in the
+exact same per-strategy loop, as `writeFindingsForStrategy`. There is no
+separate call site, no separate failure mode, and therefore no separate
+runbook entry: a `[sync] edge engine findings recompute failed after
+sync` line (see "Edge engine `findings` recompute failing after a sync"
+above) covers BOTH the rendered `findings` writes and the suppressed
+`shadow_runs` writes for that user's strategies, since both happen
+inside the one recompute this entry already documents. This section is
+left in place, rather than deleted outright, specifically so a reader
+who remembers or greps for "asset-class suppression failed after sync"
+(the old log-line prefix, which no longer exists anywhere in this
+codebase) finds this pointer instead of nothing.
+
+**"Zero suppressed, every call, for every real strategy today" is
+correct, not a symptom.** No live crypto broker integration exists yet
+(Module 01/02's platform list — `mt4|mt5|ctrader|binance|bybit|manual` —
+has no functioning `binance`/`bybit` adapter wired up), so no real
+strategy in this repo can currently have an all-crypto eligible-trade
+platform set. `computeEdgeFindingsForStrategyId` short-circuits its own
+`suppressed` array to empty (never writes to `shadow_runs` for that
+strategy) the moment it determines the strategy's own eligible trades
+aren't ALL crypto-platform — see the ADR for why the classification unit
+is the STRATEGY (from its own eligible trades), not the user's whole
+account collection.

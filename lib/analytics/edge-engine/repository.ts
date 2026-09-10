@@ -1,10 +1,13 @@
 import 'server-only';
 import { withServiceRoleConnection } from '@/lib/supabase/direct';
+import { isCryptoPlatform } from '@/lib/broker/platform-defaults';
+import type { Platform } from '@/lib/broker/adapter';
 import { filterEligibleTrades, type EligibleTradeFact } from '../shadow-harness/eligible-trade';
 import type { FieldDataType, FieldRawValue } from './field-values';
 import { extractFieldValue, type EdgeEngineTradeColumns } from './field-values';
 import { computeEdgeFindingsForStrategy, type EdgeEngineField, type FieldValuesByFieldAndTrade } from './edge-engine';
 import type { SegmentComputationResult } from './gates';
+import { partitionByAssetClassSuppression } from './asset-class-suppression';
 
 /**
  * Module 05 (Analytics & Findings) §4.13 — the edge engine's DB access
@@ -25,8 +28,11 @@ import type { SegmentComputationResult } from './gates';
  * `lib/analytics/edge-engine/`) never imports `lib/rules/**` — enforced
  * both by `eslint.config.mjs`'s Module 04/05 rule and, structurally, by
  * this file only ever querying `strategies`, `strategy_versions`,
- * `fields`, `trades`, `trade_captures`, `findings` — never `rules`,
- * `rule_versions`, `rule_evaluations`, or `adherence_weekly` (§7.5).
+ * `fields`, `trades`, `trading_accounts`, `trade_captures`, `findings`,
+ * `shadow_runs` — never `rules`, `rule_versions`, `rule_evaluations`, or
+ * `adherence_weekly` (§7.5). `trading_accounts.platform` is read
+ * (`fetchEligibleTradesForStrategy`) only for §4.12's asset-class
+ * suppression classification — see that function's own comment.
  */
 
 // ---------------------------------------------------------------------
@@ -110,6 +116,11 @@ export interface EdgeEngineEligibleTrade {
   id: string;
   outcome: 'win' | 'loss' | 'scratch' | null;
   rMultiple: number | null;
+  /** §4.12 asset-class suppression — the account this trade belongs to.
+   *  Not part of `columns` (the derived-field-extraction shape) because
+   *  it's never a segmentable/derived field value, only a classification
+   *  input the caller uses once per strategy. */
+  platform: string;
   columns: EdgeEngineTradeColumns;
 }
 
@@ -118,16 +129,22 @@ export interface EdgeEngineEligibleTrade {
  * §4.1's eligible-trade contract via `filterEligibleTrades` (reused
  * verbatim, per this slice's own dispatch — never reimplemented). Fetches
  * every column both the eligibility filter AND `field-values.ts`'s own
- * derived-field extractors need, in one query.
+ * derived-field extractors need, in one query — plus (§4.12) each trade's
+ * own `trading_accounts.platform`, joined in the same query rather than a
+ * second round trip, so `computeEdgeFindingsForStrategyId` can classify
+ * the strategy as crypto-or-not from the SAME eligible-trade population
+ * the rest of this computation already uses (never a separate, possibly
+ * inconsistent account query).
  */
 export async function fetchEligibleTradesForStrategy(userId: string, strategyId: string): Promise<EdgeEngineEligibleTrade[]> {
   return withServiceRoleConnection(async (client) => {
-    const res = await client.query<TradeRow>(
-      `select id, status, not_a_decision, closed_at, server_day::text as server_day, opened_at,
-              outcome, r_multiple, realized_pnl, currency, strategy_id, direction, instrument,
-              hold_seconds, risk_pct
-         from retrospeq.trades
-        where user_id = $1 and strategy_id = $2`,
+    const res = await client.query<TradeRow & { platform: string }>(
+      `select t.id, t.status, t.not_a_decision, t.closed_at, t.server_day::text as server_day, t.opened_at,
+              t.outcome, t.r_multiple, t.realized_pnl, t.currency, t.strategy_id, t.direction, t.instrument,
+              t.hold_seconds, t.risk_pct, ta.platform
+         from retrospeq.trades t
+         join retrospeq.trading_accounts ta on ta.id = t.account_id
+        where t.user_id = $1 and t.strategy_id = $2`,
       [userId, strategyId],
     );
 
@@ -153,6 +170,7 @@ export async function fetchEligibleTradesForStrategy(userId: string, strategyId:
         id: row.id,
         outcome: row.outcome,
         rMultiple: row.r_multiple === null ? null : Number(row.r_multiple),
+        platform: row.platform,
         columns: {
           id: row.id,
           serverDay: row.server_day,
@@ -201,7 +219,15 @@ export async function fetchCapturesForTrades(
 
 export interface StrategyEdgeComputation {
   strategyId: string;
+  /** To render — the segments NOT suppressed by §4.12. Written to
+   *  `findings` by `writeFindingsForStrategy`. */
   results: SegmentComputationResult[];
+  /** §4.12 asset-class suppression — computed but never rendered, logged
+   *  to `shadow_runs` by `writeShadowedFindings` instead, never written
+   *  to `findings` at all. Empty for every non-crypto strategy (today,
+   *  every real strategy — no live crypto broker integration exists
+   *  yet). */
+  suppressed: SegmentComputationResult[];
   tradesScanned: number;
 }
 
@@ -236,7 +262,16 @@ export async function computeEdgeFindingsForStrategyId(
     valuesByFieldAndTrade,
   );
 
-  return { strategyId, results, tradesScanned: trades.length };
+  // §4.12: a strategy counts as "crypto" only when EVERY distinct
+  // account platform among its OWN eligible trades is a crypto platform
+  // — see `asset-class-suppression.ts`'s own header for the full
+  // reasoning (conservative: a strategy with zero eligible trades, or
+  // any non-crypto platform present, is never suppressed).
+  const distinctPlatforms = new Set(trades.map((t) => t.platform));
+  const isCryptoStrategy = distinctPlatforms.size > 0 && [...distinctPlatforms].every((p) => isCryptoPlatform(p as Platform));
+  const { rendered, suppressed } = partitionByAssetClassSuppression(results, isCryptoStrategy);
+
+  return { strategyId, results: rendered, suppressed, tradesScanned: trades.length };
 }
 
 // ---------------------------------------------------------------------
@@ -490,6 +525,72 @@ function toNumeric(value: number | null, decimalPlaces: number): string | null {
 }
 
 // ---------------------------------------------------------------------
+// Writes — §4.12 asset-class suppression's shadow-run log
+// ---------------------------------------------------------------------
+
+/** Statistical-gates-only render verdict, orthogonal from the asset-class
+ *  policy decision that suppresses this result — "would this have
+ *  rendered absent §4.12," not "did it render." */
+function wouldRenderByStatisticalGatesAlone(confidence: SegmentComputationResult['confidence']): boolean {
+  return confidence === 'confident' || confidence === 'provisional';
+}
+
+/**
+ * §4.12: "findings over these fields are computed but suppressed from
+ * render and logged to shadow_runs instead." One `shadow_runs` row per
+ * suppressed segment, written under `withServiceRoleConnection` via raw
+ * `insert` — deliberately NOT
+ * `lib/analytics/shadow-harness/repository.ts`'s
+ * `createSupabaseShadowRunRepository()` (a separate supabase-js/env-var
+ * connection outside this function's own transaction; see this module's
+ * own dispatch brief). `ShadowRunRecord`'s TYPE (imported for shape
+ * consistency only, no runtime dependency) documents the row shape this
+ * insert matches.
+ *
+ * `analyticId` is reused from the same `SegmentComputationResult` the
+ * finding would have used (`find.session` / `find.pickone`) — "the
+ * fields still exist," same analytic, just never rendered. `would_render`
+ * reflects the STATISTICAL gates alone (orthogonal from the suppression
+ * reason); `gate_failures` stays the segment's own real statistical
+ * failures, never repurposed to encode the policy reason — that lives in
+ * `payload.suppressionReason` instead.
+ */
+export async function writeShadowedFindings(
+  userId: string,
+  strategyId: string,
+  suppressed: readonly SegmentComputationResult[],
+): Promise<void> {
+  if (suppressed.length === 0) return;
+
+  await withServiceRoleConnection(async (client) => {
+    for (const r of suppressed) {
+      const payload = {
+        strategyId,
+        fieldId: r.fieldId,
+        segment: r.segment,
+        n: r.n,
+        winRate: r.winRate,
+        avgR: r.avgR,
+        baselineN: r.baselineN,
+        baselineWinRate: r.baselineWinRate,
+        baselineAvgR: r.baselineAvgR,
+        deltaWinRate: r.deltaWinRate,
+        deltaAvgR: r.deltaAvgR,
+        pValue: r.pValue,
+        pAdjusted: r.pAdjusted,
+        confidence: r.confidence,
+        suppressionReason: 'asset_class_crypto' as const,
+      };
+      await client.query(
+        `insert into retrospeq.shadow_runs (user_id, analytic_id, would_render, payload, gate_failures)
+         values ($1, $2, $3, $4::jsonb, $5::text[])`,
+        [userId, r.analyticId, wouldRenderByStatisticalGatesAlone(r.confidence), JSON.stringify(payload), r.gateFailures],
+      );
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
 // Top-level: one user, every active strategy
 // ---------------------------------------------------------------------
 
@@ -520,7 +621,14 @@ export async function recomputeEdgeFindingsForUser(userId: string): Promise<Reco
   let findingsWritten = 0;
   for (const strategy of strategies) {
     const computation = await computeEdgeFindingsForStrategyId(userId, strategy.id, strategy.current_version);
+    // §4.12: the rendered half writes to `findings` as usual; the
+    // suppressed half (empty for every non-crypto strategy — today,
+    // every real strategy) writes to `shadow_runs` instead, never to
+    // `findings` at all. Two independent writes, not one conditional —
+    // a strategy can have both in the same run if its own segment set
+    // includes both suppressible and non-suppressible fields.
     await writeFindingsForStrategy(userId, strategy.id, computation.results);
+    await writeShadowedFindings(userId, strategy.id, computation.suppressed);
     findingsWritten += computation.results.length;
   }
   return { strategiesComputed: strategies.length, findingsWritten };

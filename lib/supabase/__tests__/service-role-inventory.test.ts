@@ -312,6 +312,19 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // full repo-wide suite rather than only the scoped `detection-engine`
   // directory the coder's own dispatch reported against.
   'lib/analytics/detection-engine/repository.ts',
+  // Module 05 (Analytics & Findings) decay engine, §4.11/§4.13: the
+  // entire DB access layer (`createFindingRuleLink`,
+  // `fetchFindingRuleLinksForUser`, `fetchCurrentActiveFindingForTuple`,
+  // `applyDecayCheckResult`, `runDecayChecksForUser`) runs under
+  // `withServiceRoleConnection` for the identical reason
+  // `lib/analytics/edge-engine/repository.ts`'s own entry above documents
+  // — a BACKGROUND recompute triggered from `lib/ingestion/sync.ts`'s
+  // post-sync hook, no authenticated session at the call site. Every
+  // query is explicitly scoped to the caller-supplied `userId`, never
+  // trusting RLS to narrow it (this file's own header comment). Added in
+  // the same commit that introduces the call, per every entry above's own
+  // cautionary note.
+  'lib/analytics/decay-engine/repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

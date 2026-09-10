@@ -83,6 +83,30 @@ export function defaultLabelForPlatform(platform: Platform): string {
 }
 
 /**
+ * Module 05 (Analytics & Findings) §4.12 — asset-class suppression:
+ * "`drv.session` and `drv.day_of_week` are meaningful in forex and
+ * approach noise in crypto." `binance`/`bybit` are the only two
+ * unambiguously crypto-exchange platforms in `Platform`; every other
+ * value (`mt4`/`mt5`/`ctrader`) is forex/CFD.
+ *
+ * `manual` is DELIBERATELY excluded, even though
+ * `defaultDayRolloverForPlatform` above happens to group it with
+ * `binance`/`bybit` under the same `'00:00:00 UTC'` default — that
+ * grouping is about an unrelated concern (no adapter to ask for a real
+ * rollover time, so both default to plain UTC midnight), not evidence
+ * about asset class. A self-entered manual account could be forex,
+ * crypto, futures, or anything else — treating it as crypto here would
+ * suppress a possibly-real forex-relevant claim for a trader this
+ * function genuinely cannot classify. Do not assume the two functions'
+ * platform groupings are meant to correspond.
+ */
+const CRYPTO_PLATFORMS = new Set<Platform>(['binance', 'bybit']);
+
+export function isCryptoPlatform(platform: Platform): boolean {
+  return CRYPTO_PLATFORMS.has(platform);
+}
+
+/**
  * Module 01 §3.1's `trading_accounts.account_kind` values (migration
  * comment: `personal | prop | demo`). Defined here, not in
  * `lib/broker/accounts-repository.ts`, so client components (e.g. the
