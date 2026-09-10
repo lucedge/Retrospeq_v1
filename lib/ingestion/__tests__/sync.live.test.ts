@@ -11,6 +11,37 @@ import {
 } from '@/lib/supabase/__tests__/rls-test-helpers';
 
 vi.mock('server-only', () => ({}));
+// Module 05 §4.10's `spec.weekday` canary recompute (`lib/ingestion/
+// sync.ts`'s post-sync hook, added 2026-09-10) is one more sequential,
+// awaited DB round trip in the SAME post-sync chain every test in this
+// file exercises end to end, and tipped the two heaviest tests
+// (`golden-fixture parity ... simple_daytrades` — actually reproduced on
+// whichever fixture in the `describe.each` ran first under load, and
+// `dedup is per-fill`, which runs THREE full sequential `runSync` calls)
+// over the edge under a full-file run.
+//
+// ROOT CAUSE, found by direct investigation rather than guessed: EVERY
+// test in this file already had its OWN explicit per-test timeout
+// (`it(name, fn, 20_000)` — the literal `20_000` third argument, present
+// on all 8 heavier tests here before this slice), which in Vitest/Jest
+// OVERRIDES a file-level `vi.setConfig({ testTimeout })` for that
+// specific test. Adding `vi.setConfig` alone (this line) therefore did
+// NOT fix the two affected tests — confirmed directly: a standalone
+// diagnostic test proved `vi.setConfig` itself was genuinely taking
+// effect, yet the two real failing tests kept citing "20000ms" verbatim
+// even after raising the file-level config, which is exactly the
+// per-test-override-wins signature. The actual fix is on the two
+// affected tests' own explicit third argument (raised from `20_000` to
+// `60_000` at each call site, with its own comment) — see those two call
+// sites, not this line, for what really matters. This file-level
+// `vi.setConfig` is kept anyway as a sane DEFAULT for any future test
+// added to this file that omits its own explicit per-test timeout,
+// matching this repo's own established convention for exactly this
+// situation (`vi.setConfig`, used identically in a dozen other live-DB
+// test files, e.g. `lib/analytics/detection-engine/__tests__/
+// repository.live.test.ts`) — it is not, by itself, what made the two
+// affected tests pass again.
+vi.setConfig({ testTimeout: 60_000 });
 
 /**
  * Module 02 §4.1/§7.1/§7.3 — live-DB proof for `lib/ingestion/sync.ts`'s
@@ -332,7 +363,17 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
           const actualAfterRerun = await fetchActualTrades(db, accountId);
           expect(actualAfterRerun).toHaveLength(expected.trades.length);
         },
-        20_000,
+        // Explicit per-test timeout — this OVERRIDES the file-level
+        // `vi.setConfig({ testTimeout })` above (found live, 2026-09-10:
+        // raising the file-level config alone had no effect on this
+        // specific test, which was the actual root cause, not a
+        // `vi.setConfig` failure — Vitest's own documented precedence is
+        // "explicit per-test timeout wins over the global/file default").
+        // Bumped in lockstep with the file-level default for the same
+        // reason (Module 05 §4.10's `spec.weekday` canary added one more
+        // sequential, awaited DB round trip to this test's own two
+        // `runSync` calls).
+        60_000,
       );
     },
   );
@@ -1054,7 +1095,13 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
       expect(thirdResult.blocksCreated).toBe(0);
       expect(thirdResult.tradesCreated).toBe(0);
     },
-    20_000,
+    // Explicit per-test timeout — see the matching comment on the
+    // golden-fixture-parity test above for why this (not the file-level
+    // `vi.setConfig`) was the real, root-cause fix. This test in
+    // particular runs THREE full sequential `runSync` calls, each now
+    // carrying the extra weekday-canary round trip, making it the single
+    // most latency-sensitive test in this file.
+    60_000,
   );
 
   it(

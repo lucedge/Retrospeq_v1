@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { uuidv7 } from 'uuidv7';
-import { countDistinctAccounts, evaluateShadowToBetaPromotion } from '../promotion';
+import { countDistinctAccounts, evaluateShadowToBetaPromotion, PERMANENTLY_SHADOW_ANALYTIC_IDS } from '../promotion';
 
 function runsFor(userIds: string[]) {
   return userIds.map((user_id) => ({ user_id }));
@@ -54,6 +54,29 @@ describe('evaluateShadowToBetaPromotion', () => {
     expect(eligibility.ran_without_error_threshold_met).toBe(true); // mechanical gate did pass
     expect(eligibility.permanently_shadow).toBe(true);
     expect(eligibility.eligible_for_manual_promotion_review).toBe(false); // but never eligible
+  });
+
+  it('hard-blocks spec.weekday structurally, even with NO options argument at all — not just a missing call site (Module 05 §4.10)', () => {
+    const runs = runsFor(Array.from({ length: 10_000 }, () => uuidv7()));
+    // Deliberately NOT passing { permanentlyShadow: true } — this is the
+    // exact "forgot to pass it" scenario the structural block exists for.
+    const eligibility = evaluateShadowToBetaPromotion('spec.weekday', runs);
+
+    expect(eligibility.ran_without_error_threshold_met).toBe(true); // mechanical gate did pass
+    expect(eligibility.permanently_shadow).toBe(true); // derived from the id alone
+    expect(eligibility.eligible_for_manual_promotion_review).toBe(false);
+  });
+
+  it('PERMANENTLY_SHADOW_ANALYTIC_IDS names spec.weekday as the sole entry (Module 05 §4.10/§10)', () => {
+    expect(PERMANENTLY_SHADOW_ANALYTIC_IDS).toContain('spec.weekday');
+  });
+
+  it('does not hard-block an ordinary analytic id sharing no relation to the permanently-shadow list', () => {
+    const runs = runsFor(Array.from({ length: 30 }, () => uuidv7()));
+    const eligibility = evaluateShadowToBetaPromotion('find.pickone', runs);
+
+    expect(eligibility.permanently_shadow).toBe(false);
+    expect(eligibility.eligible_for_manual_promotion_review).toBe(true);
   });
 
   it('distinct account count is order-independent and duplicate-insensitive (property)', () => {

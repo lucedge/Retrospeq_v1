@@ -32,6 +32,7 @@ import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-st
 import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
 import { runDecayChecksForUser } from '@/lib/analytics/decay-engine/repository';
 import { recomputeDetectionsForUser } from '@/lib/analytics/detection-engine/repository';
+import { recomputeWeekdayCanaryForUser } from '@/lib/analytics/spec-weekday/repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -1298,6 +1299,29 @@ export async function runSync(
   } catch (err) {
     console.error(
       `[sync] detection engine recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; detections will read stale until the next successful recompute:`,
+      err,
+    );
+  }
+
+  // Module 05 §4.10/§4.13: the `spec.weekday` canary — "Shadow runs | Same
+  // schedule as their live counterparts." Same standing infra gap (no
+  // cron/scheduler exists yet — PROGRESS.md "Infra gaps") and the
+  // identical best-effort, non-blocking, independently try/catch'd
+  // posture as every other recompute call in this function. This analytic
+  // is PERMANENTLY shadow-only (§4.10, `lib/analytics/spec-weekday/
+  // weekday-canary.ts`'s own `permanently_shadow: true` plus
+  // `shadow-harness/promotion.ts`'s hardcoded `PERMANENTLY_SHADOW_ANALYTIC_IDS`
+  // block) — this call writes ONE `shadow_runs` row per sync, never
+  // `findings`, never rendered to any trader, regardless of outcome.
+  // Logged loudly on failure, per `docs/runbook.md`'s "Shadow analytic
+  // diverging from expectation" entry (updated this slice to describe the
+  // now-real implementation) — a failure here has zero user-facing effect
+  // either way, since nothing this analytic computes is ever shown.
+  try {
+    await recomputeWeekdayCanaryForUser(account.user_id);
+  } catch (err) {
+    console.error(
+      `[sync] spec.weekday canary recompute failed after sync for user ${account.user_id} (account ${account.id}, syncRunId ${result.syncRunId}) — the sync itself still succeeded; this is a shadow-only, never-rendered analytic, so no trader-facing effect either way, but its own render-rate metric (§8, target < 5% of users) will undercount until the next successful recompute:`,
       err,
     );
   }

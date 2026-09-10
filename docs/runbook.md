@@ -22,43 +22,77 @@ explicitly meant to accumulate evidence quietly, this is the only signal
 that something is wrong with one *before* it ever reaches a promotion
 review (Module 05 §4.9's shadow→beta criteria).
 
-**The concrete case the spec names by id:** `spec.weekday` (§4.10) is
-kept *permanently* in shadow as a statistical control — it should almost
-never clear its gates. Its render rate is the operational proxy for "is
-our statistical bar too low" (§8: target **< 5% of users**). If/when
-`spec.weekday` is actually implemented (it isn't yet — it needs the edge
-engine's statistical gates, which need confirmed trades from Module 02,
-neither of which exist in this repo yet), its render-rate trend is the
-first thing this alert should watch.
+**The concrete case the spec names by id — now actually built, 2026-09-10:**
+`spec.weekday` (§4.10) is kept *permanently* in shadow as a statistical
+control — it should almost never clear its gates. Its render rate is the
+operational proxy for "is our statistical bar too low" (§8: target **< 5%
+of users**). Implemented in `lib/analytics/spec-weekday/` — pure gate
+computation (`weekday-canary.ts`, reusing `edge-engine/gates.ts`'s
+Holm-corrected `computeFamilyFindings` over the 7 weekday segments — see
+that file's own header for why the EDGE engine's gates, not the detection
+engine's, are the correct fit), the tracked-metric query
+(`render-rate.ts`'s `computeWeekdayCanaryRenderRate`), and the DB-backed
+recompute (`repository.ts`'s `recomputeWeekdayCanaryForUser`, wired into
+`lib/ingestion/sync.ts`'s post-sync hook — one `shadow_runs` row per sync,
+per user, unconditionally). See `docs/adr/0034-weekday-canary-permanent-
+shadow.md` for the full reasoning on why this analytic is deliberately
+weak and must never be promoted regardless of any individual run's own
+result.
 
-**How to check (once real shadow analytics exist):**
+**How to check:**
 
 1. Query `shadow_runs` for the analytic in question, grouped by day:
    `would_render` rate and row count (a sudden *drop* in row count means
    the nightly job silently stopped running for that analytic — check
-   for a `ShadowComputeError` in the job's logs first, since
-   `runShadowAnalytic()` never writes a row for a failed compute).
+   for a `[sync] spec.weekday canary recompute failed after sync` log
+   line first, or a `ShadowComputeError` if run through the generic
+   harness path directly, since neither path writes a row for a failed
+   compute).
 2. Compare against the analytic's own trailing history — there is no
    cross-analytic baseline (00-foundation §5.2: no cross-user analytics,
    and every analytic's "normal" range is its own).
-3. If `analytic_id = 'spec.weekday'` specifically: compare its render
-   rate against the quality benchmark in Module 05 §8 (**< 5% of
-   users**). Above that, the statistical gates in the not-yet-built edge
-   engine are too loose — this blocks shipping anything else through
-   those same gates, not just the canary.
+3. For `analytic_id = 'spec.weekday'` specifically, call
+   `fetchWeekdayCanaryRenderRate()` (`lib/analytics/spec-weekday/
+   repository.ts`) rather than hand-computing it — it already dedupes to
+   each user's most recent run and returns `exceedsTarget` directly
+   against §8's own **< 5%** benchmark (`renderRate: null` when there is
+   no data yet is a correct, non-alertable state — "not enough data yet,"
+   not a symptom). Above that, the statistical gates in
+   `edge-engine/gates.ts` are too loose — **this blocks shipping anything
+   else through those same shared gates, not just the canary** (every
+   live/beta `find.*` analytic uses the identical
+   `SAMPLE_MIN_SEGMENT_N`/`EFFECT_MIN_WIN_RATE_DELTA`/`SIGNIFICANCE_ALPHA`
+   constants).
 
-**Action:** investigate before any promotion decision is made for that
-analytic — `evaluateShadowToBetaPromotion()`
-(`lib/analytics/shadow-harness/promotion.ts`) only checks the mechanical
-"ran without error on ≥ 30 accounts" gate; a divergence here means the
-manual-inspection half of that same function's output (`manual_review_required`)
-should come back negative even if the account-count threshold is met.
+**A single striking per-user result is NOT, by itself, an alert
+condition.** `spec.weekday`'s own gates are the real, unweakened §4.3
+gates (deliberately — a rigged-to-fail control proves nothing, see ADR
+0034) — this means it WILL occasionally clear for some user on some run
+purely by chance, exactly as multiple-comparisons theory predicts for a
+~5%-alpha test run repeatedly across many users. The alertable signal is
+the AGGREGATE RENDER RATE crossing 5%, sustained across a meaningful
+number of users — never a single instance.
+
+**Action:** investigate before any promotion decision is made for
+`spec.weekday` — though note `evaluateShadowToBetaPromotion()`
+(`lib/analytics/shadow-harness/promotion.ts`) now hard-blocks this
+specific analytic id from ever returning
+`eligible_for_manual_promotion_review: true` regardless of the mechanical
+account-count gate, so this entry's real audience is "is the shared
+statistical bar too low," not "should we promote the canary" (the answer
+to the latter is always no, structurally). If the render rate exceeds 5%,
+the action is to tighten `edge-engine/gates.ts`'s constants, re-verify the
+false-positive rate on synthetic no-effect data (§8's own separate
+benchmark, **≤ nominal α = 0.05**), and re-check every live/beta `find.*`
+analytic's own historical output for the same reason.
 
 **What does not yet exist to fully automate this:** there is no live
 Supabase project, so there is no scheduled query or dashboard running
-this check today — this entry documents what to look at once one exists.
-Wiring an actual scheduled check is blocked on the same infra gaps
-tracked in `PROGRESS.md` (no Supabase project, no Vercel Cron).
+this check automatically today — nightly recompute is not built either
+(no cron/scheduler exists in this repo yet, PROGRESS.md "Infra gaps");
+`recomputeWeekdayCanaryForUser` only runs as a post-sync, on-demand side
+effect. This entry documents what to look at once a real project and a
+scheduled job both exist.
 
 ---
 

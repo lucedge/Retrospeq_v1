@@ -18,5 +18,5 @@ export {
 } from './repository';
 export type { ShadowRunRepository } from './repository';
 
-export { evaluateShadowToBetaPromotion, countDistinctAccounts } from './promotion';
+export { evaluateShadowToBetaPromotion, countDistinctAccounts, PERMANENTLY_SHADOW_ANALYTIC_IDS } from './promotion';
 export type { ShadowToBetaEligibility } from './promotion';

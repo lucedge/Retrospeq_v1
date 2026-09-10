@@ -28,6 +28,27 @@ import type { ShadowRunRow, Uuid } from './types';
 
 const SHADOW_TO_BETA_MIN_ACCOUNTS = 30;
 
+/**
+ * Module 05 §4.10 — the weekday canary's own hard block, made structural
+ * rather than convention. `ShadowAnalytic.permanently_shadow` (`types.ts`)
+ * is a per-analytic-registration flag a caller COULD forget to read; this
+ * constant is the second, independent layer — `evaluateShadowToBetaPromotion`
+ * below OR's the caller-supplied `options.permanentlyShadow` with a direct
+ * membership check against this list, so a future caller that constructs
+ * `evaluateShadowToBetaPromotion('spec.weekday', runs)` with NO options
+ * argument at all still gets `eligible_for_manual_promotion_review: false`
+ * — "not just a missing call site," per this slice's own dispatch
+ * instruction. Any analytic added here can never be promoted through this
+ * function, full stop, regardless of how many accounts it ran on cleanly.
+ *
+ * Kept as a literal array (not derived from a registry import) because
+ * `analytics-registry.md` is a markdown document, not executable code —
+ * there is no live "the registry" module this file could read the flag
+ * from. `spec.weekday` is the only entry today; §4.10/§10 of the registry
+ * name it as the sole permanently-shadow analytic in the entire catalogue.
+ */
+export const PERMANENTLY_SHADOW_ANALYTIC_IDS: readonly string[] = ['spec.weekday'];
+
 export interface ShadowToBetaEligibility {
   analytic_id: string;
   distinct_accounts_run: number;
@@ -57,7 +78,9 @@ export function evaluateShadowToBetaPromotion(
 ): ShadowToBetaEligibility {
   const distinctAccounts = new Set(runs.map((run) => run.user_id)).size;
   const thresholdMet = distinctAccounts >= SHADOW_TO_BETA_MIN_ACCOUNTS;
-  const permanentlyShadow = options.permanentlyShadow ?? false;
+  // Structural hard block, not just the caller's own opt-in — see
+  // `PERMANENTLY_SHADOW_ANALYTIC_IDS`'s own header above.
+  const permanentlyShadow = (options.permanentlyShadow ?? false) || PERMANENTLY_SHADOW_ANALYTIC_IDS.includes(analyticId);
 
   return {
     analytic_id: analyticId,
