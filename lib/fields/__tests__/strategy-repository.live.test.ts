@@ -25,6 +25,7 @@ import {
   editStrategy,
   fetchCurrentStrategyForEdit,
   fetchFieldDefinitionsByIds,
+  fetchStrategiesForUser,
   insertStrategyAndVersion,
   StrategyCreateCapExceededError,
   StrategyEditConflictError,
@@ -32,7 +33,7 @@ import {
   StrategyNotEditableError,
   StrategyNotFoundError,
 } from '../strategy-repository';
-import { FieldMomentIncompatibleError } from '../strategy-validation';
+import { FieldMomentIncompatibleError, fieldCapWarningMessage } from '../strategy-validation';
 
 /**
  * Module 03 (Field Registry & Strategy) Slice 03b's authoring pipeline —
@@ -598,4 +599,86 @@ describe.skipIf(!env)('insertStrategyAndVersion — GENUINE two-connection cap-r
     },
     30_000,
   );
+});
+
+/**
+ * §4.8's field-cap warning UI gap — live-DB proof for
+ * `fetchStrategiesForUser`'s real `capturedFieldCount` column (a `left
+ * join` against `retrospeq.fields` per entry in the current version's own
+ * `fields[]` snapshot, excluding `kind = 'derived'` / `data_type = 'note'`
+ * matches), the count `app/(app)/strategies/page.tsx` feeds into
+ * `fieldCapWarningMessage` for each already-saved strategy's row. A
+ * separate `describe` block (own user, own setup/teardown) rather than
+ * folding into the block above — this exercises a READ, not the
+ * create/edit transaction machinery those tests are about.
+ */
+describe.skipIf(!env)('fetchStrategiesForUser — §4.8 capturedFieldCount (live DB)', () => {
+  let db: Client;
+  let user: TestAuthUser;
+
+  beforeAll(async () => {
+    if (!env) return;
+    db = await connectAsOwner(env);
+    user = await createTestAuthUser(env, 'strategy-repo-capcount');
+    await setPlan(db, user.id, 'pro');
+  }, 30_000);
+
+  afterAll(async () => {
+    if (!env) return;
+    await cleanupUser(db, user.id);
+    await deleteTestAuthUser(env, user.id).catch(() => {});
+    await db.end();
+  });
+
+  it('fieldCount counts every entry; capturedFieldCount excludes derived and note, counting only the real captured one', async () => {
+    await insertCustomField(db, user.id, 'cf.cap.rating', 'rating');
+    await insertCustomField(db, user.id, 'cf.cap.note', 'note');
+
+    const created = await createStrategy({
+      userId: user.id,
+      name: 'Cap-count strategy',
+      fields: [
+        { fieldId: DRV_SESSION, captureMoment: 'pre_entry', order: 1 }, // derived — free per §4.8
+        { fieldId: 'cf.cap.rating', captureMoment: 'post_close', order: 2 }, // the one real captured field
+        { fieldId: 'cf.cap.note', captureMoment: 'post_close', order: 3 }, // note — free per §4.8
+      ],
+      triggers: [],
+    });
+
+    const list = await fetchStrategiesForUser(user.id);
+    const row = list.find((s) => s.strategyId === created.strategyId);
+    expect(row).toBeDefined();
+    expect(row!.fieldCount).toBe(3); // raw jsonb_array_length, no exclusions
+    expect(row!.capturedFieldCount).toBe(1); // derived + note excluded, only the rating field counts
+  });
+
+  it('returns 0 for both counts on a strategy with an empty fields[] snapshot', async () => {
+    const created = await createStrategy({ userId: user.id, name: 'Empty-fields strategy', fields: [], triggers: [] });
+    const list = await fetchStrategiesForUser(user.id);
+    const row = list.find((s) => s.strategyId === created.strategyId);
+    expect(row).toBeDefined();
+    expect(row!.fieldCount).toBe(0);
+    expect(row!.capturedFieldCount).toBe(0);
+  });
+
+  it('a real 5-captured-field strategy crosses §4.8s own 5-6 threshold, feeding fieldCapWarningMessage correctly end to end', async () => {
+    const capturedIds = ['cf.cap.a', 'cf.cap.b', 'cf.cap.c', 'cf.cap.d', 'cf.cap.e'];
+    for (const id of capturedIds) {
+      await insertCustomField(db, user.id, id, 'bool');
+    }
+    const created = await createStrategy({
+      userId: user.id,
+      name: 'Five-captured-field strategy',
+      fields: capturedIds.map((fieldId, i) => ({ fieldId, captureMoment: 'post_close' as const, order: i })),
+      triggers: [],
+    });
+
+    const list = await fetchStrategiesForUser(user.id);
+    const row = list.find((s) => s.strategyId === created.strategyId);
+    expect(row).toBeDefined();
+    expect(row!.capturedFieldCount).toBe(5);
+    expect(fieldCapWarningMessage(row!.capturedFieldCount)).toBe(
+      'Each field needs about 20 trades before it tells you anything. You have 5.',
+    );
+  });
 });

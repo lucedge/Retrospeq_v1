@@ -272,12 +272,12 @@ export function evaluateTriggers(triggers: ProposedTrigger[]): TriggerEvaluation
 /**
  * §2.3 / §4.8's field-cap warning input — counts CAPTURED fields only.
  * §4.8 verbatim: "Counts captured fields only. Derived and note fields
- * are free." This dispatch does NOT build the warning UI itself (§4.8, a
- * future slice's job) but keeps the counting logic here since the
+ * are free." Kept here (rather than inline in a UI component) since the
  * save-time pipeline is already field-type-aware (needed for the
- * capture-moment check above) — a future field-cap-warning slice can call
- * this directly rather than re-deriving "which fields count" a second
- * time.
+ * capture-moment check above) — every field-cap-warning surface (the
+ * strategy builder's own live count during creation, `strategies/page.tsx`'s
+ * per-strategy warning for already-saved strategies) calls this directly
+ * rather than re-deriving "which fields count" a second time.
  */
 export function countCapturedFields(
   fields: ProposedStrategyField[],
@@ -292,4 +292,37 @@ export function countCapturedFields(
     count++;
   }
   return count;
+}
+
+/**
+ * §4.8's literal warning-copy table, factored into one pure function so
+ * every surface that shows the field-cap warning (`StrategyBuilder.tsx`'s
+ * live in-progress count, `app/(app)/strategies/page.tsx`'s per-saved-
+ * strategy count) renders the exact same three sentences rather than two
+ * independently-typed copies quietly drifting apart — the same "one
+ * source of truth" reasoning `detectHedgeWords`/`countCapturedFields`
+ * themselves already establish for this file's other shared UI inputs.
+ *
+ * §4.8's table, verbatim:
+ *   <=4   -> no message
+ *   5-6   -> "Each field needs about 20 trades before it tells you
+ *             anything. You have N."
+ *   7+    -> "That's a lot to fill in before every trade. Consider which
+ *             of these you'd actually change your mind over."
+ *
+ * `capturedFieldCount` is the caller's responsibility to have already
+ * derived via `countCapturedFields` (builder, in-progress selection) or an
+ * equivalent real captured-only count (a saved strategy's own persisted
+ * `fields[]` snapshot) — this function does no counting itself, only maps
+ * a count to copy, so it works identically for both an in-progress
+ * selection and an already-saved strategy.
+ */
+export function fieldCapWarningMessage(capturedFieldCount: number): string | null {
+  if (capturedFieldCount >= 7) {
+    return "That's a lot to fill in before every trade. Consider which of these you'd actually change your mind over.";
+  }
+  if (capturedFieldCount >= 5) {
+    return `Each field needs about 20 trades before it tells you anything. You have ${capturedFieldCount}.`;
+  }
+  return null;
 }

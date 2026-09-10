@@ -9005,6 +9005,476 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-09-10 -- QA (retrospeq-qa), FINAL GATE, Module 03 section 4.8's field-cap
+  warning UI slice. Read AGENTS.md's Non-negotiables + Design system
+  sections and retrospeq-design-system/modules/retrospeq-design-
+  decisions.md in full before reviewing anything, per this repo's own
+  convention, then read 03-field-registry-and-strategy.md section 4.8 directly
+  (lines 243-255 and the section 5.2 reference markup at lines 369-372) rather
+  than trusting any prior paraphrase of it. Confirmed the ledger before
+  writing my own: the CODER (picked up, not redone), TESTER (independent
+  verification), and SECURITY REVIEWER (scoped review) entries immediately
+  below this one, all dated 2026-09-10, are genuinely present, dated, and
+  match what the orchestrating dispatch summarized to me -- no gap between
+  what I was told happened and what the ledger actually records.
+
+  PASS on every item. Cleared to commit and push to main -- no further
+  human or agent review gate stands before this ships, per this
+  project's Autonomy policy.
+
+  1. Exact copy match to section 4.8 -- PASS. Read the spec's own 3-row table
+     (lines 249-253) side by side with fieldCapWarningMessage
+     (lib/fields/strategy-validation.ts L320-328): <=4 -> null; 5-6 ->
+     "Each field needs about 20 trades before it tells you anything. You
+     have {N}." (count interpolated -- the spec's own reference markup at
+     line 371 shows the identical sentence with "5" as a worked example,
+     not a different literal); 7+ -> "That's a lot to fill in before every
+     trade. Consider which of these you'd actually change your mind
+     over." (no count in this branch, matching the spec's own table having
+     no {N} in that row). Character-for-character match, not
+     paraphrased, on both call sites (StrategyBuilder.tsx L163-166,
+     strategies/page.tsx L108-111).
+
+  2. No red/green anywhere -- PASS, confirmed by my OWN direct read of
+     two PNGs, not only trusting the tester's report. Per this repo's
+     own "don't rely on grep alone" instruction, I personally read
+     tmp/dev-screenshots/iv-fieldcap-list-all-three.png (three saved
+     strategies at 0/5/7 captured fields, all three rows visible together)
+     and tmp/dev-screenshots/iv-fieldcap-builder-7.png (builder at the
+     7-field threshold, all 7 boxes checked). These are today's genuine
+     screenshots from the tester's own independent-verify Playwright run,
+     still sitting in the gitignored tmp/dev-screenshots/ directory --
+     I inspected the actual rendered pixels myself rather than re-trusting
+     a description of them. Findings: the only accent color present
+     anywhere is the existing amber .rq-btn/.rq-tag--on token (used
+     identically for the "Active" tag, "New strategy", and "Create
+     strategy" regardless of whether a warning is showing) plus native-
+     browser blue checkboxes on Yes/No fields -- neither is a red/green
+     success/danger pair, and there is deliberately no such pair in this
+     design system per AGENTS.md. The warning itself renders in a neutral
+     light-gray .rq-well box, visually identical in weight to other
+     plain informational asides on the same screens (e.g. "Your default
+     strategy."), and does not read as an alarm.
+
+  3. Non-blocking, confirmed by both code and screenshot -- PASS.
+     Code: neither StrategyBuilder.tsx's capWarning nor
+     strategies/page.tsx's capWarning gates or disables the primary
+     .rq-btn -- both render purely additively alongside the existing
+     count/trigger text (confirmed by reading both render sites directly).
+     Screenshot: iv-fieldcap-builder-7.png shows "Create strategy"
+     rendered as a solid, clearly-enabled amber primary button with all 7
+     fields checked and the warning visible directly above it -- no
+     disabled/greyed styling, no gating.
+
+  4. Exactly one primary .rq-btn per view -- PASS, confirmed
+     visually. strategies/page.tsx: "New strategy" is the only amber
+     .rq-btn in iv-fieldcap-list-all-three.png (the per-row "Active"
+     tags are a distinct pill component, not a button). StrategyBuilder
+     .tsx: iv-fieldcap-builder-7.png shows exactly one primary button
+     ("Create strategy", solid amber) and one secondary/outline button
+     ("Back", white/bordered) -- a standard primary/secondary pairing, not
+     two primaries competing for attention.
+
+  5. No currency/XP anywhere on this surface -- PASS, trivially
+     confirmed. Direct grep across all four touched files
+     (strategy-validation.ts, strategy-repository.ts,
+     StrategyBuilder.tsx, strategies/page.tsx) for
+     xp/currency/dollar-amounts/success/danger tokens -- zero hits outside
+     identifiers unrelated to this concern (listResult.success is a
+     Server Action result-shape discriminant, not a color token or a
+     reward).
+
+  6. No compound-rule shape, no analytics/rules cross-import -- PASS,
+     N/A as expected, confirmed rather than assumed. This slice touches
+     lib/fields/** and app/(app)/strategies/** only -- no rule-
+     expression code, no AND/OR logic anywhere in strategy-validation
+     .ts's pure functions (read in full above). No import from
+     lib/analytics/ or lib/rules/ in any of the four touched files
+     (confirmed by grep -- no such import statement present anywhere in
+     this slice).
+
+  7. Performance (00-foundation section 8.1) -- PASS, no obvious budget-
+     breaker. fetchStrategiesForUser (lib/fields/strategy-
+     repository.ts L527-571) is a single SQL round-trip, not an N+1 --
+     the new captured_field_count column is a correlated subquery over
+     jsonb_array_elements(sv.fields) LEFT JOINed against
+     retrospeq.fields INSIDE the same query as the outer strategy list,
+     not a per-row follow-up query issued from application code. Bounded
+     by each strategy's own small field count (median 3-5 per section 4.8's own
+     metrics table further down the spec), not a full-table scan -- the
+     join predicate (f.user_id = s.user_id and f.id =
+     fe.entry->>'field_id') hits retrospeq.fields's own (user_id, id)
+     primary key. No concern for the strategy-save-p95 <400ms budget or
+     any dashboard-adjacent read budget this route falls under.
+
+  8. Documentation (00-foundation section 12) -- N/A, correctly so, not a
+     missing-doc failure. No new deviation from a 00-foundation
+     convention is introduced by this slice (a pure-function extraction of
+     already-existing copy plus one additive SQL column, following this
+     file's own established patterns throughout) -- so no new ADR is
+     owed. No new alerting condition is introduced, so no new runbook
+     entry is owed either. The one non-obvious migration-adjacent detail
+     (the bigint->int cast, needed because pg round-trips
+     count(*) as a string) is already documented inline at the query
+     site (strategy-repository.ts L534-540), satisfying the "non-
+     obvious migration constraints get an inline comment" bar without a
+     standalone doc.
+
+  9. Ledger currency -- PASS. Confirmed the SECURITY REVIEWER
+     (2026-09-10, scoped 5-point join review), TESTER (2026-09-10,
+     independent verification including a fresh live-DB adversarial
+     cross-user fixture and 6 fresh screenshots), and CODER (2026-09-10,
+     "picked up, not redone") entries are all genuinely present in this
+     file's own Decision log immediately below this entry, all dated
+     2026-09-10, and all describe exactly what the dispatching session
+     told me happened before I started this review -- no gap between what
+     I was told and what the ledger itself says.
+
+  Verdict: Module 03 section 4.8's field-cap warning UI slice is CLEARED TO
+  COMMIT AND PUSH TO MAIN. All four coder/tester/security-reviewer/qa
+  gates have now independently passed with no blocking findings. This QA
+  pass confirms, and adds no new requirement beyond, what the prior three
+  gates already closed.
+
+- 2026-09-10 -- SECURITY REVIEWER (retrospeq-security-reviewer), SCOPED
+  REVIEW of Module 03 §4.8's field-cap warning UI slice (the NEW
+  `captured_field_count` join in `fetchStrategiesForUser`,
+  `lib/fields/strategy-repository.ts`), dispatched as the last gate
+  before this slice moves to qa -> commit. Not a full slice re-audit --
+  scoped exactly to the new join per the dispatch's own 5-point list.
+  **PASS on all 5 points. Cleared for qa and commit.**
+
+  1. **Cross-user leak/miscount via the `(user_id, id)` composite PK --
+     PASS.** Read the live query text directly
+     (`lib/fields/strategy-repository.ts` L527-558). The subquery's join
+     is `left join retrospeq.fields f on f.user_id = s.user_id and f.id
+     = fe.entry->>'field_id'` -- scoped by `f.user_id = s.user_id`, NOT
+     by `id` alone, and `s.user_id` is itself constrained to the caller
+     by the outer `where s.user_id = $1`. Confirmed this is not merely
+     an unenforced application-layer convention: `retrospeq.fields` has
+     its own real RLS (`fields_owner_select`,
+     `20260902010000_field_registry_schema.sql` L208-211, `using
+     (user_id = auth.uid())`), so even a hypothetical join missing the
+     `user_id` predicate would still be blocked at the table level for
+     any query run under `withUserConnection`. Two independent layers,
+     both correct.
+  2. **Connection role -- PASS.** `fetchStrategiesForUser` runs under
+     `withUserConnection(userId, ...)` (`strategy-repository.ts` L528),
+     which does `SET LOCAL ROLE authenticated` + `request.jwt.claims`
+     resolving `auth.uid()` to the real caller (`lib/supabase/direct.ts`
+     L93-98) -- genuine RLS enforcement, not `withServiceRoleConnection`.
+     No service-role path involved; the "service-role allowlist test"
+     question in the dispatch doesn't apply here.
+  3. **Injection surface -- PASS.** The query is one static SQL string
+     with a single bound parameter (`$1` = userId); `jsonb_array_elements`
+     and `->>'field_id'` operate on `sv.fields` (server-read jsonb, not
+     concatenated user input) with no string-building of SQL text
+     anywhere in this function or `rebuildFieldUsagesForStrategy`/
+     `insertStrategyAndVersion`/`applyStrategyEditVersion` (also read in
+     full as part of this review, since they share the same file and the
+     same jsonb-snapshot pattern -- none of them string-interpolate
+     caller-controlled values into SQL text either).
+  4. **Oracle/leakage via the count itself -- non-issue, confirmed.** The
+     count is computed entirely from the CALLING user's own
+     `strategy_versions.fields[]` snapshot cross-referenced against that
+     SAME user's own `retrospeq.fields` rows (per point 1's scoping) --
+     structurally incapable of reflecting another user's data, so there
+     is no cross-user signal for a count-based or timing-based oracle to
+     extract. No further action needed.
+  5. **Test file adequacy --
+     `lib/fields/__tests__/strategy-cap-warning.independent-verify.live.test.ts`
+     -- PASS, genuinely adversarial, not a rubber stamp.** Read the full
+     file, then RAN it live (`npx vitest run
+     lib/fields/__tests__/strategy-cap-warning.independent-verify.live.test.ts`)
+     rather than trusting the tester's ledger claim alone -- all 6 tests
+     passed against the real dev/test Postgres in this session (19.56s,
+     0 failures). The cross-user-collision describe block specifically
+     constructs the adversarial fixture the dispatch asked about: user A
+     and user B each own a REAL `retrospeq.fields` row at the identical
+     id string with opposite §4.8 classification (A's =
+     `kind='account', data_type='rating'` i.e. captured; B's =
+     `data_type='note'` i.e. free), then asserts A's own
+     `capturedFieldCount` reflects only A's row (1, not 0). A second test
+     in the same block is a direct RLS probe -- `withUserConnection(userA.id,
+     ...)` running `select id from retrospeq.fields where id = $1` (no
+     `user_id` in the WHERE clause at all) against B's row at the shared
+     id, asserting zero rows -- proving RLS itself, not just the
+     application-layer join predicate, is what blocks the cross-user
+     read. This is a real adversarial fixture (same id, two real rows,
+     two real users, opposite classification), not an assertion resting
+     on mocked or assumed behavior.
+
+  **Also verified (not explicitly asked, but load-bearing for "cleared
+  for commit"):** `app/(app)/strategies/page.tsx` and
+  `app/(app)/strategies/actions.ts`'s `fetchStrategyList` derive the
+  calling user's id from the server-side session
+  (`supabase.auth.getUser()` / `requireSessionAndRateLimit`), never from
+  client input, before calling `fetchStrategiesForUser` -- no path for a
+  client-supplied user id to reach this query.
+
+  **Verdict: this slice's new join introduces no RLS gap, no injection
+  surface, and no cross-user leak -- cleared for `retrospeq-qa` and
+  commit.** Nothing in this review blocks the slice.
+
+- 2026-09-10 -- TESTER (retrospeq-tester), INDEPENDENT VERIFICATION of
+  Module 03 §4.8's field-cap warning UI, closing the specific gap the
+  entry immediately below this one (2026-09-10, "CODER (picked up, not
+  redone)") explicitly left open: nobody had yet looked at a rendered
+  screenshot of either warning surface, since the original throwaway
+  self-check spec and its screenshots were both gone by the time that
+  session could check. **PASS on every item, full independent pass, not
+  a rubber stamp** — read `03-field-registry-and-strategy.md` §4.8
+  directly first (confirmed the spec's exact 3-row copy table against
+  the code, not from memory), then re-read `strategy-validation.ts`,
+  `strategy-repository.ts`, `StrategyBuilder.tsx`, and
+  `strategies/page.tsx` in full before writing a single new test.
+
+  **1. Fresh screenshot-based verification — DONE, closing the
+  specifically-flagged gap.** Wrote a new throwaway Playwright spec
+  (`e2e/__throwaway-fieldcap-visual-verify.spec.ts` — written, run,
+  screenshots read back, then deleted per this repo's own convention;
+  confirmed gone via `ls` before finishing) seeding two real Pro users
+  via the GoTrue admin API against the live dev/test Supabase project:
+  one exercising the BUILDER's live in-progress count (7 real
+  `kind='account'` fields inserted directly, then checked incrementally
+  via real checkbox clicks — 0, then 5, then 7), one exercising the
+  SAVED-STRATEGY list page (three strategies inserted directly with 0/5/7
+  captured fields respectively, all three rendered together in one list).
+  Six PNGs captured to `tmp/dev-screenshots/` (gitignored, as intended)
+  and personally read back with the `Read` tool, not merely asserted on:
+  `iv-fieldcap-builder-0/5/7.png`, `iv-fieldcap-list-all-three.png` (all
+  three saved-strategy rows side by side), `iv-fieldcap-list-0.png` (a
+  tight per-row crop of the zero-field row). Findings against this
+  repo's own design-system rules and §4.8 itself:
+    - **No red/green anywhere** in any of the six screenshots — the one
+      accent color present is the existing amber `.rq-btn`/`.rq-tag--on`
+      token, used identically whether a warning is showing or not; the
+      "Active" state tag is the same amber, not a status color.
+    - **The exact §4.8 copy renders verbatim, not paraphrased**, on BOTH
+      surfaces at BOTH thresholds — confirmed character-for-character
+      against the spec table read at the top of this session: "Each
+      field needs about 20 trades before it tells you anything. You have
+      5." at 5, and "That's a lot to fill in before every trade.
+      Consider which of these you'd actually change your mind over." at
+      7, with the count correctly interpolated only in the 5-6 row (the
+      7+ row has no count in the spec's own copy, and none renders).
+    - **Non-blocking, confirmed visually AND functionally**: the 7-field
+      builder screenshot shows "Create strategy" still rendered as the
+      single primary `.rq-btn`, and the test asserted it `toBeEnabled()`
+      with all 7 boxes checked — the warning never disables or hides
+      the submit control. Same check on the list page: "New strategy"
+      stays visible and is the page's only non-ghost `.rq-btn`
+      regardless of any row's own warning state.
+    - **Visually distinct from an error state, reads as informational**:
+      the warning renders inside a plain `.rq-well` (`background:
+      var(--rq-surface-2)`, confirmed by reading `components.css`
+      directly — a neutral light-gray surface, not a bordered/colored
+      alert box), in the same muted `.rq-sub` body-text color as every
+      other secondary caption on the page (field counts, trigger counts,
+      "Your default strategy."). Nothing about its presentation (no
+      icon, no border, no distinct background) marks it as an error or
+      alarm — it reads exactly like the plain informational asides this
+      module already uses elsewhere (e.g. "These are never enforced. You
+      can always take the trade."), which is the correct posture for a
+      "Never blocking" line per §4.8 itself.
+    - The zero-field state (`iv-fieldcap-builder-0.png`,
+      `iv-fieldcap-list-0.png`) correctly renders with NO warning well at
+      all, not an empty/hidden one — confirmed both visually and via an
+      explicit `toHaveCount(0)` assertion on both warning strings before
+      any field was checked.
+
+  **2/3. Fresh adversarial live-DB fixtures for the orphaned-entry and
+  bigint-cast claims — DONE, own fixtures, not inherited.** New test
+  file `lib/fields/__tests__/strategy-cap-warning.independent-verify.
+  live.test.ts` (6 tests, all against the real dev/test Postgres, none
+  reusing `strategy-repository.live.test.ts`'s own fixtures) —
+  `--pool=threads --poolOptions.threads.singleThread` (see "Infra
+  finding" below for why `--pool=forks` genuinely OOM'd on this host
+  today, a new wrinkle on the standing spawn-flakiness note):
+    - A hand-crafted strategy (raw SQL insert, bypassing `createStrategy`
+      validation entirely on purpose) whose `strategy_versions.fields[]`
+      snapshot names field ids with NO resolvable `retrospeq.fields` row
+      at all — `fetchStrategiesForUser` genuinely COUNTS both orphaned
+      entries toward `capturedFieldCount` (2, not 0), confirming the
+      "over-count, never hide" behavior the column's own doc comment
+      claims is real, not just documented.
+    - A mixed case (one real captured field + one real derived field +
+      one orphaned entry) confirming the orphan is counted alongside the
+      real captured field while the derived one is correctly excluded —
+      `capturedFieldCount = 2` of `fieldCount = 3`.
+    - The bigint::int cast fix verified with `typeof capturedFieldCount
+      === 'number'` at BOTH named thresholds (5 and 7) in the same run —
+      a strict `typeof` check a raw uncast `count(*)` (which round-trips
+      through `pg` as a STRING) would fail even where a looser `toBe(5)`
+      often still silently passes in JS's coercing equality — plus the
+      exact 4->5 and 6->7 boundary crossings, each checked against
+      `fieldCapWarningMessage`'s real output (null at 4, the correct
+      literal string at 5, 6, and 7) end-to-end through the real query,
+      not a mocked one.
+
+  **4. Cross-user isolation on the new join — DONE, a genuinely new
+  threat model the existing suite didn't cover.** `retrospeq.fields`'
+  real primary key is `(user_id, id)`, not a globally unique `id` alone
+  (confirmed by reading `20260902010000_field_registry_schema.sql`
+  directly) — so two different users CAN legitimately own a field row
+  with the identical id string. Constructed exactly that collision: user
+  A's field at a shared id is `kind='account', data_type='rating'` (a
+  real captured field), user B's field at the SAME id string is
+  `data_type='note'` (free per §4.8). Confirmed user A's own
+  `capturedFieldCount` reflects ONLY A's own field row (1, the captured
+  classification) — if the join had ever cross-matched onto B's row
+  instead, A's strategy would have incorrectly read 0. A second, more
+  direct RLS probe (`withUserConnection(userA.id, ...)` running a raw
+  `select ... from retrospeq.fields where id = $1` for the shared id)
+  confirms A's own RLS-scoped session genuinely cannot see B's row at
+  all — zero rows returned, not merely "the join clause happens to
+  filter it out" — so the isolation holds even if the join's own
+  `f.user_id = s.user_id` condition were ever accidentally dropped in a
+  future edit.
+
+  **5. Standard non-negotiables — confirmed, no findings.** No red/green
+  (screenshot review above). No currency or XP anywhere on either
+  surface (neither screen shows anything but counts and warning prose).
+  No compound-rule shape — N/A, this slice touches no rule-expression
+  code at all. Analytics/rules cross-import — N/A, confirmed by scope
+  (`lib/fields/**`, `app/(app)/strategies/**` only); did not touch
+  `lib/analytics/` per this dispatch's own explicit instruction.
+
+  **Full command output, not just "should be fine":**
+  `npx vitest run lib/fields/__tests__/strategy-validation.test.ts` --
+  32/32 passing. `npx vitest run lib/fields/__tests__/strategy-repository
+  .live.test.ts` -- 21/21 passing (re-run fresh this session, not
+  inherited). `npx vitest run lib/fields/__tests__/strategy-cap-warning
+  .independent-verify.live.test.ts` -- 6/6 passing (this session's own
+  new file). `npx tsc --noEmit` -- clean, zero errors. `npx eslint` on
+  all seven touched/added files -- clean, zero errors/warnings. `npm run
+  build` -- succeeded (`NODE_OPTIONS=--max-old-space-size=3072`, given
+  this host's own standing low-memory pattern — see below), both
+  `/strategies` and `/strategies/new` compile as dynamic routes with no
+  errors.
+
+  **Infra finding, worth recording alongside the existing spawn-flakiness
+  note**: `--pool=forks --poolOptions.forks.singleFork` (this repo's own
+  documented workaround for `spawn UNKNOWN`) genuinely OOM'd
+  (`Fatal process out of memory: Zone`, twice, once even with
+  `--max-old-space-size=2048` set) running the new adversarial live-DB
+  file on this host today, with ~3.9GB free physical RAM at the time and
+  ~26-28 concurrent `Code.exe` processes visible in `tasklist` (consistent
+  with this host's own already-noted "shared-tree multi-session hazard"
+  memory note — multiple editor/session windows open against the same
+  tree). `--pool=threads --poolOptions.threads.singleThread` succeeded
+  immediately on the identical file with no other change, using
+  meaningfully less memory (a shared-heap worker rather than 1-2 full
+  extra `node.exe` processes) — worth trying as a second-line fallback
+  before escalating, if `--pool=forks` OOMs (not just hangs/spawn-fails)
+  on this host again. `npm run dev` also hit the same OOM signature once
+  before starting successfully on retry with
+  `NODE_OPTIONS=--max-old-space-size=1536` — same underlying host-memory
+  pattern, not a new distinct failure mode.
+
+  **What I did NOT do, flagged rather than silently skipped**: did not
+  investigate or clean up a stray leftover test fixture
+  (`tmp/dev-screenshots/fieldcap-user.json`/`fieldcap-storage-state.json`,
+  timestamped today, referencing a `retrospeq-e2e-fieldcap-shot-...`
+  auth user) found sitting in the gitignored screenshots directory before
+  this session started — outside this dispatch's own scope, and
+  `tmp/dev-screenshots/` is gitignored so it has no effect on the tree;
+  noted here only in case that auth user is still live and someone later
+  wants it cleaned up.
+
+  **This closes all five items of this dispatch's own brief.** Module 03
+  §4.8's field-cap warning UI is now fully verified end to end — code,
+  live-DB data-layer (including two categories of adversarial fixture no
+  prior test covered), and rendered visual appearance — with no
+  outstanding gap. Next in this build's standard sequence per the
+  2026-09-10 coder entry below: security-reviewer (a new SQL join
+  against `retrospeq.fields`, which this entry's own cross-user
+  isolation testing already covers substantively, but the standard
+  sequence still calls for a dedicated pass) -> qa.
+
+- 2026-09-10 -- CODER (picked up, not redone), Module 03 §4.8's field-cap
+  warning UI. The original coder dispatch for this slice was cut off by a
+  session-continuity gap after finishing the code but before writing its
+  own PROGRESS.md entry, running full verification, or cleaning up its own
+  throwaway self-check spec -- picked up per this build's own "verify a
+  crashed/interrupted dispatch's work rather than redo it" convention,
+  not assumed complete. Confirmed the work itself, not just the intent:
+  `lib/fields/strategy-validation.ts` gained `fieldCapWarningMessage`
+  (§4.8's literal 3-row warning-copy table -- null under 5, the "~20
+  trades" message at 5-6, the "that's a lot to fill in" message at 7+ --
+  factored as one pure function so every rendering surface shares the
+  exact copy rather than two independently-typed strings drifting apart),
+  wired into BOTH `StrategyBuilder.tsx`'s live in-progress count (replacing
+  an inline ternary that duplicated the same three sentences) and a new
+  per-strategy warning on `app/(app)/strategies/page.tsx` for already-
+  saved strategies. `strategy-repository.ts`'s `fetchStrategiesForUser`
+  gained a real `capturedFieldCount` column (§4.8: "Counts captured fields
+  only. Derived and note fields are free.") via a `left join` against
+  `retrospeq.fields` per snapshot entry excluding `kind='derived'`/
+  `data_type='note'` -- kept genuinely separate from the pre-existing
+  `fieldCount` (a plain, unfiltered `jsonb_array_length`), not a silent
+  redefinition of what that column already meant elsewhere. One real,
+  self-caught bug in the original dispatch's own work, confirmed still
+  present and correctly fixed: Postgres's `count(*)` is `bigint`, which
+  the pg driver round-trips as a JS string -- without an explicit `::int`
+  cast, `fieldCapWarningMessage`'s own `>= 5`/`>= 7` numeric comparisons
+  would have silently misevaluated against a string. A field-snapshot
+  entry with no resolvable `retrospeq.fields` row (should not happen --
+  fields are archived, never hard-deleted) is deliberately still counted
+  rather than dropped, so a join miss can only ever over-count toward the
+  warning, never silently hide one -- documented inline on the column's
+  own doc comment.
+
+  What I verified fresh, not inherited from the original dispatch's own
+  (lost) claims: `npx vitest run lib/fields/__tests__/strategy-validation
+  .test.ts` -- 32/32 passing (including 4 new `fieldCapWarningMessage`
+  cases: the null floor, both non-null rows of the table with the count
+  correctly interpolated only in the 5-6 row per spec, and a defensive
+  never-throws-on-negative-input case).
+  `lib/fields/__tests__/strategy-repository.live.test.ts` -- 21/21 passing
+  against the real dev DB, including three new live cases proving
+  `capturedFieldCount` excludes derived/note fields for real while
+  `fieldCount` doesn't, a zero-fields strategy returns 0 for both, and a
+  real 5-captured-field strategy crosses the exact §4.8 threshold end to
+  end through the real query, not a mocked one. `npx tsc --noEmit` and
+  `npx eslint` on all six touched files both clean. Both commands needed
+  `--pool=forks --poolOptions.forks.singleFork` / a retry to work around a
+  transient `spawn UNKNOWN` from `tinypool` on this host (unrelated to the
+  code, a process-spawn hiccup, resolved on retry -- not the same failure
+  mode as the already-documented ENOSPC/OOM entries, noted here only in
+  case it recurs).
+
+  What I did NOT re-verify, and am flagging explicitly rather than
+  claiming coverage that no longer exists: the original dispatch's own
+  screenshot self-check (a throwaway Playwright spec seeding real
+  fixtures via `pg.Client`, per its filename
+  `__throwaway-fieldcap-screenshot.spec.ts`) was still sitting uncommitted
+  and undeleted when I found the tree -- consistent with the dispatch
+  having run it before being cut off, but its screenshots were never
+  saved anywhere durable (`tmp/dev-screenshots/` is gitignored) and the
+  spec itself is gone now (deleted as the leftover throwaway artifact it
+  was always meant to be, per this repo's own convention for these
+  files). I have NOT personally looked at a rendered screenshot of either
+  warning surface. The live-DB test proves the full data pipeline is
+  correct end to end; it does not prove the rendered `.rq-well`/`.rq-sub`
+  markup reads correctly, avoids red/green, or matches this repo's
+  established warning-styling precedent. Tester's job to close, not
+  assumed passing here.
+
+  Two-strategy-wide observation, not this slice's own scope to fix:
+  §4.8's warning is deliberately non-blocking on BOTH surfaces (matches
+  the already-established "field-cap and trigger-count warnings are
+  informational, never gate a save" pattern from Slices 03b/03f) --
+  confirmed by reading both call sites, neither `capWarning`/`capWarning`
+  truthy check disables anything, they only render alongside the existing
+  count/trigger text.
+
+  Not marked done -- needs tester (independent live-DB re-verification
+  plus the screenshot self-check this entry explicitly could not inherit)
+  -> security-reviewer (a new SQL join against `retrospeq.fields`, worth
+  a fresh RLS/scoping look even though both source tables' own policies
+  are already reviewed) -> qa, per this build's standard sequence.
+
 - 2026-09-09 -- CODER, Module 03 (Field Registry & Strategy) §4.5/§6.1's fields management screen (`app/(app)/fields/**`) -- built the list/rename/archive/promote UI plus a standalone field-creation flow at `/fields/new`, the gap this dispatch explicitly named ("the backend for all of this already exists ... a field picker/editor screen ... does not"). Read `03-field-registry-and-strategy.md` in full plus `00-foundation.md` before writing code; grepped for existing precedent first and reused it directly rather than inventing a parallel shape -- `RuleList.tsx`'s per-row busy/error/confirm `RowState` pattern (rename/archive/promote controls, an equal-weight archive-confirm pair for the one genuinely irreversible-in-practice action, a page-level primary `.rq-btn` with every row action `.rq-btn--ghost`) and `StrategyBuilder.tsx`'s derived-field-chips + checkbox-picker conventions were both reused near-verbatim rather than reinvented, and `fetchFieldsForUser`/the whole `createField`/`renameField`/`archiveField`/`promoteField`/`findPromotionCandidates` backend (Slices 03c/03d/03e) was consumed as-is with zero changes to its own logic. One genuine backend gap found and closed additively: no existing read returned an ARCHIVED field or a `strategy_var` field's `ownerStrategyId` (the picker read, `fetchFieldsForUser`, is deliberately active-only and lacks both) -- added `fetchFieldsForManagement` as a second, narrowly-scoped read rather than widening the picker read with an `includeArchived` flag, reasoning documented inline (a flag bolted onto a picker contract is a footgun a future picker caller could pass by mistake and start offering an archived field). Reconciled one thing against the spec that isn't literally in §5's reference markup: §5.2's field-editor markup shows a capture-moment selector, but `createField`'s own input has no such parameter (a capture moment is a property of a field's USAGE within a strategy, `strategy_versions.fields[].capture_moment`, not of the registry row itself) -- omitted here, documented in the component's own header, not silently dropped. Two-primary-button risk (this screen's own free/Pro entitlement split rendering both a page-level Pro-upsell button AND the list's own "Add a field" button) found and closed via an explicit `entitled` prop on `FieldsList`, not left to be caught by qa. Self-checked via a throwaway (written, run, deleted, never committed) Playwright spec against the live dev DB -- full lifecycle for both a free-plan and Pro-plan real user, 9 screenshots read back and confirmed clean against the design-system rules; one real bug the self-check itself caught and fixed (duplicate "Your fields" heading) before handoff. `tsc --noEmit`/`eslint .`/`npm run build` all clean; full existing `lib/fields` suite (272 tests, 17 files) re-run and confirmed unaffected by the one additive repository change. **Not marked done** -- needs tester (real unit/component/E2E coverage for this slice, which currently has none beyond this session's own deleted throwaway script) -> security-reviewer (this is the first UI surface reading/writing `fields`/`field_usages` directly from a client-triggered flow; worth a fresh look even though the underlying repository functions were already reviewed in Slices 03c/03d/03e) -> qa before commit, per this build's own convention.
 
 - 2026-09-09 -- INFRA FINDING, `chromium_headless_shell` crashes with a genuine fatal exception (`0xe0000008`, not the already-documented ENOSPC download failure) launching against a real dev server on this host -- found during the fields-management screen's own self-check. The existing ENOSPC-workaround entry in Infra gaps (below) already names `chromium-1223` (full, non-headless-shell Chrome, already present at `C:\Users\hp\AppData\Local\ms-playwright\chromium-1223\chrome-win64\chrome.exe`) as a zero-new-disk-writes substitute for `chromium_headless_shell` -- confirmed here that the SAME substitute also closes this distinct crash mode, not just the disk-space one. Wired as an opt-in `playwright.config.ts` `use.launchOptions.executablePath`, gated behind a new `PLAYWRIGHT_CHROME_PATH` env var (unset by default -- verified zero effect on every OTHER `npx playwright test` invocation in this repo, including the ones this same session ran without it) so the next agent that hits this crash doesn't have to rediscover the workaround or hand-edit the config file themselves; just export `PLAYWRIGHT_CHROME_PATH="C:\Users\hp\AppData\Local\ms-playwright\chromium-1223\chrome-win64\chrome.exe"` before running `npx playwright test`. Also independently re-confirmed this session: an accumulation of orphaned `chrome.exe` processes from an earlier timed-out launch attempt (Playwright's own 30s "setting up page" timeout, hit once while this same crash was first being diagnosed) measurably ate into free host memory and contributed to a SEPARATE V8 heap OOM in the Playwright worker process itself on the next attempt -- `taskkill //F //IM chrome.exe` before retrying is worth doing reflexively whenever a Playwright run on this host was interrupted by a timeout rather than a clean pass/fail, not just after an explicit crash.

@@ -6,6 +6,7 @@ import {
   TRIGGER_SOFT_WARNING_THRESHOLD,
   TRIGGER_TEXT_MAX_LENGTH,
   countCapturedFields,
+  fieldCapWarningMessage,
   type CaptureMoment,
   type FieldDefinitionForValidation,
   type ProposedStrategyField,
@@ -159,12 +160,10 @@ export function StrategyBuilder({ fieldOptions }: { fieldOptions: FieldPickerEnt
     [selectedProposedFields, fieldDefsById],
   );
 
-  const capWarning =
-    capturedFieldCount >= 7
-      ? "That's a lot to fill in before every trade. Consider which of these you'd actually change your mind over."
-      : capturedFieldCount >= 5
-        ? `Each field needs about 20 trades before it tells you anything. You have ${capturedFieldCount}.`
-        : null;
+  // §4.8's warning copy — one shared source of truth, see
+  // `fieldCapWarningMessage`'s own header (`strategies/page.tsx` renders
+  // the identical function against a saved strategy's own persisted count).
+  const capWarning = fieldCapWarningMessage(capturedFieldCount);
 
   const trimmedTriggers = triggerTexts.map((t) => t.trim()).filter((t) => t.length > 0);
   const triggerTooMany = trimmedTriggers.length > TRIGGER_SOFT_WARNING_THRESHOLD;

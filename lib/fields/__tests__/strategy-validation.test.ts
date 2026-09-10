@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countCapturedFields,
   evaluateTriggers,
+  fieldCapWarningMessage,
   FieldMomentIncompatibleError,
   FieldNotFoundError,
   InvalidCaptureMomentError,
@@ -230,5 +231,31 @@ describe('countCapturedFields — §2.3/§4.8, derived and note excluded', () =>
   it('skips (does not throw for) a field id missing from the definition map', () => {
     const fields: ProposedStrategyField[] = [{ fieldId: 'ghost', captureMoment: 'post_close', order: 1 }];
     expect(countCapturedFields(fields, defs())).toBe(0);
+  });
+});
+
+describe('fieldCapWarningMessage — §4.8 literal warning-copy table', () => {
+  it('returns null for 0 through 4 captured fields (never blocking, no message)', () => {
+    for (const n of [0, 1, 2, 3, 4]) {
+      expect(fieldCapWarningMessage(n)).toBeNull();
+    }
+  });
+
+  it('returns the exact §4.8 5-6 copy, with the real count interpolated', () => {
+    expect(fieldCapWarningMessage(5)).toBe('Each field needs about 20 trades before it tells you anything. You have 5.');
+    expect(fieldCapWarningMessage(6)).toBe('Each field needs about 20 trades before it tells you anything. You have 6.');
+  });
+
+  it('returns the exact §4.8 7+ copy (no count interpolated, matching the spec table verbatim)', () => {
+    expect(fieldCapWarningMessage(7)).toBe(
+      "That's a lot to fill in before every trade. Consider which of these you'd actually change your mind over.",
+    );
+    expect(fieldCapWarningMessage(12)).toBe(
+      "That's a lot to fill in before every trade. Consider which of these you'd actually change your mind over.",
+    );
+  });
+
+  it('never throws for a negative count (defensive — this function never validates its input, only maps it)', () => {
+    expect(fieldCapWarningMessage(-1)).toBeNull();
   });
 });

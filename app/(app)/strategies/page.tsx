@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { canForUser } from '@/lib/entitlements/service';
+import { fieldCapWarningMessage } from '@/lib/fields/strategy-validation';
 import { fetchStrategyList } from './actions';
 
 /**
@@ -27,6 +28,21 @@ import { fetchStrategyList } from './actions';
  * — same posture `rules/new/page.tsx`/`rules/page.tsx` already establish
  * for a plain entitlement-resolution read with no table of its own to
  * throttle against.
+ *
+ * §4.8's field-cap warning, ONGOING surface (this was the one genuinely
+ * outstanding UI gap for this module after fields management shipped —
+ * see `strategy-repository.ts`'s own `StrategyListItem.capturedFieldCount`
+ * doc comment for the full "why this is the right place" reasoning): each
+ * already-SAVED strategy's row renders the same §4.8 warning copy
+ * `StrategyBuilder.tsx`'s own in-progress builder shows while a trader is
+ * still picking fields, via the identical shared `fieldCapWarningMessage`
+ * (`strategy-validation.ts`) — one source of truth, two moments (WHILE
+ * building vs. AFTER a strategy already exists and a trader is reviewing
+ * their own rulebook of strategies). Never blocking, matching §4.8's own
+ * "Never blocking" line — a plain `.rq-well role="note"` aside, the same
+ * device `StrategyBuilder.tsx`'s own `<aside className="rq-well"
+ * role="note">` and `FieldsList.tsx`'s dependents well already use for a
+ * non-alarming informational note in this module.
  */
 export default async function StrategiesPage() {
   const supabase = await createClient();
@@ -88,21 +104,32 @@ export default async function StrategiesPage() {
 
       {listResult.success && strategies.length > 0 && (
         <ul className="flex flex-col gap-3">
-          {strategies.map((s) => (
-            <li key={s.strategyId} className="rq-card flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="rq-h2">{s.name}</h2>
-                <span className={s.state === 'active' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-                  {s.state === 'active' ? 'Active' : 'Archived'}
-                </span>
-              </div>
-              <p className="rq-sub">
-                <span className="rq-num">{s.triggerCount}</span> {s.triggerCount === 1 ? 'trigger condition' : 'trigger conditions'} ·{' '}
-                <span className="rq-num">{s.fieldCount}</span> {s.fieldCount === 1 ? 'field' : 'fields'}
-              </p>
-              {s.isDefault && <p className="rq-sub">Your default strategy.</p>}
-            </li>
-          ))}
+          {strategies.map((s) => {
+            // §4.8 — never blocking, so this is purely informational and
+            // renders alongside the trigger/field counts above it, never
+            // in place of them.
+            const capWarning = fieldCapWarningMessage(s.capturedFieldCount);
+            return (
+              <li key={s.strategyId} className="rq-card flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="rq-h2">{s.name}</h2>
+                  <span className={s.state === 'active' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
+                    {s.state === 'active' ? 'Active' : 'Archived'}
+                  </span>
+                </div>
+                <p className="rq-sub">
+                  <span className="rq-num">{s.triggerCount}</span> {s.triggerCount === 1 ? 'trigger condition' : 'trigger conditions'} ·{' '}
+                  <span className="rq-num">{s.fieldCount}</span> {s.fieldCount === 1 ? 'field' : 'fields'}
+                </p>
+                {s.isDefault && <p className="rq-sub">Your default strategy.</p>}
+                {capWarning && (
+                  <aside className="rq-well" role="note">
+                    <p className="rq-sub">{capWarning}</p>
+                  </aside>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

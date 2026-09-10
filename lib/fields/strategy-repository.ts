@@ -471,22 +471,32 @@ export interface StrategyListItem {
   isDefault: boolean;
   state: 'active' | 'archived';
   currentVersion: number;
-  /** §4.8's field-cap count is CAPTURED fields only (derived/note
-   *  excluded) — this is deliberately NOT that count. This is a plain
-   *  `jsonb_array_length` of the current version's own `fields[]` snapshot
-   *  (every entry in that array is already a `strategy_var`/`account`
-   *  field a trader explicitly added; derived fields are never written
-   *  into it at all — see `fields-repository.ts`'s own
-   *  `fetchFieldsForUser` header on why derived fields never appear in a
-   *  picker or a saved fields[] array). For a strategy built through THIS
-   *  slice's own builder, the two counts are therefore always equal in
-   *  practice (nothing here ever adds a `note`-typed field to a strategy
-   *  either, since the field picker this slice ships only offers
-   *  `account`-kind fields — see `StrategyBuilder.tsx`'s own header) —
-   *  named plainly as `fieldCount`, not `capturedFieldCount`, so a future
-   *  reader isn't misled into assuming this already applies §4.8's own
-   *  note/derived exclusion logic if that stops being true. */
+  /** A plain `jsonb_array_length` of the current version's own `fields[]`
+   *  snapshot — everything in that array, no exclusions. Kept alongside
+   *  `capturedFieldCount` below (not replaced by it) because this is the
+   *  honest "how many things does this strategy record" count a trader
+   *  would expect from "N fields" prose, independent of §4.8's own
+   *  narrower cap-warning semantics. */
   fieldCount: number;
+  /** §4.8's field-cap-warning input — CAPTURED fields only (derived kind
+   *  and `note` data type excluded, per §4.8 verbatim: "Counts captured
+   *  fields only. Derived and note fields are free."). Unlike the old
+   *  version of this comment's own prior caution, this is now a REAL
+   *  captured-only count (a `left join` against `retrospeq.fields` per
+   *  row in the snapshot, excluding `kind = 'derived'` / `data_type =
+   *  'note'` matches) — not merely `fieldCount` under an assumption it
+   *  happens to coincide. See `fetchStrategiesForUser`'s own SQL for the
+   *  exact query; `app/(app)/strategies/page.tsx` feeds this straight into
+   *  `fieldCapWarningMessage` (`strategy-validation.ts`), the same pure
+   *  message-mapping function `StrategyBuilder.tsx`'s own in-progress
+   *  count uses — one shared source of truth for the warning copy on both
+   *  sides. A field entry with no matching row in `retrospeq.fields` at
+   *  all (should not happen — fields are archived, never hard-deleted) is
+   *  deliberately still COUNTED here (the `f.id is null or (...)` clause
+   *  below) rather than silently dropped, so a join miss can only ever
+   *  over-count toward the warning, never quietly under-count and hide
+   *  one. */
+  capturedFieldCount: number;
   triggerCount: number;
   createdAt: string;
 }
@@ -498,6 +508,7 @@ interface StrategyListRow {
   state: 'active' | 'archived';
   current_version: number;
   field_count: number;
+  captured_field_count: number;
   trigger_count: number;
   created_at: string;
 }
@@ -518,7 +529,27 @@ export async function fetchStrategiesForUser(userId: string): Promise<StrategyLi
     const res = await client.query<StrategyListRow>(
       `select s.id, s.name, s.is_default, s.state, s.current_version, s.created_at,
               coalesce(jsonb_array_length(sv.fields), 0) as field_count,
-              coalesce(jsonb_array_length(sv.triggers), 0) as trigger_count
+              coalesce(jsonb_array_length(sv.triggers), 0) as trigger_count,
+              coalesce((
+                -- count(*) is bigint in Postgres -- cast to int so the pg
+                -- driver returns a real JS number here, matching every
+                -- other count column this query already produces (both of
+                -- which come from jsonb_array_length, already int).
+                -- Without the cast this column round-trips as a STRING
+                -- ("5"), which fieldCapWarningMessage's own >= 5 / >= 7
+                -- numeric comparisons would silently mis-evaluate.
+                select count(*)::int
+                  from jsonb_array_elements(sv.fields) as fe(entry)
+                  left join retrospeq.fields f
+                    on f.user_id = s.user_id and f.id = fe.entry->>'field_id'
+                 -- §4.8: "Counts captured fields only. Derived and note
+                 -- fields are free." A field entry this join can't resolve
+                 -- at all (f.id is null -- should not happen, fields are
+                 -- archived, never hard-deleted) is deliberately still
+                 -- counted rather than silently dropped, per this column's
+                 -- own doc comment on StrategyListItem.
+                 where f.id is null or (f.kind <> 'derived' and f.data_type <> 'note')
+              ), 0) as captured_field_count
          from retrospeq.strategies s
          join retrospeq.strategy_versions sv on sv.strategy_id = s.id and sv.version = s.current_version
         where s.user_id = $1
@@ -532,6 +563,7 @@ export async function fetchStrategiesForUser(userId: string): Promise<StrategyLi
       state: row.state,
       currentVersion: row.current_version,
       fieldCount: row.field_count,
+      capturedFieldCount: row.captured_field_count,
       triggerCount: row.trigger_count,
       createdAt: row.created_at,
     }));
@@ -661,9 +693,18 @@ export interface CreateStrategyResult {
   version: number;
   /** §9: `TRIGGER_TOO_MANY` — non-blocking, informational. */
   triggerCountWarning: boolean;
-  /** §4.8's field-cap warning input — informational only; this slice does
-   *  not build the warning UI itself (see `strategy-validation.ts`'s own
-   *  `countCapturedFields` header). */
+  /** §4.8's field-cap warning input, computed once at the moment of this
+   *  write. Informational only — no caller of `createStrategy` currently
+   *  reads this field (`StrategyBuilder.tsx` derives its own live,
+   *  in-progress version of this same count client-side via
+   *  `countCapturedFields`, since it needs the number to update on every
+   *  checkbox click, well before a save call happens at all; the SAVED
+   *  strategy's own warning is instead read back later, per row, via
+   *  `StrategyListItem.capturedFieldCount` — `fetchStrategiesForUser`'s own
+   *  doc comment). Kept on this result anyway since it costs nothing extra
+   *  (`fieldDefs` is already fetched for the capture-moment check just
+   *  above) and is the honest, correct answer for the strategy this call
+   *  just wrote. */
   capturedFieldCount: number;
 }
 
