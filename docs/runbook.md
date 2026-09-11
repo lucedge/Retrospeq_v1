@@ -1997,3 +1997,49 @@ this file's own `[engagement]`/`[adherence]` convention). Until then:
 week over week) against a live project with real trading activity is
 the expected, correct state — not a symptom — for exactly as long as no
 scheduler exists.
+
+---
+
+## Promotion-candidate check failed for an individual rule during prompt-candidate computation
+
+**Source:** Module 06 (Review & Graduation) §4.4 — Slice 3's eligibility
+layer (2026-09-11), `lib/review/prompt-candidates/promotion-candidates.ts`'s
+`findPromotionCandidates`. Same "throw at the pure boundary, catch at the
+orchestration boundary, one bad item must never abort every other item for
+the same user" posture this file's own "Decay check failed for an
+individual link" entry above already documents for
+`runDecayChecksForUser` — reapplied here rather than re-derived, since
+this is the identical failure shape: a per-rule loop over an otherwise
+independent set of checks for one user.
+
+**What this means operationally:** `findPromotionCandidates` calls the
+already-built `checkPromotionEligibilityForUser` (Module 04 §5.7) once per
+active SOFT rule a user owns. Each call is individually wrapped in its own
+`try/catch` — a single rule's check throwing (most plausibly
+`RuleNotFoundError`, structurally near-impossible here since the rule id
+comes from a same-user, same-transaction-adjacent `fetchRulesForUser` read
+moments earlier, or an ordinary Postgres connectivity blip) is caught,
+logged (`console.error`, naming `rule_id`/`user_id`), and skipped — the
+function continues to the NEXT rule rather than returning zero promotion
+candidates for every rule the user has just because one rule's check
+failed. This is currently reachable only when `computeAllPromptCandidates`
+(or `findPromotionCandidates` directly) is actually called — like every
+other Slice 3 finder, nothing schedules that call yet (see this file's own
+"Weekly review materialisation has no deployed scheduler yet" entry
+above — the identical standing infra gap; Slice 3's eligibility layer sits
+directly upstream of the ranking/cap/persistence step §4.10 step 4
+describes, which does not exist yet either).
+
+**How to check:** grep application logs for `[prompt-candidates] promotion
+eligibility check failed for rule_id=`. A RECURRING failure for the SAME
+`rule_id`/`user_id` pair across repeated calls (once this is actually
+scheduled) is the alertable pattern, matching the decay-engine entry's own
+framing — a one-off is more likely a transient connectivity blip than a
+data-integrity problem.
+
+**Zero occurrences today, for every real user — correct, not a symptom.**
+Nothing calls `findPromotionCandidates`/`computeAllPromptCandidates`
+outside this slice's own tests yet (no scheduler, no UI, no
+`review_prompts` write path) — this per-rule error path exists to contain
+a failure mode that becomes reachable only once a future slice wires
+ranking/persistence on top of this one.

@@ -31,7 +31,9 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 3 -- PROMPT-ELIGIBILITY CANDIDATE LAYER -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
+
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 07 (ENGAGEMENT) SLICE 1 -- STREAK MECHANISM ONLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-11 Decision-log entries, search "Module 07"). Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet -- narrowly scoped to JUST the streak mechanism, deliberately NOT the whole module (`engagement_events`, XP accrual, `milestones`, every UI/notification surface all remain unbuilt). New `engagement_state`/`week_completeness` tables (RLS, owner-SELECT-only), the section 5.2 completeness formula and section 5.3 streak walk with grace (once per rolling 91-day window, silent, unpurchasable, applied only to the first broken week), wired post-commit/best-effort into both `confirmDay` and `autoConfirmStaleTrades`. The tester built the permanent test suite the coder's own throwaway checks never left behind (RLS isolation, both judgment-call edge cases, a live adversarial proof that auto-confirm genuinely cannot earn streak credit, a forced-write-failure non-blocking proof) -- all passing. Security-reviewer confirmed the whole mechanism is ungameable: exactly one INSERT into `day_closeouts` exists in the entire codebase, inside `confirmDay`'s own transaction, so a trader has no path to forge streak credit. QA hand-verified section 3.2's four completeness cases against the real formula and confirmed the grace rule's actual behavior matches its intended "silent, no celebration" framing. **This closes Module 07 Slice 1 -- the streak number Module 06 needs now exists and is exposed via `fetchEngagementSummaryForUser`, ready for a future Module 06 slice to wire into the weekly review's Part 1 assembly.** (Superseded CODER-stage note, folded in rather than left stale: "CODED, self-checked, ready for tester -> security-reviewer -> qa.")
 
@@ -24221,3 +24223,829 @@ decisions.md (in full), docs/adr/0015-iso-week-boundary-monday-start.md
 (spot-checked to confirm the "forex week" design-decision note at
 design-decisions.md line 28 was already reconciled by a prior ADR, not
 re-litigated or silently ignored by this slice).
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 3 — eligibility candidate computation for all six §4.4 prompt kinds (CODED, not yet tested/reviewed)
+
+Read AGENTS.md in full, `06-review-and-graduation.md` in full (specifically
+§4.3/§4.4/§4.5/§4.6/§4.7) and `00-foundation.md` before writing anything,
+per this repo's own standing discipline. Read Slice 1/2's own schema
+migration (`20260911020000_review_graduation_schema.sql`) and code
+(`lib/review/reviews-repository.ts`, `weekly-read-payload.ts`,
+`weekly-findings.ts`, `period-adherence.ts`, `period-consistency.ts`)
+directly rather than trusting the prior ledger entries' own summaries.
+
+**Scope, stated explicitly per this slice's own dispatch: ELIGIBILITY
+ONLY.** Pure/read-only "who currently qualifies for each kind of prompt"
+computation — six candidate-finder functions (Graduation, Relaxation,
+Promotion, Retirement (decay), Retirement (condition), Detection — §4.4's
+own six-row table, even though the DB `kind` enum only has five distinct
+values; retirement-decay and retirement-condition both produce
+`kind: 'retirement'`, distinguished by `subjectType`) plus one composing
+entry point, `computeAllPromptCandidates`. **NOT done, NOT this slice's
+scope, verified not silently touched anywhere in the diff:** §4.3's
+ranking (kind-priority + magnitude ordering), the three-per-week cap, the
+"at most one detection per review" cap, any write to `review_prompts`, any
+UI. `review_prompts` remains completely unused — confirmed by grep, zero
+writes anywhere in this diff.
+
+**New files**, all under `lib/review/prompt-candidates/` unless noted:
+`types.ts` (`PromptCandidate`/`PromptKind`/`PromptSubjectType`, matching
+`review_prompts`/`prompt_history`'s own CHECK constraints verbatim),
+`stable-subject-id.ts`, `prompt-history-repository.ts`,
+`graduation-candidates.ts`, `relaxation-candidates.ts`,
+`promotion-candidates.ts`, `retirement-decay-candidates.ts`,
+`retirement-condition-candidates.ts`, `detection-candidates.ts`,
+`index.ts` (the composing entry point), plus
+`lib/analytics/detections-repository.ts` (the FIRST read of the
+`detections` table anywhere in this repo — every prior Module 05 slice
+only ever wrote it, grep-confirmed, same situation `findings-repository.ts`
+was in before Slice 2). Six `__tests__/*.test.ts` unit-test files (33
+tests, mocked-client/pure-function only, no DB) plus one
+`__tests__/index.live.test.ts` smoke test (2 tests) against the real
+shared dev Supabase project.
+
+**Reuse, per this slice's own dispatch instruction — verified, not just
+claimed:** Promotion candidates call the ALREADY-BUILT
+`checkPromotionEligibilityForUser` (`lib/rules/promotion-eligibility.ts`)
+directly, once per active soft rule — zero gate/threshold logic
+reimplemented. Retirement (decay) candidates are a thin read over the
+ALREADY-COMPUTED decay signal (`decay-engine/repository.ts`'s
+`applyDecayCheckResult` already transitions the current active finding to
+`state = 'decayed'` the moment the 2-consecutive-checks signal fires) —
+this file only joins `finding_rule_links` -> the original finding (to
+recover the immutable `(strategy_id, field_id, segment)` tuple) -> the
+CURRENT finding for that tuple, and keeps rows where it's `decayed`.
+Graduation reuses `fetchActiveFindingsForUser` (Slice 2's own read).
+Relaxation reuses `promotion-eligibility.ts`'s own windowing CONVENTION
+(`addDaysToServerDay`, a rolling-day window rather than an ISO-week one)
+without reusing its function body (a genuinely different, EXPLICITLY
+windowed gate, §4.4 vs. §5.7's own all-time framing — see ADR 0037
+decision #4 for the full reasoning).
+
+**Six genuine judgment calls, all written up in
+`docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md`** (not
+glossed over in code comments alone):
+
+1. **The one flagged in advance as likely, confirmed true by directly
+   reading the type definitions**: `FindingPayload` (Module 05 §5's own
+   contract) has NO `rule_proposable` field — only
+   `DetectionComputationResult.ruleProposable` is real.
+   §4.4's graduation condition is read as `confidence === 'confident'`
+   for findings, not a second, nonexistent flag.
+2. **"No existing rule on that field" reads `field_usages(used_by =
+   'rule')`, not `rules.operand_id`** — the operand catalogue and Module
+   03 field ids are disjoint namespaces; a naive equality check would be a
+   category error, not a correct-but-strict one. Currently returns
+   nothing for every real user because no Module 04 write path populates
+   `used_by = 'rule'` rows yet (confirmed via `fields-repository.ts`'s own
+   header) — a real, correctly-shaped, currently-empty query, not a dead
+   one.
+3. **The one genuinely NEW risk this slice's own dispatch did not
+   anticipate in those exact terms, found by reading ADR 0024/0029
+   directly**: `findings`/`detections` both use a supersede-then-insert
+   write pattern that gives the CURRENT row a brand-new id on every
+   recompute. Storing `subject_id = findings.id`/`detections.id` at
+   decline time would silently break §4.5's "a muted subject never
+   reappears, under any sequence of new data" the moment a routine
+   recompute ran. Fixed by deriving a stable uuid from the underlying
+   identity — `(strategyId, fieldId)` for a finding, `analyticId` alone
+   for a detection — via a fixed-namespace RFC 4122 v5 UUID
+   (`stable-subject-id.ts`). Flagged loudly, including a coordination note
+   for whichever future slice builds the accept/decline write path: it
+   MUST reuse this exact derivation or the fix silently un-does itself.
+4. Relaxation's "≥ 20 applicable evaluations" is read as windowed to the
+   SAME rolling 6 weeks as the break rate, not all-time (unlike
+   promotion's three all-time gates) — the only internally coherent
+   reading of one sentence naming one rate and one count together.
+   Severity is NOT restricted to soft rules (§4.4 names no restriction;
+   the one place this repo's specs DO restrict relaxation is Module 09
+   firm rules specifically, v1.1, zero real rows yet).
+5. Retirement (condition): `trigger_evaluations.result = 'unrecorded'`
+   drops out of both "checked" and "every trade" (mirrors
+   `promotion-eligibility.ts`'s own `not_applicable` precedent, applied to
+   the analogous new gap); the 30-trade floor is read as all-time, not a
+   rolling window (no window is named, unlike relaxation's explicit "last
+   6 weeks").
+6. §4.5's "declined once -> dormant until occurrences roughly double" is
+   DELIBERATELY NOT implemented this slice — only the unconditional
+   `muted` gate is (a hard, fully-spec'd invariant with no missing input).
+   The reactivation half needs an "occurrences" definition per kind §4.4/
+   §4.5 don't provide, is reasonably ranking-adjacent, and is currently a
+   no-op regardless (zero `prompt_history` rows have ever been written by
+   anything in this codebase's live history).
+
+**Verification performed by this coder dispatch (self-check, not a
+substitute for tester/security-reviewer/qa):** `npx tsc --noEmit` clean.
+`npm run build` green (Next.js 16 build compiles, all 28 routes,
+TypeScript pass). `npm run check:import-boundaries` (scoped to
+`lib/analytics`) — 0 violations, 104 modules/266 deps (the new
+`lib/analytics/detections-repository.ts` imports nothing outside
+`lib/analytics`/`lib/supabase`, no `lib/rules` import anywhere in the new
+`detections-repository.ts`). `npx eslint` on every new file — 0 errors. 33
+new pure unit tests pass (`selectGraduationCandidates`,
+`evaluateRelaxationEligibility`/`relaxationWindowStart`,
+`selectDetectionCandidates`, `excludeMuted`, `deriveStableSubjectId`/
+`findingSubjectId`/`detectionSubjectId` — determinism, RFC 4122 version/
+variant bits, and non-collision all directly asserted). One live smoke
+test against the real shared dev Supabase project (2 tests, both pass):
+every one of the six finders' raw hand-written SQL is syntactically valid
+against the real live schema (a wrong column name or bad join only
+surfaces at real execution time — a mocked-client unit test can't catch
+that) and every finder honestly returns an empty array — never throws,
+never fabricates — for a brand-new user with zero data, matching this
+codebase's own "not enough data yet is correct, not an error"
+non-negotiable. Full `npx vitest run --exclude '**/*.live.test.ts'` run:
+170 of 171 files / 2309 of 2323 tests pass; the ONE failure
+(`lib/supabase/__tests__/analytics-registry-schema.rls.test.ts`,
+"permission denied for table analytic_user_suppression") is a
+PRE-EXISTING, unrelated live-DB test this slice's diff never touches (not
+under `lib/review/**` or `lib/analytics/detections-repository.ts`,
+confirmed by `git status` scoping the diff to exactly
+`docs/runbook.md`(edit) + `docs/adr/0037-*.md`(new) +
+`lib/analytics/detections-repository.ts`(new) +
+`lib/review/prompt-candidates/`(new)) — flagged here for whoever picks it
+up next, not silently ignored, but explicitly NOT this slice's own
+regression.
+
+**Documentation written as part of finishing this slice, not deferred:**
+`docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md` (all six
+decisions above, in full). `docs/runbook.md`'s new "Promotion-candidate
+check failed for an individual rule during prompt-candidate computation"
+entry — the per-rule `try/catch` in `promotion-candidates.ts` (matching
+`decay-engine/repository.ts`'s own already-documented per-link error-
+containment posture) is a real, new failure-containment path this slice
+introduced and needed its own entry, not just a mention in a code comment.
+
+**What is genuinely NOT done, stated plainly so the next session doesn't
+assume otherwise:** ranking (§4.3), the three-per-week cap, the
+"at most one detection" cap, any `review_prompts`/`prompt_history` WRITE
+path (this slice only READS `prompt_history`, via
+`fetchMutedSubjectKeys`), any UI, and full seeded live-DB integration
+coverage beyond the brand-new-user smoke test (a real graduated rule with
+a real decayed finding; a real 30-trade always-met trigger condition; a
+real muted subject proven to survive an actual finding/detection
+supersession end-to-end) — explicitly left to `retrospeq-tester` per this
+slice's own dispatch division of labour, not silently skipped.
+
+**This slice is NOT done.** Needs `retrospeq-tester` -> `retrospeq-
+security-reviewer` -> `retrospeq-qa` before commit, per this repo's
+standard gate chain. Not committed, not pushed — working tree left
+exactly as this dispatch produced it for the next gate to review directly.
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 3 — TESTER PASS, with one real gap flagged for security-reviewer/qa's own judgment call (not treated as blocking this PASS)
+
+Read `00-foundation.md` §9 and Module 06's own §7 test plan first, per this
+repo's standing discipline. Read the coder's 2026-09-11 "CODED, not yet
+tested/reviewed" decision-log entry in full, `docs/adr/0037-prompt-
+candidate-eligibility-judgment-calls.md` in full, and `06-review-and-
+graduation.md` §4.3/§4.4/§4.5/§4.6 directly (not just via the ADR's own
+summary) before writing anything.
+
+**Scope verified:** every new file — `lib/review/prompt-candidates/
+{types,stable-subject-id,prompt-history-repository,graduation-candidates,
+relaxation-candidates,promotion-candidates,retirement-decay-candidates,
+retirement-condition-candidates,detection-candidates,index}.ts` and
+`lib/analytics/detections-repository.ts` (the repo's first-ever read of
+`detections`) — plus the coder's own 33 pure unit tests (re-run, all
+still pass) and 2 brand-new-user live smoke tests (re-run, still pass,
+9.7s).
+
+**Standard checks, run myself, not assumed:** `npx tsc --noEmit` clean.
+`npx eslint lib/review/prompt-candidates lib/analytics/detections-
+repository.ts` — 0 errors. `npm run check:import-boundaries` (scoped to
+`lib/analytics`, the only directory the npm script itself covers) — 0
+violations, 104 modules/266 deps. Ran `npx depcruise --config
+.dependency-cruiser.cjs lib/review` directly too (not part of the npm
+script, but the same rule config applies) — 0 violations, 97 modules/292
+deps. `npm run build` — green, all 28 routes, real production build, not
+just `tsc`. Full `npx vitest run --exclude '**/*.live.test.ts'` — 170 of
+171 files / 2309 of 2323 tests pass, 13 skipped; the ONE failure
+(`analytics-registry-schema.rls.test.ts`, "permission denied for table
+analytic_user_suppression") is the SAME pre-existing, unrelated failure
+the coder already flagged — confirmed still outside this slice's own diff
+(not under `lib/review/**` or `lib/analytics/detections-repository.ts`),
+not a regression this slice introduced.
+
+**Unit coverage, reported honestly, not rounded up:** the `prompt-
+candidates` directory's own unit-only coverage (mocked-client/pure-
+function tests, no DB) is 27.5% statement / 89.65% branch / 52.63%
+function / 27.5% line — LOW on statement/line, because every DB-touching
+line in all six finders + `prompt-history-repository.ts` +
+`detections-repository.ts` is, by construction, never exercised by a
+mocked-client unit test (same shape this repo's own `lib/rules`/
+`lib/supabase` directories already show at the unit-only level — e.g.
+`evaluate.ts` and `operand-catalogue.ts` sit at 0% line despite 100%
+branch/function, for the identical reason). The PURE logic this bar cares
+about most (branch coverage on every eligibility gate, every windowing
+boundary) is genuinely 89.65-100% across the individual pure functions
+(`selectGraduationCandidates`, `evaluateRelaxationEligibility`,
+`selectDetectionCandidates`, `excludeMuted`, `deriveStableSubjectId`/
+`findingSubjectId`/`detectionSubjectId` all independently verified).
+`stable-subject-id.ts` alone is 100/100/100/100. This directory doesn't
+strictly fall under 00-foundation §9.1's named "grouping/rule-evaluation/
+statistics engines" 90%-line bar (it's an eligibility-computation
+consumer of already-materialised Module 04/05 state, not one of those
+three engines itself) — the applicable bar is the 70% overall figure,
+and the DB-touching lines this unit run can't reach are exactly what the
+new live-DB suite below exists to cover instead.
+
+**NEW: `lib/review/prompt-candidates/__tests__/eligibility.live.test.ts`
+— 9 real, seeded, live-DB integration tests against the real shared dev
+Supabase project**, the full seeded coverage the coder's own dispatch
+explicitly left to this gate. All 9 pass (282s total, individually timed
+below). This is genuinely new coverage, not a restatement of the coder's
+own brand-new-user smoke test:
+
+1. **FINDING stable-subject-id, adversarially (37.95s)** — seeded 40
+   `flag=true` trades (36 wins) + 12 `flag=false` trades (3 wins) on a
+   real strategy/field, ran a REAL `recomputeEdgeFindingsForUser` (not a
+   mock), confirmed a genuine `confidence='confident'` finding row.
+   Called `findGraduationCandidates`, confirmed its `subjectId` equals
+   `findingSubjectId(strategyId, fieldId)` and is NOT the live
+   `findings.id`. Muted that exact subject via a real `prompt_history`
+   insert, confirmed `computeAllPromptCandidates` now excludes it. Then
+   added 5 more winning trades and ran `recomputeEdgeFindingsForUser`
+   AGAIN — confirmed via raw SQL that this genuinely superseded the row
+   (`v1.state='superseded'`, a brand-new `v2.id`, `v2.n=45`) — and
+   confirmed the SAME derived `subjectId` for the new row, and that
+   `computeAllPromptCandidates` STILL excludes it as muted after the
+   recompute. This is the single most important thing this slice needed
+   proven end-to-end, per the dispatch, and it holds.
+2. **DETECTION stable-subject-id, adversarially (19.27s)** — same shape,
+   using the real `seq.reentry_after_loss` fixture (5 distinct Mondays x
+   2 fast re-entries = 10 occurrences, clearing the `count_outcome` floor)
+   and a REAL `recomputeDetectionsForUser`, confirmed genuine
+   `tier='count_outcome'`/`classification='pattern'`/`rule_proposable=
+   true`. Mute survives a real supersession here too (12 occurrences
+   after adding one more Monday, brand-new `detections.id`, same derived
+   `subjectId`, still excluded post-recompute).
+3. **GRADUATION (35.29s)** — one 52-trade pool feeding two independent
+   fields: a confident field (no rule) -> real candidate; the exact SAME
+   field, after inserting a real `field_usages(used_by='rule')` row
+   pointing at a real active rule -> excluded; a second field on the
+   SAME trades, engineered to show zero real effect (`null_result`) ->
+   excluded throughout.
+4. **RELAXATION (85.78s)** — a real 60-day-old rule with exactly 100
+   window evaluations / 40 broken (40.0% break rate) -> qualifies; a
+   second rule with 100/39 (39%, one point under the floor) -> excluded;
+   a third rule with only 19 window evaluations (100% break rate) ->
+   excluded on the count floor alone. Confirmed the qualifying
+   candidate's own evidence numbers (100 applicable, 40 broken, 0.4 rate)
+   exactly match what was seeded.
+5. **PROMOTION (24.93s)** — a real soft rule (60 days old, 25/25 followed
+   evaluations, zero recent breaks) verified BYTE-FOR-BYTE identical
+   between `findPromotionCandidates`'s own evidence and a direct
+   `checkPromotionEligibilityForUser` call on the same rule/instant (age/
+   applicable/followed/complianceRatio all asserted equal) — zero
+   reimplementation drift, confirmed live, not just by code inspection. A
+   HARD rule built with the IDENTICAL fixture shape is excluded purely by
+   the severity filter (proven since the eligible SOFT rule with the same
+   shape genuinely qualifies).
+6. **RETIREMENT (decay) (10.77s)** — a real `finding_rule_links` row
+   walked through the REAL decay engine (`runDecayChecksForUser`, two
+   genuinely consecutive below-half-delta checks) to an actual
+   `state='decayed'` transition -> candidate. A second, healthy
+   (non-decayed) link -> excluded. A third link whose finding also
+   decayed but whose RULE is `state='retired'` -> excluded (the `r.state
+   = 'active'` join condition working as intended).
+7. **RETIREMENT (condition) (40.13s)** — 31 real `trigger_evaluations`
+   rows, all `met` -> qualifies (31 >= 30 floor). A second condition, 31
+   rows with exactly ONE `unmet` -> excluded (a single historical failure
+   permanently disqualifies, per ADR 0037's judgment call #5). A third
+   condition, 29 `met` + 5 `unrecorded` -> excluded, proving `unrecorded`
+   genuinely drops out of BOTH the numerator and the >=30 floor
+   denominator (29 recorded < 30), not just the numerator.
+8. **DETECTION exclusions (4.69s)** — direct-insert `tier='count'` and
+   `classification='incident'` rows (same "the writing pipeline itself
+   isn't under test here" reasoning this repo's own `decay-engine`
+   live-test precedent already established for writing `findings` rows
+   directly) both correctly excluded via the real SQL read path, even
+   though otherwise shaped identically to a real qualifying row seeded
+   alongside them in the same query.
+9. **CROSS-USER ISOLATION (21.85s)** — a real relaxation-eligible rule
+   seeded for user A; `computeAllPromptCandidates(userB)` (zero data)
+   returns all six arrays empty, AND an explicit assertion that user A's
+   own rule-id string never appears anywhere in user B's serialized
+   result — not just "the right length," genuinely absent.
+
+**RLS discipline:** this slice introduces no new tables (`prompt_history`/
+`review_prompts`/`reviews` and `findings`/`detections` already have their
+own dedicated, passing `.rls.test.ts` cross-user-isolation suites from
+their own originating schema slices — `review-graduation-schema.rls.
+test.ts`, `analytics-registry-schema.rls.test.ts` — spot-checked directly,
+not assumed) — only new READERS, all correctly scoped via
+`withUserConnection`. Test 9 above is this slice's own APPLICATION-layer
+proof on top of that already-proven DB-layer guarantee, across every one
+of the six finders at once via `computeAllPromptCandidates`.
+
+**Golden fixtures (00-foundation §9.3):** does not apply — this slice
+never touches the grouping engine (confirmed by re-reading the diff:
+`lib/review/prompt-candidates/**` and `lib/analytics/detections-
+repository.ts` only). Stated explicitly rather than silently skipped.
+
+**E2E / screenshots:** does not apply — this slice is READ-ONLY with NO
+UI and NO write to `review_prompts` (confirmed zero writes anywhere in
+the diff, matching the coder's own scope note). Module 06's own §7.4 E2E
+bar belongs to the later ranking/cap/write-path/UI slice. Stated
+explicitly rather than silently skipped, matching this repo's own
+convention for non-UI slices.
+
+**One real bug found and fixed — in MY OWN test fixture, not in Slice
+3's production code, flagged explicitly so it isn't mistaken for the
+latter:** two of the nine new live tests initially failed with
+`duplicate key value violates unique constraint
+"fields_unique_active_scoped"`. My own `seedBoolField` test helper
+reused the literal name `'Test Flag'` for every field it seeded, colliding
+with the REAL schema invariant `fields_unique_active_scoped` (Module 03
+§7.2 — "no two ACTIVE fields" share a name within the same `(user_id,
+owner_strategy_id)` scope) the moment a single test seeded more than one
+field for the same user/strategy. Fixed by deriving each seeded field's
+name from its own already-unique id
+(`lib/review/prompt-candidates/__tests__/eligibility.live.test.ts`'s
+`seedBoolField`). Both affected tests (GRADUATION, RETIREMENT (decay))
+independently re-verified passing after the fix, then the full 9-test
+file re-verified passing together.
+
+**Operational note for whoever runs live-DB tests on this machine next,
+not a slice-3 finding:** running a SECOND `vitest` process against the
+shared dev Supabase project while a live-DB suite is already mid-run
+OOM-crashed the second process (confirmed: `FATAL ERROR: Commit wasm code
+space Allocation failed`, matching this repo's own known memory-
+constrained-machine history in `NEEDS_YOUR_INPUT.md`) AND left orphaned
+Postgres connections that starved the surviving first process's own
+`withUserConnection`/`withServiceRoleConnection` pool (`max: 3`,
+`lib/supabase/direct.ts`), hanging it indefinitely on `pool.connect()`
+with zero output and near-flat CPU (confirmed via `Get-CimInstance
+Win32_Process`/`Get-Process` inspection over multiple minutes; recovered
+by force-killing the hung process tree via `Stop-Process` and re-running
+clean). Not a product bug — a self-inflicted testing-infra mistake this
+session made once and is documenting so the next session doesn't waste
+time treating the symptom (a hung, silent live-DB test) as a code
+regression.
+
+**Requirement-by-requirement, direct verification, not just re-trusting
+ADR 0037's own prose:**
+
+- **Stable-subject-id derivation:** see live tests 1-2 above — the
+  central claim holds end-to-end against a REAL recompute, not just by
+  reading the derivation code.
+- **rule_proposable asymmetry:** independently re-verified, not just
+  re-read. Checked `retrospeq.findings`' own DDL directly — no
+  `rule_proposable`-equivalent column exists. Checked Module 05 §5's
+  OWN literal `FindingPayload` type in the spec text itself (not just the
+  ADR's paraphrase) — no such field; only `DetectionPayload` has one,
+  because only detections have a tier/classification pair that needs
+  summarising into one flag — a finding's `confidence` tier already IS
+  that same "is this real" gate for findings, structurally, not by
+  convention. Also checked the one place a hidden second gatekeeper COULD
+  plausibly exist — §4.12 asset-class suppression (a finding "computed
+  but suppressed from render") — and confirmed it CANNOT leak through:
+  `writeShadowedFindings` writes a suppressed segment only to
+  `shadow_runs`, never to `findings` at all
+  (`lib/analytics/edge-engine/repository.ts`), so
+  `fetchActiveFindingsForUser` structurally cannot return one. ADR 0037
+  decision #2 is correct, confirmed by evidence, not just restated.
+
+**ONE REAL GAP FOUND, outside ADR 0037's own six documented judgment
+calls — flagged for security-reviewer/qa's own call, NOT treated as
+blocking this tester PASS:** neither `graduation-candidates.ts` nor
+`detection-candidates.ts` apply the `canRender` gate
+(`lib/analytics/registry-runtime-service.ts` — plan/cohort/individual-
+analytic-suppression/account-sync-tier) before surfacing a candidate,
+even though this SAME weekly review's OWN Slice 2
+(`lib/review/weekly-findings.ts`) explicitly applies `canRender` before
+showing a finding on the very same screen ("if config cannot be read,
+nothing renders ... silence is always the safe failure," Module 05 §4.8).
+Concretely: if a finding's or detection's `analytic_id` is individually
+suppressed (`analytic_user_suppression`), plan-gated, cohort-gated, or
+account-sync-tier-gated, Slice 2 correctly hides it from the READ half of
+the weekly review — but Slice 3 would still offer it as a graduation/
+detection PROMPT, inviting the trader to enshrine a suppressed or
+inaccessible analytic into an enforced rule, which is more consequential
+than a display gap. Currently a real no-op in every live case TODAY
+(graduation: `field_usages(used_by='rule')` is still unpopulated by any
+write path anywhere in this repo per ADR 0037 decision #3, so zero real
+graduation candidates exist regardless of this gap; detection: no
+evidence any live user currently has a suppressed/plan-gated `pattern`/
+`count_outcome` detection) — but it is a real, live latent bug, not a
+hypothetical, and will start mattering silently the moment either write
+path lands or a free-tier user accumulates a Pro-tier-gated detection.
+Not treated as blocking THIS gate's own PASS because (a) it doesn't
+violate the strictly-blocking RLS/cross-user bar, (b) it wasn't part of
+this slice's own explicit "eligibility only" dispatch scope, (c) it is
+currently inert in every real case, and (d) this dispatch's own job is
+verification and reporting, not authoring the fix — but it must not be
+silently dropped either. Recommend security-reviewer/qa make an explicit
+call: wire `canRender` into both finders before this is called fully
+done, or log it as a formal, tracked 7th judgment call (an ADR 0037
+addendum or its own tracking note) — either is acceptable, silence is
+not.
+
+**Verdict: PASS.** Ready for `retrospeq-security-reviewer` next. The
+canRender gap above should be carried into that review explicitly, not
+rediscovered independently or dropped.
+
+Files touched this gate: new
+`lib/review/prompt-candidates/__tests__/eligibility.live.test.ts` only —
+no production code changed. Everything else in the working tree (from the
+coder's own CODED entry) is unmodified.
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 3 — SECURITY REVIEW: PASS, with an explicit ruling on the flagged `canRender` gap (deferred, not waived — see below). Cleared for retrospeq-qa and commit.
+
+Read `retrospeq-design-system/modules/00-foundation.md` §4 and Module 01
+§7.2 (the canonical security bar) in full before starting, plus
+`docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md` in full
+(all 6 decisions). Did not take the coder's or tester's PROGRESS.md
+claims at face value — independently re-read every new file's actual SQL
+and connection-role usage below, and re-ran the checks myself rather than
+trusting the reported results.
+
+**PRIMARY TASK — the `canRender` gap the tester flagged. Read
+`weekly-findings.ts`'s own usage first** (`lib/review/weekly-findings.ts:205-229`
+— `canRender(analyticId, userId, 'weekly')` gates every finding before it
+becomes a real render, falling back to `buildNoDataFindingPayload` when
+`canRender` returns false), **then confirmed the gap is real by reading
+`graduation-candidates.ts` and `detection-candidates.ts` directly**: neither
+file imports `registry-runtime-service.ts` or calls `canRender` anywhere
+— `selectGraduationCandidates` (`graduation-candidates.ts:122-135`) filters
+only on `confidence === 'confident'` and `field_usages`, and
+`selectDetectionCandidates` (`detection-candidates.ts:46-48`) filters only
+on `tier`/`classification`/`ruleProposable` — plan, cohort, individual-
+analytic-suppression, and account-sync-tier are never consulted by either.
+Confirmed via `registry-runtime-service.ts` (`canRender`, lines 32-67) that
+this is exactly the plan/cohort/suppression/account-tier gate the task
+description named, not a narrower thing.
+
+**Ruling: this is a real gap, correctly flagged, and does NOT block this
+slice's PASS — deferred, not waived, and made a hard precondition below.**
+Reasoning:
+
+1. **Zero exploitability today, independently verified, not assumed from
+   the tester's claim.** `grep -rn "computeAllPromptCandidates\|
+   findGraduationCandidates\|findDetectionCandidates\|prompt-candidates"
+   app/` returns nothing — no route, Server Action, or page anywhere in
+   `app/**` imports any function from `lib/review/prompt-candidates/**`.
+   Went one step further than the tester's own item 3 (which checked this
+   slice's own diff): also grepped for `weekly-findings`/
+   `assembleWeeklyFindings` (Slice 2, which DOES apply `canRender`) and
+   `lib/review` generally — zero `app/**` consumers of ANY Module 06
+   backend function exist yet, Slice 2 included. There is currently no
+   user-facing surface anywhere that could show a suppressed/plan-gated
+   candidate to anyone, for any of the six kinds, because there is no
+   surface at all. This is a stronger finding than "this specific gap is
+   inert" — the entire module is pre-UI.
+2. **No data-disclosure or cross-user issue.** The gap is about missing
+   entitlement/suppression filtering on an internal, in-memory candidate
+   list that is never serialized to a client or written to a table (item 2
+   below confirms `prompt_history` has no write path yet either) — it is a
+   product-correctness gap (a future prompt could recommend enshrining a
+   suppressed or plan-inaccessible analytic into a rule), not a
+   confidentiality or authorization breach as it stands today.
+3. **Applying `canRender` correctly here isn't a one-line fix — it's a
+   real design decision this slice's own scope correctly excludes.**
+   `canRender`'s signature takes a `Surface` (`weekly-findings.ts` uses
+   `'weekly'`, chosen deliberately per that file's own header, NOT
+   `'strategy'`, precisely because surface identity affects the gate).
+   Graduation/detection prompts are not the weekly-findings surface — what
+   `Surface` value a prompt candidate should use is exactly the kind of
+   ranking/UI-adjacent judgment call ADR 0037's own decision #6 already
+   established this slice correctly defers (the declined-once-dormant
+   logic), for the identical reason: no live consumer to design against
+   yet, and inventing the answer now risks the same "silently wrong,
+   discovered later" failure this repo has already named as a real risk
+   elsewhere (00-foundation's "no re-engagement pushes" ethics framing
+   makes the choice of gate non-trivial, not mechanical).
+
+**This is not a silent pass, though — making it a tracked, binding
+precondition per this repo's own "write it down or it didn't happen"
+culture:** `docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md`
+does not currently mention this gap anywhere in its six decisions or its
+Consequences section. Flagging here, explicitly, for whichever slice
+implements §4.3's ranking/cap/`review_prompts` write path or any UI for
+these six candidate kinds: **that slice MUST NOT ship without wiring
+`canRender` (or an equivalent, deliberately-chosen entitlement/suppression
+gate) into `graduation-candidates.ts` and `detection-candidates.ts`
+(or into the ranking layer that consumes their output, whichever the
+author of that slice determines is the correct point) before any
+candidate reaches a `review_prompts` row or a rendered surface.** Until
+that happens, `computeAllPromptCandidates`'s `graduation`/`detection`
+arrays must be treated as NOT entitlement-safe for direct use by any
+future caller — this is a blocking requirement on the NEXT slice that
+gives these two arrays a live consumer, not an optional cleanup item.
+Recorded here since ADR 0037 itself is silent on it; whoever builds that
+next slice should add this as ADR 0037's own decision #7 (or a dedicated
+addendum) at that time, per this repo's standing documentation
+discipline, rather than relying on this PROGRESS.md entry alone to be
+rediscovered.
+
+**Other checks, run and verified directly:**
+
+1. **Cross-user isolation — PASS, independently confirmed at the query
+   level, not just via the tester's 9 passing live tests.** Every finder
+   read directly: `fetchFieldIdsWithActiveRule`/`findGraduationCandidates`
+   (`graduation-candidates.ts:83-94, 141-165`) — `withUserConnection` +
+   `fu.user_id = $1`, plus a second `and r.user_id = fu.user_id` join
+   predicate (belt-and-suspenders against a cross-user `rules` row via a
+   stale `used_by_id`). `findDetectionCandidates` /
+   `fetchActiveDetectionsForUser` (`detection-candidates.ts:53-69`;
+   `lib/analytics/detections-repository.ts:55-79`) — `withUserConnection` +
+   `where user_id = $1 and state = 'active'`. `findPromotionCandidates`
+   (`promotion-candidates.ts:39-70`) — `fetchRulesForUser(userId)` plus
+   `checkPromotionEligibilityForUser(userId, rule.ruleId, now)`, itself
+   `withUserConnection`-scoped (`lib/rules/promotion-eligibility.ts:307-312`).
+   `findRelaxationCandidates`/`fetchRelaxationWindowCounts`
+   (`relaxation-candidates.ts:120-142, 156-194`) — `withUserConnection` +
+   `where user_id = $1 and rule_id = any($2::uuid[])`.
+   `findRetirementConditionCandidates`
+   (`retirement-condition-candidates.ts:74-101`) — `withUserConnection` +
+   `where tc.user_id = $1`, plus `te.user_id = tc.user_id` join predicate.
+   `findRetirementDecayCandidates` (`retirement-decay-candidates.ts:65-111`)
+   — `withUserConnection` + `where fl.user_id = $1`, plus THREE additional
+   `user_id = fl.user_id` join predicates (`orig`, `df`, `r`) — every table
+   in that 4-way join is independently pinned to the same user, not just
+   the outer `where`. `fetchMutedSubjectKeys`
+   (`prompt-history-repository.ts:41-51`) — `withUserConnection` +
+   `where user_id = $1`. No function in this slice accepts an id
+   (`ruleId`/`fieldId`/`analyticId`/`conditionId`) without the same query
+   also being scoped by that same caller's `userId`. `withUserConnection`
+   itself (`lib/supabase/direct.ts`) is real RLS, not app-layer trust alone
+   — `SET LOCAL ROLE authenticated` + `request.jwt.claims` resolving
+   `auth.uid()`, confirmed by reading the function, matching precedent
+   already established for this same helper at the Slice 1/2 security
+   review gates.
+2. **`prompt_history` as the mute-tracking mechanism — N/A, confirmed
+   genuinely read-only, not assumed from the coder's/tester's claim.**
+   `grep -rn "insert into retrospeq.prompt_history\|update retrospeq.
+   prompt_history" lib app` (excluding `__tests__`) returns nothing — no
+   write path to `prompt_history` exists anywhere in this repo yet. The
+   only reader is `fetchMutedSubjectKeys` (read-only `select`). Its RLS
+   policy (`prompt_history_owner`, `20260911020000_review_graduation_
+   schema.sql:172-178`) is owner-`for all` with `user_id = auth.uid()` on
+   both `using`/`with check` — already reviewed at the schema-migration
+   gate per that file's own "VERIFIED" comment; nothing in this slice
+   changes that. No client-side-manipulation concern exists today because
+   there is no client-reachable write path at all.
+3. **`checkPromotionEligibilityForUser` reuse — PASS, genuine and
+   unmodified, confirmed by diff not by claim.** `git log --oneline -3 --
+   lib/rules/promotion-eligibility.ts lib/rules/rules-repository.ts` shows
+   neither file touched by any commit after `35346f4` (Module 03 Slice
+   03a, well before this slice), and `git diff HEAD --` on both paths is
+   empty — zero lines changed by this slice. `promotion-candidates.ts`
+   calls the function with its real signature
+   (`checkPromotionEligibilityForUser(userId, rule.ruleId, now)`) and uses
+   its `result.eligible`/`result.detail.*` fields directly with no
+   re-derivation of any gate/window/threshold — matches the tester's own
+   item 5 claim, independently re-confirmed here.
+4. **Injection/parameterization sweep — PASS. Import-boundary check —
+   PASS, re-run myself.** `grep -rn "eval(\|new Function(" lib/review
+   lib/analytics/detections-repository.ts` — zero hits. Every SQL template
+   literal in this slice's 8 new query-issuing functions uses only
+   `$1`/`$2`/`$3`/`any($n::uuid[])` bind parameters for caller-supplied
+   values; the only string interpolation anywhere is into log messages
+   (`promotion-candidates.ts:64`) or non-SQL derived-key strings
+   (composite `${a}:${b}` keys in `prompt-history-repository.ts`/
+   `stable-subject-id.ts`), never into SQL text. `npm run
+   check:import-boundaries` (scoped to `lib/analytics`) — 0 violations,
+   104 modules/266 deps, `detections-repository.ts` clean. Grepped
+   `lib/review` directly for `@/lib/rules` imports (this npm script does
+   not cover `lib/review`): the only NEW import beyond the already-
+   reviewed `week-boundary.ts`/`rules-repository.ts`
+   (`fetchRuleRenderedText`, already used by `period-adherence.ts`) is
+   `lib/rules/promotion-eligibility.ts`'s `checkPromotionEligibilityForUser`
+   — which is exactly item 3 above, itself already reviewed at Module 04's
+   own gate and reused verbatim, not a new surface of rule-engine logic
+   entering `lib/review`. `lib/analytics/detections-repository.ts` imports
+   only `withUserConnection` — no `lib/rules` import at all, and it sits
+   inside the `check:import-boundaries` scope regardless, which passed.
+5. **`withServiceRoleConnection` inventory — checked, none introduced,
+   confirmed not skipped.** `grep -rn "withServiceRoleConnection"
+   lib/review lib/analytics/detections-repository.ts` — the only hits are
+   in `reviews-repository.ts` (already allowlisted from the Slice 2
+   security-review gate) and a doc-comment in `prompt-history-
+   repository.ts` explaining why it does NOT use that helper
+   (`withUserConnection` instead, since `prompt_history_owner` is a real,
+   working owner policy). Every new file in this slice
+   (`lib/review/prompt-candidates/**`, `lib/analytics/detections-
+   repository.ts`) uses `withUserConnection` exclusively. Re-ran `npx
+   vitest run lib/supabase/__tests__/service-role-inventory.test.ts`
+   myself — 3 passed, unchanged, no allowlist edit needed since no new
+   call site exists.
+
+**Standard re-checks, run myself:** `npx tsc --noEmit` — clean, exit 0.
+`npx eslint lib/review/prompt-candidates lib/analytics/detections-
+repository.ts` — 0 errors/warnings. `npx vitest run lib/review/prompt-
+candidates --exclude '**/*.live.test.ts'` — 5 files / 33 tests, all pass
+(re-confirms the coder's/tester's own reported unit results
+independently, not merely trusted). Did not re-run the 9 live-DB
+integration tests myself — the tester's own PROGRESS.md entry documents
+each one in enough concrete detail (seeded row counts, real
+recompute/supersession proof via raw SQL, byte-for-byte evidence
+comparison against `checkPromotionEligibilityForUser`) that re-deriving
+the same live proof a third time was judged unnecessary per this
+dispatch's own instruction, and a second concurrent `vitest` process
+against the shared dev Supabase project is independently known to
+OOM-crash on this machine (the tester's own "Operational note,"
+reproduced by this reviewer's own attempt mid-session — a tooling
+collision, not a finding). `stable-subject-id.ts`'s derivation itself was
+read and sanity-checked directly (RFC 4122 §4.3 version-5/SHA-1
+construction, fixed namespace bytes, version/variant bits set correctly
+at `bytes[6]`/`bytes[8]`, deterministic, no I/O) — correct.
+
+**Verdict: PASS.** Cleared for `retrospeq-qa` and commit. Carry the
+`canRender` ruling above forward explicitly — it is a binding
+precondition on the next slice that gives `graduation`/`detection`
+candidates a live consumer (ranking, `review_prompts` write, or any UI),
+not a closed item, and should not be silently dropped or rediscovered.
+
+Files reviewed this gate: `lib/review/prompt-candidates/{types,
+stable-subject-id,prompt-history-repository,graduation-candidates,
+relaxation-candidates,promotion-candidates,retirement-decay-candidates,
+retirement-condition-candidates,detection-candidates,index}.ts`,
+`lib/analytics/detections-repository.ts`, `docs/adr/0037-prompt-candidate-
+eligibility-judgment-calls.md`. No production code changed by this gate —
+review only.
+
+## 2026-09-11 -- Module 06 (Review & Graduation) Slice 3 -- QA REVIEW (FINAL GATE): PASS. Cleared to commit and push to main.
+
+Read AGENTS.md's Non-negotiables and Design system sections and
+retrospeq-design-system/modules/retrospeq-design-decisions.md in full
+first, per this repos own qa discipline, then docs/adr/0037-prompt-
+candidate-eligibility-judgment-calls.md in full and 06-review-and-
+graduation.md section 4.3/4.4 directly (not just via the ADRs/coders own
+restatement) before checking anything. Did not take the coder/tester/
+security-reviewer chain at face value -- independently re-ran or re-derived
+every item below.
+
+This slice is entirely backend, read-only, no UI -- confirmed
+(git status --porcelain: docs/adr/0037-*.md new, lib/analytics/
+detections-repository.ts new, lib/review/prompt-candidates/ new,
+docs/runbook.md +46 lines, PROGRESS.md the ledger). No screenshot
+verification applicable; stated explicitly rather than silently skipped,
+matching this repos own convention for non-UI slices (same posture the
+tester and security-reviewer already took).
+
+1. canRender gap ruling -- independently re-verified, not trusted.
+Re-ran the security-reviewers own grep myself:
+grep -rn "prompt-candidates or computeAllPromptCandidates or findGraduationCandidates or findDetectionCandidates or findPromotionCandidates or findRelaxationCandidates or findRetirementDecayCandidates or findRetirementConditionCandidates" app/
+-- zero hits. grep -rln "lib/review" app/ -- zero hits (confirms Slice 2s
+weekly-findings.ts/weekly-read-payload.ts also have no app/** consumer yet,
+matching the security-reviewers own stronger claim that the entire module
+is pre-UI, not just this slice). Independently read graduation-candidates.ts
+(filters only on confidence/field_usages) and detection-candidates.ts
+(filters only on tier/classification/ruleProposable) myself -- neither
+imports registry-runtime-service.ts or calls canRender anywhere. Agree the
+gap is real and agree the deferral is sound: zero live consumer anywhere
+means zero exploitability or disclosure risk today, and picking the correct
+Surface/gate point for a graduation/detection prompt is a genuine design
+decision for whichever slice gives these two arrays their first real
+caller, not a mechanical fix this slices own "eligibility only" scope
+should absorb.
+On whether ADR 0037 needs updating NOW: judged correctly
+left for that future slice, per the security-reviewers own reasoning --
+the fixs shape (which Surface value, which layer applies the gate) is not
+knowable without a real consumer to design against, so writing it into
+ADR 0037 today would be guessing at an answer rather than recording a
+decision. The security-reviewers own PROGRESS.md entry (2026-09-11, the
+paragraph beginning "This is not a silent pass") is itself a sufficiently
+detailed, dated, binding tracked record for the interim -- it names the
+exact files, the exact precondition, and explicitly instructs the next
+slices author to formalize it as ADR 0037 decision #7 (or an addendum) at
+that time. That is enough for NEEDS_YOUR_INPUT.md-style traceability
+without inventing a premature answer. No action needed from this gate
+beyond restating the binding precondition here for a third independent
+record: the next slice that gives graduation/detection candidates a live
+consumer (ranking, review_prompts write, or UI) must not ship without
+wiring canRender or an equivalent, deliberately-chosen gate first.
+
+2. Section 4.3s "at most one detection per review" cap -- confirmed NOT
+implemented, correctly scoped out. Read detection-candidates.ts lines
+44-48 directly: selectDetectionCandidates returns every row matching
+tier equal count_outcome AND classification equal pattern AND ruleProposable,
+no slice(0,1)/length gate/limit anywhere in the file, and its own header
+states this explicitly ("this finder returns EVERY qualifying detection
+candidate, uncapped, matching this slices own dispatch instruction
+verbatim"). index.ts's computeAllPromptCandidates composes all six
+finders outputs with only the muted-subject filter -- no ranking, no
+slice, no cap anywhere in the composition either. Grepped the whole
+prompt-candidates/ directory for slice(0 / .length > / cap/rank outside
+comments -- no hits in production code. No scope violation; this slice
+genuinely did not reach ahead into section 4.3s ranking-stage work.
+
+3. Section 4.4s eligibility table, spot-checked directly against code
+(not just re-reading the ADRs restatement) -- two kinds the testers own
+write-up covered with real seeded data but that most reward re-deriving
+independently: Relaxation and Retirement (condition).
+relaxation-candidates.ts evaluateRelaxationEligibility (lines 97-108):
+ageMs >= SIX_WEEKS_MS (42 days) AND applicableEvaluations >= 20 AND
+breakRate >= 0.4 -- matches "Rule active >= 6 weeks, break rate >= 40%
+over the last 6 weeks, >= 20 applicable evaluations" exactly, and the
+windowing judgment call (both the age checks calendar-duration reading
+and the count-floors same-window reading) is reasoned coherently in the
+files own header, consistent with ADR 0037 decision #4.
+retirement-condition-candidates.ts SQL (lines 76-87): having count(*)
+filter (where te.result != unrecorded) >= 30 and count(*) filter
+(where te.result = unmet) = 0 -- matches "checked met on every trade
+for >= 30 trades" exactly, with unrecorded correctly excluded from both
+sides per ADR 0037 decision #5. Both match section 4.4s own table read
+directly from 06-review-and-graduation.md (not the ADRs paraphrase).
+Also independently re-read graduation-candidates.ts and
+promotion-candidates.ts (section above) -- all four spot-checked kinds
+match the spec precisely, with judgment calls reasoned rather than
+assumed.
+
+4. No UI, no review_prompts writes -- confirmed.
+grep -rn insert-into-retrospeq.review_prompts-or-update-retrospeq.review_prompts lib app
+-- zero hits. grep -rn review_prompts lib app --include=*.ts outside
+__tests__/migrations -- only doc-comment mentions in types.ts/
+stable-subject-id.ts/index.ts/weekly-findings.ts explaining the tables
+own shape or scope boundary, never a write. git status/git diff --stat
+confirm the diff is exactly PROGRESS.md (ledger) + docs/runbook.md
+(+46 lines, one new entry) + docs/adr/0037-*.md (new) +
+lib/analytics/detections-repository.ts (new) + lib/review/prompt-
+candidates/ (new) -- matches this slices own declared scope exactly, no
+surprise files.
+
+5. PROGRESS.md decision-log chain -- internally consistent, accurately
+reflects what happened. The coders 2026-09-11 "CODED, not yet
+tested/reviewed" entry then the testers 2026-09-11 "TESTER PASS, with one
+real gap flagged" entry then the security-reviewers 2026-09-11
+"SECURITY REVIEW: PASS, with an explicit ruling on the flagged canRender
+gap" entry, in that order, each ones stated file list matching git status/
+git diff --stat exactly, each ones stated verdict (CODED then not yet
+reviewed; TESTER PASS; SECURITY PASS) consistent with what the next entry
+says it received. No gaps, no contradictions, no entry claiming a gate
+that never actually ran.
+
+6. Documentation -- both accurate and complete for what actually
+shipped. docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md --
+all six decisions independently verified against the actual code above
+(decisions #1/#4/#5 directly spot-checked in items 1-3 above; #2/#3/#6
+verified by direct code/type-definition reading during this same pass --
+FindingPayload in lib/analytics/findings-payload.ts genuinely has no
+rule_proposable field, field_usages(used_by=rule) is genuinely the
+mechanism graduation-candidates.ts queries, prompt-history-
+repository.ts genuinely implements only the unconditional muted gate
+with no reactivation-count logic anywhere). Not a placeholder, not a
+"TODO: write ADR" -- a real, evidenced record. docs/runbook.mds new
+"Promotion-candidate check failed for an individual rule during
+prompt-candidate computation" entry, re-read directly against
+promotion-candidates.ts actual try/catch (lines 46-67) -- accurately
+describes the per-rule error-containment path, the exact log-line prefix
+([prompt-candidates] promotion eligibility check failed for
+rule_id=), and correctly states this is currently a zero-occurrence,
+unreachable-in-production path (no scheduler, no caller) rather than
+overstating current risk. Both docs are accurate and complete for this
+slices own scope; nothing deferred that should have been written now.
+
+7. Standard non-negotiables -- re-checked directly in this slices own
+new files, not assumed clean from the chain. No currency/P&L anywhere
+(grep -rniE currency lib/review/prompt-candidates lib/analytics/
+detections-repository.ts -- zero hits; all evidence is R-multiple/count/
+rate-shaped, e.g. avgR, breakRate, occurrences). No XP/points (grep -rniE
+xp-or-points -- zero hits). No hardcoded hex colors or red/green (grep
+-rniE hex-or-red-or-green -- zero hits; N/A regardless, this
+slice has no UI/chart/mark surface). No compound AND/OR rule logic
+anywhere in the six finders -- each is a flat set of scalar comparisons
+composed with plain boolean AND inside one function (not a
+operand_id-op-value array combinator, and nothing resembling Module 04s
+rule-expression shape at all -- this slice does not touch the rule engine,
+it only calls checkPromotionEligibilityForUser and reads rules/
+trigger_conditions state as data). No rule_proposable-shaped
+gatekeeping silently dropped: confirmed each of detections three real
+columns (tier, classification, ruleProposable) is checked directly in
+selectDetectionCandidates (line 47), and findings analogous gate
+(confidence equal confident) is checked directly in
+selectGraduationCandidates (line 128) -- no kinds condition was
+quietly narrowed or dropped anywhere across the six finders.
+
+8. Performance (00-foundation section 8.1) -- no obvious budget-breaker.
+Every finder issues at most one or two SQL round trips per user (batched
+any-uuid-array queries, e.g. fetchRelaxationWindowCounts, matching this
+repos own established "no N+1" posture) except findPromotionCandidates
+per-rule loop over checkPromotionEligibilityForUser -- already an
+existing, previously-reviewed Module 04 function, not new N+1 introduced
+by this slice; a users active-soft-rule count is bounded and small in
+practice. computeAllPromptCandidates runs all six finders concurrently
+via Promise.all, not sequentially. No live UI surface exists yet to
+budget against (section 8.1s "rule preview < 300ms" etc rows do not
+apply to a backend-only, uncalled function) -- not a gap, since there is
+nothing rendered yet to blow a budget on.
+
+Verdict: PASS. This slice is cleared to commit and push to main. The
+one carried-forward item is not a blocker on THIS slice -- it is a
+binding precondition on the NEXT slice that gives graduation/
+detection candidates a live consumer, already recorded independently by
+the security-reviewers own 2026-09-11 entry and restated here for a
+third traceable record. No other blocking issues found. Since this
+projects Autonomy policy has no human review gate on commits, the
+orchestrating session should commit and push immediately following this
+PASS.
+
+Files reviewed this gate: lib/review/prompt-candidates/{types,
+stable-subject-id,prompt-history-repository,graduation-candidates,
+relaxation-candidates,promotion-candidates,retirement-decay-candidates,
+retirement-condition-candidates,detection-candidates,index}.ts,
+lib/analytics/detections-repository.ts, docs/adr/0037-prompt-candidate-
+eligibility-judgment-calls.md, docs/runbook.mds new entry, and the
+full coder/tester/security-reviewer PROGRESS.md chain. No production code
+changed by this gate -- review only.
