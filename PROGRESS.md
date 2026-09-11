@@ -26,12 +26,14 @@ authority.
 
 **Module 04 scope gap found by this slice's own QA pass, not yet tracked anywhere — given its own number, Slice 10e, rather than staying invisible.** Slice 7 (2026-08-25) built `promoteRule`/`demoteRule`/`retireRule` as backend-only Server Actions, explicitly scoping their UI as future work at the time. That UI has never shipped — confirmed via `grep`: those three functions are called nowhere in `app/` except their own Server Action definitions and test file. This is NOT Slice 10c (discovery, story 1.3 — correctly tracked as blocked on Module 05) and is NOT this slice (10d part 2, adherence) — it is a genuine, currently-unclaimed gap: the rule list/browsing view (story 1.1's "one sentence, one tappable number" list, the natural home for `app/(app)/rules/page.tsx`'s own already-reserved future-list placeholder from this slice) PLUS the severity promote/demote/retire controls (§6.1's `alert--choice` hard-cap swap markup, deferred all the way back at Slice 10b's own dispatch for exactly this reason — it needs an existing-rules list to select a demote target from, which didn't exist until now). Today, a trader who wants to promote a rule to hard, or simply see their existing rules, has no UI path to either — a real product gap, not a documentation nit. Per AGENTS.md step 8/"never fake it," this is logged here rather than left silently dropped; Module 04 is NOT done until Slice 10e is either built or deliberately, visibly deferred with a real reason. See "Next" below for the priority call on 10e vs. 10c.
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | **In progress, started 2026-09-02.** Both full specs read before any code, per this build's own standing discipline. Module 03 goes first — Module 05's own §10 Dependencies table names Module 03 (field definitions and types) as a real dependency, and Module 04's own field-based rule scoping (`strategy_var`) has been waiting on it since Slice 10b. **Slice 03a (field-registry schema + §3.2's 9-entry derived-field seed catalogue) CODED (2026-09-02), independently verified (2026-09-02) — the erasure regression that verification found is now FIXED (2026-09-02, see the matching decision-log entry and "Current task" for the full write-up) — schema/RLS/PK/uniqueness work AND the erasure fix are both verified; this slice is ready for security-reviewer/qa, not yet marked "done" by this coder (that call belongs to qa/security-reviewer per this repo's own convention). **UPDATE: security-reviewer gate PASSED, 2026-09-02 -- all 9 checklist items plus both named erasure deep-dive items, see the matching 2026-09-02 decision-log entry (search "SECURITY REVIEW GATE"); qa is the one remaining gate before this slice can be called done.** Schema/RLS/PK/uniqueness work itself independently re-proven sound with fresh adversarial fixtures. Built all 5 tables (`fields`/`strategies`/`strategy_versions`/`field_usages`/`trigger_conditions`), RLS on all 5 (100% coverage, live-verified), `handle_new_user` extended a 4th time to seed the 9 derived fields atomically at signup (backfilled live against all 328 pre-existing profiles, 0/328 mismatched), the `fields_forbid_derived_update`/`fields_forbid_derived_delete` triggers (adversarially proven, including the erasure escape hatch a real bug surfaced needing). **Two real, load-bearing bugs found and fixed in the spec's own literal DDL before it ever shipped** (not transcribed verbatim): `fields.id` would have been a globally-collide-on-second-signup primary key (fixed to composite `(user_id, id)`, `docs/adr/0017-fields-composite-primary-key.md`), and the literal `unique (user_id, name, owner_strategy_id)` constraint would not have enforced uniqueness for NULL `owner_strategy_id` rows at all (fixed with two partial unique indexes). **A third, cross-cutting regression found and fixed while writing this slice's own tests, not shipped**: the new derived-field delete-block trigger broke every OTHER RLS test file's cleanup (`deleteTestAuthUser`'s cascade from `auth.users` now hits it) — fixed at the source (`deleteTestAuthUser` itself now pre-deletes under the erasure escape hatch, one shared connection per test file, not per call, after a first per-call-connection draft was proven via live A/B testing to slow down `confirm.live.test.ts` before being replaced) rather than editing 40+ call sites individually. **A fourth, critical regression — the REAL production `executeErasure` path (not test cleanup) was broken for every user — found by independent verification and fixed 2026-09-02**: see the matching decision-log entry for the full root cause/fix/verification write-up; `lib/fields/fields-repository.ts`'s new `deleteAllFieldsForUser`, wired into `executeErasure`. **A genuine, flagged-not-resolved naming overlap with Module 04's operand catalogue** (`risk_pct`/`hold_seconds`/`day_of_week`/`order_type`/`instrument` vs. this slice's `drv.*`-prefixed field ids for the same underlying facts) is documented in the migration's own header and this slice's report, not silently picked a side on. **A separate instance of the same erasure-bug class, found while fixing the fields one and initially left open and tracked, has now ALSO been fixed (2026-09-02, same day, dedicated follow-up dispatch)** — `rules`/`rule_evaluations` (Module 04) had the identical gap: `lib/rules/rules-repository.ts`'s new `deleteAllRulesForUser` closes it, same mechanism as `deleteAllFieldsForUser`, wired into `executeErasure` and documented in `docs/adr/0010`'s own follow-up addendum — see the matching 2026-09-02 decision-log entry below for the full write-up. `erasure.live.test.ts` is now 8/8 (a new dedicated regression test seeding a real `rules` row and a real, genuinely-frozen `rule_evaluations` row). 41/41 (now 41/42, 1 intentionally skipped) live-DB schema tests passing, `tsc`/`eslint`/`npm run build` all clean. **Slice 03b (strategy CRUD + versioning, §4.6) is now FULLY DONE (2026-09-04)** — full coder → tester → security-reviewer → qa gate sequence passed. Backend only (no UI, no field-creation flow, no trigger-condition authoring UI). `lib/fields/strategy-repository.ts` (`createStrategy`/`editStrategy`, mirroring `rules-repository.ts`'s guarded-UPDATE versioning shape exactly, built to avoid repeating Slice 10f's own found bug) + `lib/fields/strategy-validation.ts` (§4.4 capture-moment validation, §9 trigger-count soft warning) + `lib/entitlements/strategy-usage.ts` (real `strategy.create` counter wired into `defaultCanDeps`) + one new migration (`strategies_one_default_per_user` partial unique index, applied live, a real gap the coder found and fixed on its own — Slice 03a had left this implicit) + `docs/adr/0018` (edit reuses the `strategy.create` capability, documented reasoning). Independent tester verification PASS on every item, using a genuinely DIFFERENT concurrency mechanism than the coder's own two-connection proofs (same-session `Promise.all` double-submit vs. held-open-transaction), plus a real concurrent (not sequential) double-attempt on the default-strategy uniqueness constraint the coder's own suite never tried; `field_usages`' delete-then-reinsert race window confirmed closed both structurally and empirically. **Security-reviewer PASS on all 6 items (2026-09-04)** — entitlement-gate reasoning from ADR 0018 independently re-derived and confirmed sound; `isDefaultStrategy` bypass confirmed genuinely unreachable via repo-wide grep AND direct code reading; RLS confirmed on `strategies`/`strategy_versions`/`field_usages`; all SQL parameterized; both two-connection concurrency proofs spot-checked directly. Two non-blocking follow-ups, BOTH logged in the Infra gaps list (search "isDefaultStrategy has no built-in check" and "field_usages_owner_insert"): `isDefaultStrategy` has no built-in "does this user already have zero strategies" check (not exploitable today, no live caller — flagged for Module 08's future default-strategy wiring); `field_usages_owner_insert`'s RLS policy doesn't verify `used_by_id` ownership at the RLS layer (closed today only by the application layer — added as a further confirmed instance to the repo-wide FK-ownership-check gap already tracked). **QA PASS on 6 of 7 items directly, with the 7th (ledger currency) failing and then fixed as part of closing this entry out** — spec fidelity to §4.6/§6.2 confirmed against the literal flow diagram, both Infra-gaps follow-ups confirmed accurate, ADR 0018 confirmed complete, §4.4 validation spot-checked (50/50 tests), non-negotiables clean, no new untracked gap. 46 fields tests + 10 entitlement tests, all green. `tsc`/`eslint` clean; `npm run build` hit this session's own already-escalated host-memory OOM pattern (now reproduced 3 times this session across different slices) — TypeScript compilation itself clean every time, reported honestly as infra-unverified, not a pass. Field creation, trigger-condition authoring, and any UI all remain future sub-slices. **Slice 03c (field CREATION -- §4.1's pruning rule + §4.3's type/config validation, backend only) is now FULLY DONE (2026-09-08) -- full coder -> tester -> security-reviewer -> qa gate sequence passed (tester found and the coder fixed a real §4.1 pruning-rule gap: zero tolerance for word-order reordering/pluralization, even against the curated list's own entries -- see the matching decision-log entries for the tester's finding, the coder's fix, security-reviewer PASS 6/6 (2026-09-08), and this qa PASS).** Built: `lib/fields/field-validation.ts` (`checkPruningRule` -- a curated, hand-reviewable per-derived-field list of known duplicate-name variants matched after Unicode-aware normalization, deliberately NOT a full NLP/embedding-similarity system nor a `data_type`-based match, reasoning documented in the file's own header; `validateFieldConfig` -- §4.3's per-`data_type` config shape, e.g. `pick_one`/`pick_many` require non-empty distinct `options[]`, `number` requires `min < max` plus a positive `step`, `rating`'s `min`/`max` are optional-but-paired with a 1-5 default applied by the caller) + `lib/fields/fields-repository.ts`'s new `createField` (kind=`account`|`strategy_var`, entitlement-gated, cross-user strategy-ownership-checked, clean-error-on-collision) + `lib/entitlements/fields-usage.ts`'s new `countActiveCustomFields` wired into `defaultCanDeps` + `docs/adr/0019-field-creation-entitlement-gate.md`. **Entitlement decision**: gates on the ALREADY-EXISTING `fields.custom` capability (`free: 0, pro: null`, present in `capability-table.ts` since Module 01's own first entitlements slice with zero real callers until now) rather than gating transitively through `strategy.create` -- ADR 0019 has the full reasoning (a field can be `kind='account'` with no strategy relationship at creation time at all, and the two capabilities could diverge in a future pricing change even though they resolve identically today). **Field id generation scheme** (a genuine judgment call, §3.1's own `'str.<uuid>.pd_array'` is confirmed-by-re-reading to be an illustrative example, not a mandated format): `'acct.' || uuidv7` / `'str.' || uuidv7`, generated server-side in SQL via the same `retrospeq.uuid_generate_v7()` every other PK in this schema uses -- deliberately NOT slugifying the trader's name into the id (renames would make a name-derived id segment permanently stale per §4.5, and arbitrary-name slugification can collide independently of the real `name` uniqueness constraint) and NOT embedding `owner_strategy_id` in a `strategy_var` field's id (would leave a stale artifact after a future §4.5 promotion to `account`) -- full reasoning in `createField`'s own header comment. Real `(user_id, name, owner_strategy_id)` collisions (already DB-enforced by Slice 03a's two partial unique indexes) are caught and translated into a clean `FieldNameConflictError`, matching `lib/broker/accounts-repository.ts`'s own `isUniqueViolation` precedent, never a raw Postgres error reaching the caller. 49 pure unit tests (`field-validation.test.ts`, incl. 20 pruning-rule duplicate-variant cases across all 9 derived fields plus 6 genuinely-novel-name accept cases) + 21 live-DB tests (`fields-repository.live.test.ts`: both kinds, id-prefix shape, config normalization/defaulting, the pruning rule end-to-end, config validation end-to-end, kind/scope mismatch, name-length bound, the real unique-index collision on both the unscoped and scoped index, independence of the two indexes, a cross-user `ownerStrategyId` hijack attempt correctly rejected with `StrategyNotFoundError` and no row written, a malformed non-UUID `ownerStrategyId` short-circuited before ever reaching Postgres, entitlement gate free/Pro incl. gate-runs-before-ownership-check ordering, and cross-user RLS isolation both for uniqueness scoping and for direct row visibility via `asRole`), all green (70 new tests total). `tsc --noEmit` and `eslint` both clean. `npm run build` hit this session's own already-escalated, NEEDS_YOUR_INPUT.md-tracked host-virtual-memory OOM pattern at the "Collecting page data" phase (TypeScript compilation itself completed cleanly first, same signature as every prior occurrence this session) -- reported honestly as infra-unverified, not a pass; no new NEEDS_YOUR_INPUT.md entry needed since this exact failure mode is already tracked there. No new runbook entry (no alerting/background-job condition introduced -- `createField`'s errors are ordinary synchronous validation rejections, not §7.3-shaped alerting conditions). Field rename/archive/type-change/promotion (§4.5), the field-cap warning (§4.8), trigger-condition authoring (§4.7), and any UI (field picker, field editor) all remain future sub-slices, unchanged in scope. **Slice 03d (§4.5's field LIFECYCLE -- rename + archive, backend only) is now CODED (2026-09-08), coder pass only, NOT yet independently tested/security-reviewed/QA'd.** Built: `lib/fields/fields-repository.ts`'s new `renameField`/`archiveField`, plus three new error classes (`FieldRecordNotFoundError` -- deliberately NOT reusing `strategy-validation.ts`'s own differently-scoped `FieldNotFoundError` name, to avoid a future forced import alias; `FieldDerivedImmutableError`; `FieldInUseError`, §9's real `FIELD_IN_USE`). `renameField` reuses `createField`'s own `checkPruningRule`/`FieldNameConflictError`/`FieldNameInvalidError` verbatim (renaming TO a derived-duplicate name or an active-field collision is rejected the same way creating it that way would be) and confirms-then-surfaces the derived-field block cleanly BEFORE ever attempting the UPDATE the `fields_forbid_derived_update` trigger would otherwise reject with raw trigger text -- verified live, not assumed (a real `renameField(_, 'drv.session', _)` call asserted to throw the new typed error with no trigger-shaped text in the message). `archiveField` checks `field_usages` generically across BOTH `used_by` values (only `'strategy'` rows can exist in this repo today -- no Module 04 rule-authoring-against-the-registry pipeline exists yet -- but the query is written to need zero changes once one does), resolves dependent labels via a direct schema-qualified SQL join to `retrospeq.strategies`/`retrospeq.rules`+`rule_versions` rather than a new `lib/fields -> lib/rules` TS import (no such import exists anywhere in this repo today, confirmed by grep; AGENTS.md's own "Analytics code cannot import rule code" non-negotiable made this feel worth avoiding by construction rather than by discipline alone), is idempotent on an already-archived field (no re-throw, returns the existing `archivedAt`), and closes the real check-then-write TOCTOU window (a concurrent `editStrategy` inserting a fresh `field_usages` row between the friendly pre-check and the write) with a single guarded UPDATE whose own WHERE clause re-checks `not exists (... field_usages ...)` atomically -- the same "encode the real invariant in the guarded write, not just an earlier read" posture this build's own Slice 7/10b races already established, applied here up front rather than found later. **Two judgment calls made explicit per this slice's own dispatch instruction, documented in both this entry and a substantial code comment in `fields-repository.ts` itself, not silently assumed either way**: (1) "change a field's type" (§4.5) needs NO new function -- it is `createField(...)` (already built, Slice 03c) optionally followed by a separate, caller-initiated `archiveField(...)` call on the old field id, decided NOT to auto-archive the old field as a side effect, since §4.5's own row never says the old field is archived automatically and the old field's captured history stays independently valid and useful; (2) `pick_one`/`pick_many` option add/remove is explicitly DEFERRED, not built -- removing an option needs a genuinely new `config` jsonb shape (a per-option soft-archive marker) this schema does not have today, is real design work outside a "rename + archive" dispatch's own scope, and has no caller yet (no field-editor UI exists at all). 19 new live-DB tests (`fields-repository.lifecycle.live.test.ts`): rename basics/trim/name-length, the pruning rule applied to rename (both an exact derived-name match and a curated variant), a real active-field name collision, a self-rename no-op, an archived-field rename reusing an active field's name (proving the two partial unique indexes' `state = 'active'` scoping), the derived-field block on both operations (message asserted clean of trigger/raise-exception text), not-found handling, idempotent double-archive, and -- the dispatch's own required centerpiece -- archiving BLOCKED by a real `field_usages` row seeded through Slice 03b's own real `createStrategy` (dependents array asserted to name the actual strategy), then confirmed to UNBLOCK once `editStrategy` rebuilds `field_usages` with that field removed, plus cross-user adversarial isolation (RLS + app-layer ownership check) for both operations. Full `lib/fields` suite re-run clean: 186/186 (167 pre-existing + 19 new). `tsc --noEmit` clean, `eslint .` clean (0 errors, the same 19 pre-existing warnings). **`npm run build` completed CLEAN this time** (~5.7GB free host memory checked first, no leftover node processes found before starting) -- the first time this exact session's own escalated OOM pattern did not recur, consistent with it being genuine host memory pressure rather than a code defect (matches the prior session's own "killing leftover processes recovers enough headroom" finding). No new migration (no schema change -- both operations write within `20260902010000_field_registry_schema.sql`'s existing columns). No new ADR (a Module 03 spec-interpretation judgment call, not a 00-foundation convention deviation -- documented in-file per this slice's own explicit instruction: code comment + this report, matching `docs/adr/0018`'s OWN threshold for when a judgment call gets a dedicated ADR file rather than an in-file comment). No new `docs/runbook.md` entry (same reasoning as Slice 03c's own entry just above -- `renameField`/`archiveField` are ordinary synchronous, caller-facing rejections, not a §7.3-shaped alerting/background-job condition). Promotion (§4.4/§6.1), trigger-condition authoring (§4.7), the field-cap warning (§4.8), pick_one/pick_many option add/remove (deferred above), and any UI all remain future sub-slices, unchanged in scope. **Slice 03d is now FULLY DONE (2026-09-08)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, including a coder follow-up round that closed a real TOCTOU gap the tester found in `archiveField`'s guarded UPDATE (Postgres's `FOR KEY SHARE`/`FOR NO KEY UPDATE` lock modes don't actually conflict -- fixed with `pg_advisory_xact_lock(hashtext(fieldId))`, re-verified twice from two different call paths) -- see the matching decision-log entries (search "Module 03 Slice 03d") for the full multi-round write-up. Committed as `bc5425c`. **Module 05's own first slice, Slice 05a (the module's core schema -- `analytic_config`/`analytic_user_suppression`/`user_cohorts`/`findings`/`detections`/`analytic_renders`/`finding_rule_links`, 100% RLS coverage -- plus the `canRender` registry runtime, §4.8, and the ESLint-enforced Module 04/05 isolation boundary, §7.5/AGENTS.md's own "Analytics code cannot import rule code" non-negotiable -- backend only, no UI, no edge/detection engine, no real analytic computation) is now FULLY DONE (2026-09-08)**, closing Module 05's foundational schema and registry runtime. Two full fix-and-reverify rounds: the first independent-verification pass found 5 issues (a fail-closed-guarantee coverage gap since closed with new tests, the `user_cohorts` RLS deviation re-derived clean, three real ESLint-boundary bypasses -- dynamic import, re-export indirection, deep relative-path nesting -- an inaccurate "all failures in one file" claim since corrected, and an undocumented §4.8 "config cached 60s" deviation); a coder fix dispatch closed the migration-idempotency gap (all 7 tables' `CREATE POLICY` statements now guarded, verified via 4 independent consecutive re-applies), built a real 60s in-process TTL cache for `getAnalyticConfig` with defensive never-cache-a-failure semantics, and closed two of the three ESLint bypasses with a principled fix (a single depth-agnostic regex shared character-for-character across a `no-restricted-imports` pattern and two `no-restricted-syntax` selectors covering both `Literal`- and quasi-only-`TemplateLiteral`-sourced dynamic imports -- confirmed via direct `no-restricted-imports` source inspection that it structurally can never see `ImportExpression` nodes at all, motivating the custom selectors); a second independent-verification round then found one precise residual gap in that fix (a zero-substitution template literal, `` import(`@/lib/rules/x`) ``, wasn't covered by the `Literal`-only selector), closed by a small follow-up coder dispatch adding the matching `TemplateLiteral`-source selector. The third bypass (re-export indirection through a file outside `lib/analytics/**`) was deliberately, explicitly deferred as accepted residual risk -- `retrospeq-security-reviewer`'s own blocking-authority PASS makes this conditional: **it must be closed (via `dependency-cruiser` or equivalent import-graph tooling) before Module 05's edge/detection-engine slices land real analytic computation** -- tracked durably in the Infra gaps list above, not just the decision log, plus a canary test (`eslint-boundary.test.ts`'s "KNOWN RESIDUAL RISK (b)" case) that fails loudly if the gap is ever accidentally closed without anyone noticing or reopened wider. `retrospeq-security-reviewer` and `retrospeq-qa` both gave clean PASSes on the final corrected slice, independently re-deriving rather than re-trusting prior rounds (fresh RLS reads, a fresh live re-application of the migration, fresh cache adversarial scenarios, a fresh reproduction of the fixed template-literal case) -- QA additionally caught and fixed two small same-day documentation-staleness slips (a runbook entry that still claimed no caching layer existed after the caching fix landed, and a stale top-level PROGRESS.md synthesis paragraph). See the matching decision-log entries (search "Module 05 Slice 05a") for the full multi-round write-up. **Slice 03e (field promotion, §4.5/§6.1) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, including one round-trip where the tester found a real (if ultimately benign) gap in the coder's own race-surface documentation -- `promoteField` racing a concurrent `rebuildFieldUsagesForStrategy` doesn't lock-block at the Postgres level (the same `FOR KEY SHARE`/`FOR NO KEY UPDATE` non-conflict class Slice 03d's `archiveField` bug belonged to), but traced and confirmed harmless because `promoteField` never reads `field_usages` and the rebuild's own guard never checks `kind`/`owner_strategy_id` (what promotion actually touches) -- fixed with an honest, complete doc update (not a reflexive copy of Slice 03d's advisory-lock fix), independently re-derived and agreed sound by `retrospeq-security-reviewer` on both correctness AND security-posture grounds (no cross-user exposure, no entitlement-cap bypass). `promoteField`/`findPromotionCandidates` built in `lib/fields/fields-repository.ts`, reusing `fetchFieldForLifecycleOp` and `field-validation.ts`'s `normalizeForMatch` (now exported) rather than duplicating logic. **This closes Module 03's entire backend** (schema through promotion, Slices 03a-03e, all coded/tested/security-reviewed/QA'd). One new non-blocking gap found along the way, tracked in the Infra gaps list above (distinct from the existing `field_usages_owner_insert` entry -- that one is cross-user RLS, this one is same-user application-layer scope): `field_usages` never verifies a `strategy_var` field's `owner_strategy_id` actually matches the referencing strategy. **Trigger-condition authoring (§4.7) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, the most architecturally significant Module 03 slice yet (the first genuine Module 03/04 cross-module integration). The coder read past the dispatch's own suggested framing (Module 03 §4.7's 'by the boundary test it is a rule... evaluated by Module 04') and found Module 04 §5.2 explicitly contradicts it ('Machine-evaluated only. Self-attested statements belong in Module 03 as trigger conditions'), plus that Module 04 Slice 1's own original migration had already deferred a dedicated `trigger_evaluations` table for exactly this purpose -- followed the spec's actual pre-planned schema instead of the suggested reuse-Module-04's-rules-pipeline framing, documented in `docs/adr/0022`. `trigger_evaluations` (Module 04-side schema, owner-SELECT-only, zero client write, immutability triggers confirmed to hold against both authenticated AND raw service_role attempts) is a genuinely separate table from `rules`/`rule_versions` -- no cross-module table write occurs, so this doesn't touch the Module 04/05 ESLint isolation boundary at all (confirmed by QA as correctly distinguished in the ADR). `freezeTriggerEvaluationsForTrade` wired into BOTH `confirm.ts` freeze paths (`confirmDay`/`autoConfirmStaleTrades`), same transaction as the existing rule-evaluation freeze, atomicity confirmed live with a forced-rollback test. A real Pro-tier paywall bypass was found and closed along the way: `createTriggerCondition` reuses `strategy.create`'s entitlement gate (matching `editStrategy`'s ADR 0018 precedent) -- without it, a free user's onboarding-created default strategy would have let them author trigger conditions for free; the tester's own re-verification went further and rewrote the coder's test to exercise the REAL default-strategy path (`createStrategy({isDefaultStrategy: true})`), not an unreachable synthetic one. `trigger_evaluations` was checked specifically against the exact erasure-bug class that has now hit this build twice (`fields`, then `rules`, both requiring an explicit pre-delete function before Module 01's `admin.deleteUser()` cascade) -- confirmed NOT a third instance, already safely reached by the existing `deleteAllTradingAccountsForUser` cascade (`trigger_evaluations -> trades -> trading_accounts`, all `on delete cascade`, same transaction as the erasure flag) -- the reasoning is now written into a new `docs/adr/0010` addendum so a future reader doesn't have to re-derive it or wonder if the pattern is repeating. Hedge-word detection (§2.4) built as a soft warning only, never a block, length-capped with static patterns (no ReDoS/injection surface). The already-tracked stale `lib/privacy/export.ts` Infra gap was updated to explicitly name `trigger_evaluations`/`trigger_conditions` as newly-missing too, rather than letting that be rediscovered separately later. **This closes Module 03's entire backend, including its one real cross-module integration point with Module 04.** Remaining Module 03 scope, all future work: the field-cap warning (§4.8 UI) and ALL of Module 03's UI (field picker, field editor, the strategy builder, the strategy screen -- zero UI exists for this module today). **Module 05's edge engine core statistics (section 4.1-4.3) is now FULLY DONE (2026-09-09)** -- the most heavily-scrutinized slice this build has produced, and the first real analytic computation Module 05 has ever run. Full coder -> tester -> security-reviewer -> qa gate sequence passed, but only after two full rounds of real, blocking findings, each independently confirmed and each properly fixed rather than smoothed over: (1) a genuine statistical defect -- the coder's own false-positive-rate validation (1,000 synthetic no-effect users) measured a family-wise FPR of 0.079 against nominal alpha=0.05, and an independent tester investigation (a from-scratch pure-Python/mpmath simulation sharing zero code with the implementation) isolated the exact mechanism: min(p_winRate, p_avgR) treated as a single per-segment p-value is not itself a valid p-value, breaking Holm-Bonferroni's family-wise-error-rate guarantee one layer before Holm's own correction even runs. Fixed with a Sidak/Bonferroni adjustment on the two-test combination before Holm correction (gates.ts's computeRawPValue); re-measured at full scale (N=10,000, two independent seeds) confirming the family-wise rate drops to ~0.035-0.041, comfortably under nominal. (2) A genuine concurrency defect -- the same tester round live-reproduced (via real pg_stat_activity lock-wait polling, not timing) two simultaneously-active findings rows for the identical (user, strategy, field, segment) tuple, since nothing at the DB level enforced at-most-one-active-row-per-tuple and READ COMMITTED let two concurrent writers each miss the other's in-flight insert. Fixed with a two-layer defense (a partial unique index as an unconditional backstop, plus a pg_advisory_xact_lock for graceful handling) matching this repo's own established archiveField/promoteRuleSeverity pattern -- which then surfaced a THIRD, smaller finding in the follow-up security review: the per-segment lock-acquisition loop wasn't sorted into a deterministic order, risking a genuine deadlock under concurrent recomputes of the same strategy (the same problem class rebuildFieldUsagesForStrategy had already solved once for a sibling module) -- fixed with the same sort-before-lock discipline, verified with a pg_locks-inspection test stronger than 'no deadlock error occurred.' A final QA pass found one small, mechanical, non-statistical gap (a missing service-role-inventory allowlist entry, Module 01 section 7.2's mandatory no-exceptions test) -- closed directly without a new gate cycle. Every fix is independently re-verified, every ADR (0023-0026) reflects the real, final, corrected reasoning, not the original (sometimes wrong) first-draft rationale. Full detail across many decision-log entries (search "Module 05" from this point in the log). **Module 05's detection engine (section 4.4's three gates + the section 4.5 v1 five-detection catalogue) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed (coder ran in a prior, separately-terminated session; tester/security-reviewer/qa all ran and passed in this resumed session -- see the matching 2026-09-09 decision-log entries, search "TESTER GATE" and the security-reviewer/qa entries immediately around it, for full detail). 78 tests (unit 100%/99%/94% line coverage across gates.ts/occurrence-detectors.ts/detection-engine.ts, property-based invariant tests, live-DB RLS cross-user isolation, a byte-for-byte ISO-week-convention cross-check against Module 04's own implementation confirming no divergence), all green. The one standing conditional from Slice 05a's security review -- the ESLint Module 04/05 isolation boundary's re-export-indirection bypass, explicitly deferred THEN on the condition it be closed before real detection-engine computation landed -- was genuinely CLOSED this slice, not re-deferred: `dependency-cruiser` installed and verified (via a reconstructed real bypass fixture) to catch the exact gap the ESLint-only boundary couldn't. One real, non-blocking gap found (by tester, independently confirmed by security-reviewer and qa): `rule_proposable` (spec section 5's own named mechanism for enforcing "the count tier never proposes a rule on frequency alone") does not exist anywhere in the code or schema -- not currently exploitable (repo-wide grep found zero downstream readers of `detections` today), tracked in the Infra gaps list with a binding condition that it must be added before any code reads the `detections` table. Section 4.7's "never name the syndrome" rule confirmed clean (this slice renders nothing yet; internal `analytic_id` strings and code comments only, no user-facing diagnosis language). ADR 0029's supersession-key claim verified against the actual `writeDetectionsForUser` code, not just trusted. **Next: orchestrator's call between Module 03's remaining UI work (field picker, field editor, the strategy builder, the strategy screen, the field-cap warning section 4.8 UI -- zero UI exists for Module 03 today, though a separate concurrent session has uncommitted strategy-builder UI work in progress in this same tree as of 2026-09-09, not yet gated or committed) and Module 05's remaining scope (section 4.6 improvement detection, section 4.11 decay checking, section 4.10 the weekday canary, `rule_proposable`'s own addition per the binding Infra-gaps condition above, shadow-harness wiring for real analytics) -- no hard blocker either way, per standing build-order judgment.** **UPDATE 2026-09-09 (retrospeq-qa, final gate on Module 03 strategy list + creation builder UI, app/(app)/strategies/**): PASS, cleared to commit.** This is a deliberate out-of-order landing, not a silent reversal of the build-order decision recorded immediately above in this same cell (that concurrent-session UI work had already been built, uncommitted, before this cell's own note about it was written) -- the tester -> coder-fix -> security-reviewer -> qa gate chain this cell called for has now fully run: independent tester CONDITIONAL PASS (found the STRATEGY_BUILDER_PARTIAL orphan-strategy gap and pushed back on it being merely documented) -> coder fix (deleteOrphanedStrategyShell, a narrow guarded compensating delete) -> security-reviewer PASS (6/6) -> this qa pass, all dated 2026-09-09, see that date's Decision-log entries for each. This qa pass independently re-ran all three of the review chain's own test files against the live DB/dev server rather than trusting prior pass counts (orphan-cleanup live test 3/3, entitlement defense-in-depth live test 3/3, strategies-builder E2E independent-verify 3/3 -- all still green) and re-captured all 7 design-system screenshots itself (no red/green, exactly one primary .rq-btn per view, .rq-num correctly on genuine numbers with one pre-existing non-blocking cosmetic nit on the success screen's strategy-name span still present, not yet fixed). One residual, explicitly non-blocking item carried forward: zero unit/component tests exist for actions.ts/StrategyBuilder.tsx beyond the E2E/live-DB coverage -- judged acceptable to ship given the security-relevant paths (two-phase write, entitlement gate, compensating delete) all have genuine live-DB/E2E proof, but flagged as a real, trackable gap against this repo's own rules/actions.test.ts precedent, not silently closed. Full detail in this date's qa Decision-log entry.** **UPDATE 2026-09-09 (full coder -> tester -> security-reviewer -> qa chain, Module 05 `rule_proposable` + section 4.6 improvement detection): PASS, cleared to commit -- all four gates independently verified rather than trusting prior reports, see this date's Decision-log entries (search "PART 1 -- rule_proposable" for the coder entry; the tester, security-reviewer, and qa entries are dated the same day immediately above/below it in the log).** This closes the standing, binding `rule_proposable` Infra-gaps item (now struck through in that list) and builds section 4.6's "a pattern that was above base rate for >= 4 weeks and has been absent for >= 4 weeks" as a genuinely new `direction: 'active' | 'improved'` computation sharing gate machinery with the existing section 4.4 engine via a refactored `computeDetectionCore`, not a parallel reimplementation. Section 4.4's own already-shipped behaviour is proven byte-identical (zero existing tests edited, only extended) by both the tester's and the qa pass's own independent re-runs. Real, non-cosmetic findings along the way, not a rubber-stamped chain: the coder found and fixed a genuine bug in its own dispatch's design (`computeDetectionCore` returning a non-null `'incident'`-classified result on persistence failure, not `null` -- a naive nullness check in the new improvement path would have let a too-short elevated period wrongly qualify); the tester found and fixed a real gap (`repository.ts`'s new `withServiceRoleConnection` caller was missing from the repo-wide `service-role-inventory.test.ts` allowlist, plus thin property-based coverage on the improvement invariants, both closed same-pass); the security reviewer independently confirmed (not re-derived from the other two) that `rule_proposable` can never be `true` for an incident or a bare count -- the exact non-negotiable this whole tracked gap existed to protect -- and that the mutual-exclusivity tie-break between the two write paths is race-safe under the existing advisory-lock/transaction shape with zero index changes needed; qa confirmed section 4.7 ("never name the syndrome") compliance across every new comment/ADR/test string, genuine ISO-calendar-week bucketing (not a day-count approximation) for the new 4-week thresholds, and fixed one stale trailing sentence in the Infra-gaps bullet itself that still claimed "not yet independently re-verified" after both reviews had already passed. No UI in this slice (pure computation + schema + migration `20260909040000_detections_direction_and_rule_proposable.sql`), so no screenshot self-check was required. New ADR `docs/adr/0031-detection-direction-and-rule-proposable.md` plus an addendum to `docs/adr/0029` closing that ADR's own explicitly-flagged open question about the "now-stale forward row" case. Explicitly OUT of scope, not silently absorbed: section 4.11 decay checking, section 4.12 asset-class suppression, section 4.10's `spec.weekday` canary, and all Module 05 UI -- next candidates for a future Module 05 slice, orchestrator's call per standing build-order judgment. **Module 03 fields management screen (§4.5/§6.1) CODED, 2026-09-09** — `app/(app)/fields/{page.tsx,actions.ts,FieldsList.tsx,new/{page.tsx,FieldCreateForm.tsx}}`: a list/management screen (derived fields as read-only chips, custom fields grouped active/archived with rename/archive/promote wired to the already-reviewed `lib/fields/fields-repository.ts` backend) plus a standalone field-creation flow at `/fields/new`, entitlement-gated on `fields.custom` the same way `/strategies/new` gates `strategy.create`. One new repository read added (`fetchFieldsForManagement`, additive, does not touch any existing exported function's behaviour — full existing `lib/fields` suite, 272 tests/17 files, still green after the change). Field-cap warning UI (§4.8) explicitly NOT built — scoped out per this slice's own dispatch, a separate follow-up. Self-checked via Playwright screenshots against a real Pro-plan and free-plan user on the live dev DB (full lifecycle: create account-kind + strategy_var-kind fields, rename, archive-with-dependents-blocked, promote) — all screens confirmed clean against the design-system rules (no red/green, exactly one primary `.rq-btn` per view, `.rq-num` on the archived-count only where a real number exists). `npx tsc --noEmit`, `npx eslint .` (0 errors; same pre-existing warning set elsewhere in the repo, none in the new files), and `npm run build` (Turbopack, 28 routes incl. `/fields` and `/fields/new`) all clean — build needed one retry due to this session's own well-documented host-memory OOM pattern in the "Collecting page data" phase, not a code issue. **Not marked done by this coder dispatch** — needs the tester -> security-reviewer -> qa chain before that call, per this repo's own convention. One incidental infra finding while self-checking: `chromium_headless_shell-1234` crashed outright (fatal exception, not a memory/disk issue) launching against this session's dev server; the already-documented `chromium-1223` (full, non-headless-shell Chrome) workaround from the ENOSPC entry below also fixes THIS distinct crash mode, so `playwright.config.ts` now reads an optional `PLAYWRIGHT_CHROME_PATH` env var (unset by default, zero effect on every other run) rather than requiring every future agent to rediscover the same workaround from scratch. **UPDATE 2026-09-09 (full coder -> tester -> security-reviewer -> qa chain, fields management screen): PASS, cleared to commit.** Independent tester pass added 61 new tests (49 mocked action-layer unit tests, 8 live-DB lifecycle tests, 4 real-browser E2E tests) and found/fixed one real defense-in-depth gap: `renameFieldAction`'s Zod schema checked `.min(1)` on the RAW un-trimmed name, letting a whitespace-only value reach the repository layer and fall into a misleadingly-*retryable* generic error instead of the correct non-retryable one -- fixed with `.trim()` on the schema plus a dedicated `FieldNameInvalidError` catch branch, regression-tested. Security-reviewer PASS on all 6 applicable checklist items (2 correctly recorded N/A -- no credential table, no broker-connect path in this slice) -- userId/ownership re-checked at the repository layer independent of RLS, entitlement gate genuinely server-side (re-verified live: a free-plan session calling `createFieldAction` directly is rejected `ENTITLEMENT_LIMIT`), all six new `lib/rate-limit/config.ts` scopes correctly wired, zero raw SQL/`eval`/compound-rule/XP-adherence surface, RLS unchanged and still 41/42 passing live. This qa pass independently re-ran every test file rather than trusting prior counts (57/57 unit+live-DB, 4/4 E2E, all reproduced fresh) and re-captured/read all 8 design-system screenshots directly: no red/green anywhere (the one accent color used for every primary button is amber, never a success/danger pair), exactly one primary `.rq-btn` on every screen including both the free-plan-gate and Pro-empty states, `FIELD_IN_USE` dependents rendered inline in a neutral well naming the real dependent strategy per section 9's own wording. Confirmed the one pre-existing, non-blocking design-system nit the tester flagged (`FieldCreateForm.tsx`'s success screen wrapping the new field's NAME in `.rq-num`) is genuinely a repeat of `StrategyBuilder.tsx`'s own identical pre-existing pattern (line 228, visually confirmed in this pass's own screenshot too), not a new regression -- correctly tracked as a repo-wide sweep item, not fixed piecemeal in one file. Confirmed `vitest.config.ts`'s `coverage.include: ['lib/**/*.ts']` structurally excludes every `app/**/actions.ts` file in this repo (9 files total, not unique to this slice) from any coverage percentage -- a genuine, pre-existing, repo-wide tooling gap, correctly left named rather than fixed unilaterally by one UI slice's own gate (widening it is a repo-wide decision affecting 8 other slices' own reported numbers). **This closes Module 03's fields management screen end to end (coder -> tester -> security-reviewer -> qa, all PASS).** See the matching 2026-09-09 "QA GATE (FINAL, pre-commit), Module 03 fields management screen" decision-log entry for full detail. **Module 05 sec 4.11 decay checking + sec 4.12 asset-class suppression is now FULLY DONE (2026-09-10)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed; this slice's own coordinating session went offline mid-handoff after tester/security-reviewer both passed, picked up by the orchestrator for the final QA gate and commit. `lib/analytics/decay-engine/` (pure `decay-engine.ts` + `repository.ts`, wired into `lib/ingestion/sync.ts`'s post-sync hook) implements sec 4.11's "every 30 new trades: recompute; if current_delta < 0.5x delta_at_graduation, streak += 1 else reset; streak >= 2 emits decay signal" against `delta_win_rate` (ADR 0032, ADR 0033), with per-link error containment so one corrupt `finding_rule_links` row never blocks its neighbours on every future sync. `lib/analytics/edge-engine/asset-class-suppression.ts` + `edge-engine/repository.ts`'s `writeShadowedFindings` implement sec 4.12: a strategy counts as crypto only when EVERY distinct eligible-trade platform is `binance`/`bybit` (never `manual`), suppressed segments never reach `findings` at all, logged to `shadow_runs` instead (ADR 0033). Security reviewer found one real, non-blocking gap (missing `user_id` scoping on the findings state-transition UPDATE) -- confirmed fixed in the final code by this qa gate. Tester's and security reviewer's shared product-judgment finding (all-or-nothing suppression granularity) was taken to the project owner by the orchestrating session; decision (keep as-is, track as product debt) is now recorded as a dated addendum to `docs/adr/0033`, closing a real ledger-currency gap this qa gate itself found and fixed rather than left silent. 39 slice-specific tests (24 pure + 15 live-DB) plus the 3-test service-role-inventory allowlist check, all passing, independently re-run by tester/security-reviewer/qa across three separate dispatches. `tsc`/`eslint`/`npm run build`/`check:import-boundaries` all clean. No UI in this slice. See the matching 2026-09-10 TESTER/SECURITY REVIEWER/QA Decision-log entries for full detail. **Sec 4.10 `spec.weekday` canary CODED, 2026-09-10** (`lib/analytics/spec-weekday/`) — the last named-but-deferred Module 05 gap (sec 4.9's own shadow-harness scope note tracked this since Phase 0) is now built: the canary reuses the EDGE engine's own Holm-corrected `computeFamilyFindings` gate machinery (a flagged, deliberate divergence from this slice's own dispatch text, which pointed at the detection engine instead — see `weekday-canary.ts`'s own header and this date's CODER decision-log entry for the full reconciliation), is hard-blocked from promotion at two independent structural layers (`permanently_shadow` on the registration plus `promotion.ts`'s own id-keyed `PERMANENTLY_SHADOW_ANALYTIC_IDS`, not just a missing call site), and is wired into `sync.ts`'s post-sync hook so its own render-rate metric (`render-rate.ts`, §8 target < 5%) has real data to answer from. `docs/adr/0034` records why it must never promote. **UPDATE 2026-09-11 (full coder -> tester -> security-reviewer -> qa chain, sec 4.10 `spec.weekday` canary): PASS, committed and pushed as `716e1a0`.** This table row was found stale by this date's cold-start orchestrator run (still reading "Not marked done by this coder dispatch — needs tester -> security-reviewer -> qa" after all three follow-on gates had already run and passed, dated 2026-09-10/2026-09-11 — see the Decision-log entries and the top-of-file "Current task" AT A GLANCE block, which HAD already been kept current) — fixed here per this build's own ledger-currency convention. **This closes Module 05 section 4.10 end to end.** **Section 4.9 (shadow harness wiring for real analytics), tracked open since Phase 0, is now judged SATISFIED as of this same date** — not from vibes, from direct code evidence: `runShadowAnalytic`/`runShadowAnalyticBatch` (the generic harness runner built in Phase 0 against synthetic fixtures only) now has a genuine non-test production caller (`lib/analytics/spec-weekday/repository.ts`), and the edge engine's `writeShadowedFindings` (`lib/analytics/edge-engine/repository.ts`) independently writes real, governance-suppressed findings computations to `shadow_runs` on every sync. Both paths are wired into `lib/ingestion/sync.ts`'s post-sync hook and run against real (not fixture) data whenever real trades exist. The harness's own promotion criteria (shadow→beta: ≥30 real accounts, manual inspection on ≥10; beta→live: ≥4 weeks, no accuracy complaints) remain necessarily unexercised — there are no real production users yet, a fact about the product's launch stage, not a code gap — so "wiring" (the harness is a real, load-bearing part of the analytics pipeline, not a stub) is the correct and complete reading of what §4.9 itself asks for; the promotion criteria themselves are a runtime/ops decision for whenever real users exist, not a coding task. Logged here rather than left as a perpetually-open item nobody re-examines. **Module 03/05's remaining genuine scope, re-surveyed against both specs directly (not from memory) this same date**: Module 03 §5.1's own UI element list names "the strategy screen with per-field finding state" as a distinct, still-unbuilt UI surface (list + builder + fields-management + field-cap-warning UI all now exist; a per-strategy detail/view screen does not — confirmed by `find app -iname "*strategies*"` and `grep href` against `app/(app)/strategies/page.tsx`, zero links to any per-strategy route). Module 05 §5 states plainly "This module renders nothing. It supplies typed payloads" — so Module 05's own remaining "UI" scope is not a Module 05-owned screen at all, it's exactly this Module 03 strategy-detail screen (consuming `FindingPayload`/§5.1's reference markup) plus, later, Module 06's weekly review (Phase 4, not yet in scope). No fetch/read path for `findings` rows exists yet anywhere in `lib/` (confirmed by grep — only write paths exist) and the `canRender` registry runtime already defines a `'strategy'` surface (`lib/analytics/registry-runtime.ts`) with no caller yet, confirming this was the intended next consumer. **Picked as the next task**: build the Module 03 §5.1 strategy-detail screen (read path + UI), the one item that closes real, concretely-scoped, spec-named debt in both modules simultaneously. |
-| 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | Not started |
+| 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | **In progress, started 2026-09-11.** Module 03's UI (all 6 §5.1 elements) and Module 05's backend both fully shipped first, per build order. Module 06 Slice 1 (schema for `reviews`/`review_prompts`/`prompt_history` + daily close-out screen completion, stories 1.1-1.4) CODED 2026-09-11. **TESTER PASS also 2026-09-11: schema/RLS (27/27 new cross-user tests), the coverage-gap proactive check (7/7, true/false positive and negative all confirmed), and `writeLateCaptureAction`'s own ownership/strategy-version security boundary (7/7) are all genuinely solid — but a real, live-DB-reproduced blocking bug was found: story 1.3's own "excluded from judgment findings" acceptance criterion is false today (`lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segmentation/finding computation — reproduced live, 2/2 new tests FAIL on purpose in `captured-late-exclusion.live.test.ts`, encoding the spec's real requirement). See the matching 2026-09-11 "TESTER PASS" Decision-log entry for the full write-up. **BUG FIXED, same day (2026-09-11):** `fetchCapturesForTrades` now excludes `captured_late = true` rows (`and captured_late = false` in its own WHERE clause) — both tester tests now PASS, full `lib/analytics/edge-engine/**` suite (13 files/115 tests) plus adjacent decay-engine/weekday-canary/distributions-repository/arm-matching regression suites all still green, `tsc`/`eslint`/`check:import-boundaries`/`npm run build` all clean. See the matching 2026-09-11 "BUG FIX" Decision-log entry for the full write-up, including the blast-radius check across detection engine/decay engine/asset-class suppression/weekday canary. **Ready for security-reviewer now** (this coder's own call, not qa/security-reviewer's "done" call). Not committed, not pushed. |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 03 SEC 5.1 STRATEGY-DETAIL SCREEN (per-field finding state) -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder (picked up from an interrupted dispatch, cut off by a host-level crash before it could write its own ledger entry -- verified complete, not redone: clean tsc/eslint/tests, two self-check screenshots read and confirmed correct) -> tester (found a real coverage gap, 88.88% on the two fail-closed `catch` branches in `findings-service.ts`) -> coder-fix (closed it, 96.82%, no bug found -- both branches already did the right thing, they just weren't exercised) -> security-reviewer (PASS, cross-user isolation confirmed at three independent layers: RLS policy, explicit repository filter, and an ownership check ahead of the read; one non-blocking timing side-channel noted -- a gated-off field's payload is byte-identical to a zero-rows field's but takes a hair longer, same-user-only, arguably an intended paywall signal) -> qa (PASS on all 9 of ADR 0035's documented judgment calls, independently screenshot-verified) chain, all dated 2026-09-11 Decision-log entries (search "strategy-detail" / "findings-service"). This is the FIRST place in the repo that reads `retrospeq.findings` back out of the database -- every prior Module 05 slice only ever wrote to it -- and the first real consumer of `FindingPayload` as an actual object rather than a type comment. New route `/strategies/[id]` renders one `.finding` card per captured field: a synthesized win-rate/avg-R statement for a confident/provisional result (styled identically, per ADR decision #5), a plain "no difference detected" for `null_result`, and an honest "Not enough data yet" -- rendered identically whether the field genuinely has zero rows or is silently gated off by plan/kill-switch, per Module 05 section 4.8's fail-closed contract -- never an error, never alarming. A bad/foreign strategy id gets a real 404, not a friendly same-URL message (no plausible stale-bookmark case exists for a strategy id, confirmed by qa: no strategy-deletion path exists anywhere in the repo today). No second entitlement gate was added -- relies solely on the already-wired `canRender`/`min_plan` check, avoiding two independently-maintained gates for the same fact. **This closes Module 03 section 5.1 end to end -- the last named UI element of that section.** One process item handled by this session, not left stale: the `supabase/.temp/` CLI-local-state directory (untracked debris, not part of the feature) was added to `.gitignore` rather than committed or left to recur in every future `git status`. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-10/2026-09-11 Decision-log entries, search "spec.weekday" / "weekday canary"). The promotion-block mechanism (a `PERMANENTLY_SHADOW_ANALYTIC_IDS` allowlist ORed unconditionally into `evaluateShadowToBetaPromotion`, regardless of caller-supplied options) was adversarially tested by both the tester and the security reviewer independently, and the security reviewer confirmed no second promotion entry point exists anywhere in the repo. The render-rate metric (section 4.10/section 8's <5%-of-users target) is a real, callable, ongoing function (`fetchWeekdayCanaryRenderRate`, wired into `docs/runbook.md`), independently spot-checked by the tester at 3.00% via a throwaway 1000-trial synthetic no-effect study (deleted after, per convention). `docs/adr/0034-weekday-canary-permanent-shadow.md` was confirmed by qa to read as a durable warning against ever promoting this analytic, not just a changelog entry. No UI in this slice. **This closes Module 05 section 4.10 end to end.** (Superseded CODER-stage note, now folded into this entry rather than left as a separate stale block: "CODED, self-checked, ready for tester -> security-reviewer -> qa.") Built the last named-but-deferred Module 05 gap: `lib/analytics/spec-weekday/` (`weekday-canary.ts` -- pure gate computation; `render-rate.ts` -- the §8 tracked-metric pure query; `repository.ts` -- DB fetch/write/recompute, wired into `lib/ingestion/sync.ts`'s post-sync hook as `recomputeWeekdayCanaryForUser`, same best-effort try/catch shape as every sibling §4.13 job) plus `docs/adr/0034-weekday-canary-permanent-shadow.md`, a `docs/runbook.md` update (the pre-existing "Shadow analytic diverging from expectation" entry, which had explicitly deferred this exact implementation, is now updated to describe the real thing), and two structural promotion-blocking layers in `shadow-harness/promotion.ts` (`permanently_shadow` on the registration itself, plus a NEW `PERMANENTLY_SHADOW_ANALYTIC_IDS` constant, id-keyed, ORed into `evaluateShadowToBetaPromotion` so a future caller that forgets to pass `{ permanentlyShadow: true }` still cannot promote it -- proven by a new test asserting exactly that "no options argument at all" case). **One flagged, deliberate reconciliation against this slice's own dispatch text** (logged per AGENTS.md §12): the dispatch pointed at `lib/analytics/detection-engine/` as "the existing gate machinery" to model this on, but §4.10's own wording ("the multiple-comparisons trap in its purest form") names the EDGE engine's own defining feature (Holm correction across a segment family) — the detection engine's volume/rate/persistence gates have no p-value or multiple-comparisons concept at all, and "Tuesdays underperform" is a win-rate/avg-R segment claim (`find.pickone`'s own shape), not an occurrence-frequency claim. Built against `edge-engine/gates.ts`'s `computeFamilyFindings` instead, reasoning documented in full in `weekday-canary.ts`'s own header and `docs/adr/0034`. **A second, real regression found, root-caused, and fixed before handoff, not left for the tester to discover**: wiring the new recompute into `sync.ts`'s post-sync hook added one more sequential, awaited DB round trip to a chain `lib/ingestion/__tests__/sync.live.test.ts` already ran close to its own per-test timeout ceiling on this machine -- two of the heaviest tests (`cross-account isolation`, `dedup is per-fill`) started timing out. Isolated with a real revert/restore A-B comparison (not guessed): both failed with the wiring restored, and re-ran clean with it reverted, confirming a genuine added cost. **Actual root cause** (found by direct investigation, not a bigger guessed number): every test in this file already carried its OWN explicit per-test timeout (`it(name, fn, 20_000)`), which in Vitest/Jest overrides a file-level `vi.setConfig` -- a file-level bump alone (tried at 30s, then 60s) provably had no effect on the two affected tests (confirmed via a throwaway diagnostic test that the config mechanism itself genuinely WAS working, ruling out a `vi.setConfig` failure before looking elsewhere). Fixed at the real call sites: the two affected tests' own explicit third argument raised `20_000` -> `60_000`, matching this repo's own existing 60s precedent (`trigger-conditions-repository.live.test.ts`) for the identical "several sequential live-DB operations in one test" shape. **Confirmed green by a real full-file run after the actual fix**: 13 tests, 12 passed + 1 correctly skipped, 0 failed -- `dedup is per-fill` (27432ms) and `cross-account isolation` (20966ms) both now comfortably pass. A one-off `shadow_runs_user_id_fkey` violation seen during investigation (caught, logged, non-blocking -- the sync itself still succeeded) did not recur across two subsequent clean runs, consistent with a transient shared-dev-DB artefact rather than a defect in the new write path -- flagged for the tester to watch, not asserted resolved with certainty. No UI in this slice — confirmed, no screenshot self-check applies (matching every prior no-UI Module 05 slice's own precedent, e.g. sec 4.6/4.11/4.12). Re-confirmed green after every fix: `lib/analytics/**` non-live suite (31 files, 345 passed + 1 skipped), `lib/ingestion/**` non-live suite (14 files, 206 passed), `npx tsc --noEmit` (clean), `npx eslint` (0 errors on every touched/new file), `npm run check:import-boundaries` (96 modules/235 dependencies, clean), and `npm run build` (Turbopack, 28 routes, clean). New unit tests: `weekday-canary.test.ts` (8 tests, including a deliberately well-powered case proving the gate machinery genuinely CAN clear, and a light synthetic no-effect empirical check — a full 1000+-trial false-positive-rate study is left to the tester per this repo's own "independent verification" convention for this exact class of statistical claim), `render-rate.test.ts` (6 tests), plus 3 new tests in `promotion.test.ts` for the structural hard-block. **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.
+**AT A GLANCE (2026-09-11, MODULE 06 (REVIEW & GRADUATION) SLICE 1 -- CODED, THEN TESTER-GATED WITH 1 REAL BLOCKING BUG FOUND, NOT YET FIXED -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): UPDATE (same date, retrospeq-tester): the coder-stage note immediately below this line is otherwise accurate, but is now STALE on its bottom-line status. Independent tester pass (27 new RLS cross-user tests, 7 new coverage-gap-accuracy tests, 19 new validator unit tests, 7 new writeLateCaptureAction live-DB tests, all PASS) additionally found and live-DB-reproduced a real gap the coder's own self-check did not catch: story 1.3's "excluded from judgment findings" acceptance criterion is FALSE today — `lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segment/finding computation (proven live: 5 late-filled wins leaked into a 20-trade loss segment, moving its computed win rate from the honest 0% to a misleading 20%). Two new tests in `lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts` encode the spec's real requirement and FAIL on purpose until a coder fixes `fetchCapturesForTrades`. **Not ready for security-reviewer.** Full write-up in the matching 2026-09-11 "TESTER PASS" Decision-log entry (search "1 REAL BLOCKING BUG FOUND"). Module 06 is the next module in build order (Module 03's UI and Module 05's backend both fully shipped first). This is Slice 1 of a multi-slice module (same pattern Module 04 used, 10+ slices) — scoped narrowly to (a) schema-only migration for §3's three tables (`reviews`, `review_prompts`, `prompt_history`, RLS on all three, no consumer code) and (b) real completion of the daily close-out screen (`app/(app)/trades/close-out/**`) against §2 stories 1.1-1.4, taking real Module 06 ownership of a screen a prior Module 02 slice had explicitly left as a placeholder for this module to finish. Read the existing screen/backend in full before writing anything, per this slice's own dispatch: confirmed 1.1 (no findings/prompts/decisions leak) already held; 1.2's backend (`deliberate_no_trade` kind, streak-safe `day_closeouts` row) already worked but was framed generically ("Day done" for every case) — fixed to an explicit positive-choice framing ("I didn't trade today" / "Recorded as a deliberate day off — your streak stays intact") for the zero-trade case, copy-only, no new write path; 1.3's backend (`captured_late` marking in `trade-captures.ts`) existed since Module 02 Slice 7b but **no screen anywhere in this repo had ever called it** — confirmed by grep before writing code — so this is the one genuinely new capability this slice adds: a late-fill control for a trade's missing pre-entry fields (`LateCaptureField.tsx` + a new `writeLateCaptureAction`, restricted to the four fast-capture-safe data types `pick_one`/`pick_many`/`bool`/`rating`, dots/pills only, nothing that needs a keyboard); 1.4's refusal path existed reactively (post-submit) since Slice 7b — added a proactive coverage-gap check (`listUnresolvedCoverageGapsForAccountDay`, same overlap query `confirmDay`'s own transaction runs) so the block and a named reason are visible and the submit control is genuinely `disabled` before a wasted tap, not only after. New repo-reuse additions: `fetchStrategyVersionFields` (`lib/fields/strategy-repository.ts`, reads the field list off the exact strategy VERSION a trade was entered against — never the strategy's current version, 00-foundation §2.5) and a new, first-of-its-kind captured-VALUE validator (`lib/fields/captured-value-validation.ts` — distinct from the existing `field-validation.ts`'s proposed-field-CONFIG-shape validator). `npx tsc --noEmit` clean, `npx eslint` clean on every touched/new file (two pre-existing, unrelated warnings only). Screenshot self-check done against a real seeded trade/strategy on the live dev DB via a throwaway Playwright spec (deleted after use, per convention) — four scenarios confirmed correct: missing-pre-entry-fields rendering (dots/pills, no keyboard fields), a successful late-fill submit (locks to a "Saved" tag), the zero-trade-day positive framing, and the coverage-gap day showing the banner with the submit button genuinely `disabled` (not just refused after a tap). No red/green anywhere, one primary `.rq-btn` per view held throughout. Full detail in the matching dated Decision-log entry (search "Module 06 Slice 1"). **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.**
+
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 03 SEC 5.1 STRATEGY-DETAIL SCREEN (per-field finding state) -- now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder (picked up from an interrupted dispatch, cut off by a host-level crash before it could write its own ledger entry -- verified complete, not redone: clean tsc/eslint/tests, two self-check screenshots read and confirmed correct) -> tester (found a real coverage gap, 88.88% on the two fail-closed `catch` branches in `findings-service.ts`) -> coder-fix (closed it, 96.82%, no bug found -- both branches already did the right thing, they just weren't exercised) -> security-reviewer (PASS, cross-user isolation confirmed at three independent layers: RLS policy, explicit repository filter, and an ownership check ahead of the read; one non-blocking timing side-channel noted -- a gated-off field's payload is byte-identical to a zero-rows field's but takes a hair longer, same-user-only, arguably an intended paywall signal) -> qa (PASS on all 9 of ADR 0035's documented judgment calls, independently screenshot-verified) chain, all dated 2026-09-11 Decision-log entries (search "strategy-detail" / "findings-service"). This is the FIRST place in the repo that reads `retrospeq.findings` back out of the database -- every prior Module 05 slice only ever wrote to it -- and the first real consumer of `FindingPayload` as an actual object rather than a type comment. New route `/strategies/[id]` renders one `.finding` card per captured field: a synthesized win-rate/avg-R statement for a confident/provisional result (styled identically, per ADR decision #5), a plain "no difference detected" for `null_result`, and an honest "Not enough data yet" -- rendered identically whether the field genuinely has zero rows or is silently gated off by plan/kill-switch, per Module 05 section 4.8's fail-closed contract -- never an error, never alarming. A bad/foreign strategy id gets a real 404, not a friendly same-URL message (no plausible stale-bookmark case exists for a strategy id, confirmed by qa: no strategy-deletion path exists anywhere in the repo today). No second entitlement gate was added -- relies solely on the already-wired `canRender`/`min_plan` check, avoiding two independently-maintained gates for the same fact. **This closes Module 03 section 5.1 end to end -- the last named UI element of that section.** One process item handled by this session, not left stale: the `supabase/.temp/` CLI-local-state directory (untracked debris, not part of the feature) was added to `.gitignore` rather than committed or left to recur in every future `git status`. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-10/2026-09-11 Decision-log entries, search "spec.weekday" / "weekday canary"). The promotion-block mechanism (a `PERMANENTLY_SHADOW_ANALYTIC_IDS` allowlist ORed unconditionally into `evaluateShadowToBetaPromotion`, regardless of caller-supplied options) was adversarially tested by both the tester and the security reviewer independently, and the security reviewer confirmed no second promotion entry point exists anywhere in the repo. The render-rate metric (section 4.10/section 8's <5%-of-users target) is a real, callable, ongoing function (`fetchWeekdayCanaryRenderRate`, wired into `docs/runbook.md`), independently spot-checked by the tester at 3.00% via a throwaway 1000-trial synthetic no-effect study (deleted after, per convention). `docs/adr/0034-weekday-canary-permanent-shadow.md` was confirmed by qa to read as a durable warning against ever promoting this analytic, not just a changelog entry. No UI in this slice. **This closes Module 05 section 4.10 end to end.** (Superseded CODER-stage note, now folded into this entry rather than left as a separate stale block: "CODED, self-checked, ready for tester -> security-reviewer -> qa.") Built the last named-but-deferred Module 05 gap: `lib/analytics/spec-weekday/` (`weekday-canary.ts` -- pure gate computation; `render-rate.ts` -- the §8 tracked-metric pure query; `repository.ts` -- DB fetch/write/recompute, wired into `lib/ingestion/sync.ts`'s post-sync hook as `recomputeWeekdayCanaryForUser`, same best-effort try/catch shape as every sibling §4.13 job) plus `docs/adr/0034-weekday-canary-permanent-shadow.md`, a `docs/runbook.md` update (the pre-existing "Shadow analytic diverging from expectation" entry, which had explicitly deferred this exact implementation, is now updated to describe the real thing), and two structural promotion-blocking layers in `shadow-harness/promotion.ts` (`permanently_shadow` on the registration itself, plus a NEW `PERMANENTLY_SHADOW_ANALYTIC_IDS` constant, id-keyed, ORed into `evaluateShadowToBetaPromotion` so a future caller that forgets to pass `{ permanentlyShadow: true }` still cannot promote it -- proven by a new test asserting exactly that "no options argument at all" case). **One flagged, deliberate reconciliation against this slice's own dispatch text** (logged per AGENTS.md §12): the dispatch pointed at `lib/analytics/detection-engine/` as "the existing gate machinery" to model this on, but §4.10's own wording ("the multiple-comparisons trap in its purest form") names the EDGE engine's own defining feature (Holm correction across a segment family) — the detection engine's volume/rate/persistence gates have no p-value or multiple-comparisons concept at all, and "Tuesdays underperform" is a win-rate/avg-R segment claim (`find.pickone`'s own shape), not an occurrence-frequency claim. Built against `edge-engine/gates.ts`'s `computeFamilyFindings` instead, reasoning documented in full in `weekday-canary.ts`'s own header and `docs/adr/0034`. **A second, real regression found, root-caused, and fixed before handoff, not left for the tester to discover**: wiring the new recompute into `sync.ts`'s post-sync hook added one more sequential, awaited DB round trip to a chain `lib/ingestion/__tests__/sync.live.test.ts` already ran close to its own per-test timeout ceiling on this machine -- two of the heaviest tests (`cross-account isolation`, `dedup is per-fill`) started timing out. Isolated with a real revert/restore A-B comparison (not guessed): both failed with the wiring restored, and re-ran clean with it reverted, confirming a genuine added cost. **Actual root cause** (found by direct investigation, not a bigger guessed number): every test in this file already carried its OWN explicit per-test timeout (`it(name, fn, 20_000)`), which in Vitest/Jest overrides a file-level `vi.setConfig` -- a file-level bump alone (tried at 30s, then 60s) provably had no effect on the two affected tests (confirmed via a throwaway diagnostic test that the config mechanism itself genuinely WAS working, ruling out a `vi.setConfig` failure before looking elsewhere). Fixed at the real call sites: the two affected tests' own explicit third argument raised `20_000` -> `60_000`, matching this repo's own existing 60s precedent (`trigger-conditions-repository.live.test.ts`) for the identical "several sequential live-DB operations in one test" shape. **Confirmed green by a real full-file run after the actual fix**: 13 tests, 12 passed + 1 correctly skipped, 0 failed -- `dedup is per-fill` (27432ms) and `cross-account isolation` (20966ms) both now comfortably pass. A one-off `shadow_runs_user_id_fkey` violation seen during investigation (caught, logged, non-blocking -- the sync itself still succeeded) did not recur across two subsequent clean runs, consistent with a transient shared-dev-DB artefact rather than a defect in the new write path -- flagged for the tester to watch, not asserted resolved with certainty. No UI in this slice — confirmed, no screenshot self-check applies (matching every prior no-UI Module 05 slice's own precedent, e.g. sec 4.6/4.11/4.12). Re-confirmed green after every fix: `lib/analytics/**` non-live suite (31 files, 345 passed + 1 skipped), `lib/ingestion/**` non-live suite (14 files, 206 passed), `npx tsc --noEmit` (clean), `npx eslint` (0 errors on every touched/new file), `npm run check:import-boundaries` (96 modules/235 dependencies, clean), and `npm run build` (Turbopack, 28 routes, clean). New unit tests: `weekday-canary.test.ts` (8 tests, including a deliberately well-powered case proving the gate machinery genuinely CAN clear, and a light synthetic no-effect empirical check — a full 1000+-trial false-positive-rate study is left to the tester per this repo's own "independent verification" convention for this exact class of statistical claim), `render-rate.test.ts` (6 tests), plus 3 new tests in `promotion.test.ts` for the structural hard-block. **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.
 
 **AT A GLANCE (2026-09-10, QA FINAL GATE, MODULE 05 SEC 4.11 DECAY CHECKING + SEC 4.12 ASSET-CLASS SUPPRESSION -- HISTORICAL, superseded above): PASSES the final QA gate -- cleared to commit, not yet committed by this qa pass itself, per this build's own convention.** This slice's own coordinating session went offline mid-handoff after coder -> tester -> security-reviewer all finished cleanly and gave PASS verdicts (see the two dated 2026-09-10 "TESTER" and "SECURITY REVIEWER" Decision-log entries) -- a different session (the orchestrator) picked up the final two follow-up items and dispatched this qa gate; noted here explicitly so the ledger reflects what actually happened, not a silent continuity assumption. Verified directly, not re-trusted from prior reports: (1) the security reviewer's one real, non-blocking finding -- a missing `and user_id = $N` on `applyDecayCheckResult`'s findings state-transition UPDATE, `lib/analytics/decay-engine/repository.ts` -- CONFIRMED genuinely fixed in the current file (line 257: `where id = $1 and user_id = $2 and state = 'active'`), not merely claimed; (2) re-ran the full test chain myself: `lib/analytics/decay-engine/__tests__/*.ts` + `lib/analytics/edge-engine/__tests__/asset-class-suppression*.ts` + `lib/supabase/__tests__/service-role-inventory.test.ts` together, 42/42 passing (39 slice-specific -- 24 pure + 15 live-DB -- plus 3 from the shared service-role-inventory file, matching the tester's/security reviewer's own reported 39 exactly, just totalled differently here); the RLS suite (`analytics-registry-schema.rls.test.ts` + `.independent-verify.rls.test.ts` + `shadow_runs.rls.test.ts`) hit one flake on a concurrent run (`permission denied for table analytic_user_suppression`, a connection-pool-contention artefact of this machine's own well-documented live-DB-parallelism pattern, NOT an RLS regression) -- reproduced clean solo (22/23 + 1 skipped) immediately after, confirming the flake read; combined RLS total 35 passing / 3 skipped, matching the tester's own reported count. `npx tsc --noEmit`, `npm run check:import-boundaries` (91 modules/216 dependencies, clean), `npx eslint` (0 errors on every file this slice touches; one pre-existing, unrelated `_platform` unused-var warning in `lib/broker/platform-defaults.ts` outside this slice's own diff), and `npm run build` (Turbopack, 28 routes) all clean, all re-run myself on this session's own machine (which in fact had ~25GB free on C: at verification time, not the 0 bytes NEEDS_YOUR_INPUT.md had flagged -- output was still redirected to E: per that entry's standing workaround regardless, out of caution). Standard non-negotiables confirmed clean by direct grep against every file in scope: zero currency/P&L, XP/points, day-based-streak (the `consecutive_decay_checks`/"streak" language here is a trade-count-based decay-check counter, not the weekly-adherence-streak non-negotiable, and is not day-based either way), compound-rule (AND/OR), red/green/hex-color, or notification-trigger surface anywhere in `lib/analytics/decay-engine/**` or `lib/analytics/edge-engine/asset-class-suppression.ts`; no UI in this slice, so no screenshot self-check applies (matching the prior sec 4.6 slice's own precedent). Module 04/05 isolation boundary re-confirmed: neither new file imports `lib/rules/**`, `rule_id` stays a bare opaque uuid throughout. Runbook entries ("Decay check failed after sync", "Decay check failed for an individual link", `docs/runbook.md` lines 1532/1611) re-read in full and spot-checked against the actual `sync.ts` call site (the `[sync] decay check failed after sync for user ...` log-line prefix genuinely matches, line 1270) -- accurate. **Documentation gap found and closed by this gate, not silently assumed done**: the tester's and security reviewer's shared, non-blocking product-judgment finding (sec 4.12's all-or-nothing suppression-granularity threshold -- a strategy that is, say, 999 crypto trades and 1 forex trade renders identically to an even split, with no proportional signal anywhere in the payload) had been discussed with the project owner by the orchestrating session and a decision made (keep the current all-or-nothing behaviour, track as deliberate product debt, do not build proportional suppression in this slice) but that decision had NOT yet been written down anywhere -- neither `docs/adr/0033` nor PROGRESS.md had any record of it prior to this gate. Per this repo's own ledger-currency convention (a finding that isn't written down is a finding that gets lost), this qa gate added a dated "Addendum, 2026-09-10" section to the END of `docs/adr/0033-asset-class-suppression-classification.md` recording the decision, restating the specific edge case precisely (not paraphrased away), and being explicit about provenance -- this qa gate is relaying the orchestrating session's own account of the owner consultation, not something this qa dispatch itself had a channel to verify directly with the human owner. `docs/adr/0032` (decay checking) was NOT given a matching addendum -- checked and judged genuinely out of scope for that ADR (the suppression-granularity question belongs to sec 4.12/ADR 0033 only; ADR 0032 covers sec 4.11 decay-checking mechanics and already names its own real open item, the read/write race, in its own "Consequences" section) -- the coordinating dispatch's phrasing asking for "ADR 0032/0033 both" get the addendum is read here as imprecise shorthand for "confirm the relevant ADR documentation is complete," not a literal instruction to force unrelated content into 0032. See this date's matching QA Decision-log entry for the full write-up, including the reasoning for why writing this specific addendum (a narrow, dated record of an already-made decision surfaced DURING the review chain itself, which the coder could not have written since the decision postdates the coder's own work) was judged to fall under this build's "ledger currency" convention rather than the separate "check, don't write" documentation-gate convention that applies to a coder's own missing deliverable. One harmless, non-blocking piece of debris noted, not cleaned up by this gate: an untracked, malformed-filename log file (`E:tmp_vitestqa-run1.log`, likely a prior session's own shell-redirection typo) sits at the repo root, untracked and therefore safe (will not be committed unless explicitly staged) -- flagged for whoever next runs `git clean`/tidies the tree, not a gate blocker. **This closes Module 05 sec 4.11/sec 4.12 end to end (coder -> tester -> security-reviewer -> qa, all PASS, one documentation gap found and closed by this gate itself).**
 
@@ -9006,6 +9008,40 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-09-11 -- ORCHESTRATOR (hotfix, out-of-band from the Module 06
+  Slice 1 chain currently in review), `lib/supabase/__tests__/service-
+  role-inventory.test.ts`'s mandatory allowlist. Discovered as a side
+  effect of a Module 06 Slice 1 coder-fix dispatch running the full test
+  suite and flagging one pre-existing, unrelated failure rather than
+  silently ignoring it (per this repo's own "flag it, don't paper over
+  it" convention) -- traced to `716e1a0` ("Module 05: weekday canary,
+  section 4.10"), already committed and pushed to `main` earlier today.
+  `recomputeWeekdayCanaryForUser` in `lib/analytics/spec-weekday/
+  repository.ts` runs under `withServiceRoleConnection`, and that
+  slice's own 2026-09-11 security-reviewer PASS entry already reviewed
+  and cleared this exact call site (confirmed both the `shadow_runs`
+  read and insert are explicitly `userId`-parameterized, matching every
+  sibling entry's own reasoning) -- but the mechanical step of adding the
+  file to this test's own tracked allowlist `Set` was missed at commit
+  time, leaving the mandatory Module 01 section 7.2 inventory test
+  failing on `main` since that commit. **This is a ledger-currency gap
+  on the allowlist test itself, not a new security finding** -- the
+  underlying code was already reviewed and is already correct; only the
+  allowlist entry was missing. Closed by adding the one entry (with a
+  comment matching every other entry's own documented-reasoning
+  convention, cross-referencing the original security-reviewer PASS
+  rather than re-deriving it) and confirming the test now passes (3/3).
+  Committed on its own, separately from the still-in-review Module 06
+  Slice 1 changes, since it fixes something broken on `main` right now
+  and has nothing to do with that slice's own files. **Standing note for
+  every future slice whose coder/security-reviewer introduces a new
+  `withServiceRoleConnection` call site**: updating this allowlist is
+  part of making that review real, not an optional afterthought -- this
+  is exactly the gap the test's own mandatory-failure design exists to
+  catch, and it worked (a background dispatch's full-suite run
+  surfaced it), but catching it after the fact instead of before commit
+  is the gap worth closing going forward.
 
 - 2026-09-11 -- TESTER (retrospeq-tester), INDEPENDENT VERIFICATION of
   Module 03 section 5.1's strategy-detail screen (the "picked up, not
@@ -21799,6 +21835,536 @@ Confirmed the one pre-existing, non-blocking nit the tester flagged: fields-new-
   update the top-of-file "Current task" AT A GLANCE block and the Phase 3
   status-table row as part of that (see item 14 above).
 
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 1 — CODED, not yet tested/reviewed
+
+Dispatched as the first Module 06 slice, per build order (Module 03's UI
+and Module 05's backend both fully shipped first — confirmed by reading
+`AGENTS.md`, `00-foundation.md`, `retrospeq-design-decisions.md`, and
+`06-review-and-graduation.md` in full before writing any code, per this
+repo's own standing discipline). Scoped narrowly, matching Module 04's
+own precedent of building a large module as many small slices rather
+than attempting it in one dispatch.
+
+**Schema (part a) — `reviews`, `review_prompts`, `prompt_history`.**
+New migration `supabase/migrations/20260911020000_review_graduation_schema.sql`,
+transcribing §3's own literal DDL with two purely mechanical departures
+(schema-qualification, and no FK on the two tables' polymorphic
+`subject_id`/`subject_type` pair — §3's own DDL already has none, since
+`subject_type` names four different possible parent tables). RLS enabled
+and a real owner "for all" policy on all three tables (repo-wide
+non-negotiable, no exceptions) — CHECK constraints encode every enum
+§3's own inline comments name (`period_kind`, `kind`, `state`) as real
+DB constraints, matching this repo's established "encode the invariant
+at the DB layer" posture. Schema only — no prompt-ranking/cap logic, no
+consumer UI, nothing writes to any of the three tables yet, exactly as
+scoped.
+
+**Correction made mid-slice, worth recording honestly:** I initially
+wrote this migration's footer claiming it was "NOT YET VERIFIED" on the
+belief that no Supabase project exists for Retrospeq (AGENTS.md's own
+"Known infra gaps" section says exactly that). Mid-slice I actually
+needed and used the real live shared dev Supabase project myself (via
+`.env.local`'s `SUPABASE_DB_URL`, ADR 0002) for this slice's own
+screenshot self-check (seeding real rows, logging in through the real
+`/login` form) — which meant my own migration footer was now factually
+stale the moment I wrote it. Rather than leave that inconsistency, I
+applied the migration for real against that same live project and ran a
+throwaway verification script (deleted after use, never committed):
+confirmed all three tables exist with RLS enabled and the exact owner
+policy shown in the file; every CHECK constraint rejects its
+corresponding bad value (6 real negative-insert attempts, each rolled
+back); a positive insert into all three tables succeeded and was rolled
+back cleanly. The migration's own footer now states this precisely,
+including what it does NOT cover (a full cross-user-isolation
+assertion, which stays `retrospeq-tester`'s own job per this repo's
+established RLS test-file convention) — see that file for the exact
+wording. **Flag for whoever next reads AGENTS.md's "Known infra gaps"
+section:** its "no Supabase project for Retrospeq" line is now stale —
+a real shared dev project has existed and been in active use (ADR 0002,
+`.env.local`, dozens of prior migrations' own "VERIFIED... live shared
+dev Supabase project" footers) since at least 2026-08-20. Not fixed
+here (editing AGENTS.md is out of this slice's own scope and it's a
+repo-root instructions file, not something a single coding slice should
+casually rewrite), but flagged for the orchestrator/owner to reconcile.
+
+**Close-out screen (part b) — `app/(app)/trades/close-out/**`, real
+Module 06 ownership taken (the file's own header comment rewritten to
+reflect this, replacing the Module 02 Slice 7b placeholder framing).**
+Read `ConfirmDayForm.tsx`, `page.tsx`, `TrimReasonChips.tsx`, and
+`lib/ingestion/confirm.ts` in full before writing anything, per the
+dispatch's own instruction, and checked each of §2's four close-out
+acceptance criteria against the CURRENT screen precisely rather than
+assuming:
+
+- **1.1** ("One screen, one confirm. No findings, no prompts, no
+  decisions") — confirmed already true; this slice adds none of the
+  three.
+- **1.2** ("mark a day I deliberately sat out... one tap, streak
+  intact") — the BACKEND already worked (`ConfirmDayForm` already set
+  `kind: 'deliberate_no_trade'` automatically for a zero-trade day, and
+  `confirmDay` already wrote a real `day_closeouts` row for it, which is
+  what "logged decision"/"streak intact" cash out to today — Module
+  07's own streak-crediting consumption of that row is out of scope,
+  documented as a no-op since Module 02). What was genuinely missing was
+  the FRAMING §2 itself asks for ("a real, logged decision," not "an
+  empty list with nothing to click") — the button previously read the
+  same generic "Day done" on every day regardless of whether it had
+  trades. Fixed: `hasAnyTrades === false` now renders "I didn't trade
+  today" / "Recorded as a deliberate day off — your streak stays
+  intact," copy-only, same single primary button, same hidden `kind`
+  field, no new write path.
+- **1.3** ("fill a missed pre-entry capture... marked `captured_late`,
+  excluded from judgment findings") — confirmed PRECISELY, not assumed:
+  `lib/ingestion/trade-captures.ts`'s `writeTradeCapture` has accepted a
+  `capturedLate` param since Module 02 Slice 7b and correctly excludes
+  it from the pre-entry lock's "never after lock" rejection on a FIRST
+  write to a field with no existing row — but a grep across the entire
+  repo before writing any code confirmed genuinely **zero call sites**
+  anywhere ever passed `capturedLate: true` for a real, registry-defined
+  field (the only existing caller of `capturedLate: true`-shaped writes
+  is the trim-reason chip row, which writes a literal built-in field id,
+  never a real `fields` row). This is the one genuinely new capability
+  this slice adds, not a framing fix: `LateCaptureField.tsx` (a
+  fast-capture control per missing pre-entry field — dots for `rating`,
+  pills for `pick_one`/`bool`/`pick_many`, nothing that takes a
+  keyboard, per AGENTS.md's fast-capture rule) + a new
+  `writeLateCaptureAction` (`app/(app)/trades/actions.ts`) that
+  re-derives, server-side, whether the field is actually a `pre_entry`
+  field on the trade's OWN bound strategy VERSION (`trades.strategy_id`
+  + `trades.strategy_version` — never the strategy's current version,
+  00-foundation §2.5) before accepting a write, never trusting a
+  client-supplied field id. Two small new library pieces support this:
+  `fetchStrategyVersionFields` (`lib/fields/strategy-repository.ts`, a
+  direct `(strategy_id, version)` point lookup — deliberately NOT
+  `fetchCurrentStrategyForEdit`, which always reads the CURRENT version)
+  and `lib/fields/captured-value-validation.ts` (a genuinely new
+  validator — confirmed no existing code validated a captured VALUE
+  against a field's own `data_type`/`config`; the existing
+  `field-validation.ts` validates a proposed field's own config SHAPE at
+  creation time, a different question).
+- **1.4** ("blocked when data is missing... named reason and retry") —
+  confirmed the reactive refusal path already existed (Slice 7b's own
+  `ConfirmDayForm` error-state rendering), but only ever surfaced AFTER
+  a wasted submit round-trip — read "confirm disabled" in §2's own
+  acceptance text literally rather than loosely, and added a PROACTIVE
+  check (`listUnresolvedCoverageGapsForAccountDay`,
+  `lib/ingestion/trades-repository.ts` — runs the exact same half-open-
+  interval overlap query `confirmDay`'s own transaction runs, via
+  `computeServerDayRange`, so the screen and the transaction it submits
+  to can never disagree about whether a gap exists) so the block, its
+  reason, and a genuinely `disabled` submit control are all visible
+  BEFORE the trader ever taps. No working automated retry exists (no
+  real `BrokerAdapter`, standing infra gap, 00-foundation §10) — the
+  copy says so honestly, unchanged in substance from Slice 7b's own
+  posture (AGENTS.md's "never fake it").
+
+**New rate-limit scope:** `writeLateCapture` (`lib/rate-limit/config.ts`),
+reusing `writeTradeCapture`'s exact budget (same shape: one tap, fixed
+options per field, plausible several times in one close-out sitting).
+
+**Verification run by this coder before handoff:**
+- `npx tsc --noEmit` — clean, whole project.
+- `npx eslint` on every touched/new file — 0 errors; 2 pre-existing
+  warnings in `resolveAmbiguousGroupingAction` (unused-var lint on
+  unrelated params), not introduced by this slice.
+- `npm run build` — clean, Turbopack, 28 routes, `/trades/close-out`
+  among them, no new warnings.
+- **Migration applied and sanity-checked against the live shared dev
+  Supabase project** (see the correction note above for the full
+  story) — RLS + CHECK constraints confirmed real; full cross-user
+  isolation still left to `retrospeq-tester`'s own dedicated test file.
+- **Screenshot self-check**, per AGENTS.md's mandatory convention: a
+  throwaway Playwright spec (`e2e/_tmp-closeout-selfcheck.spec.ts`,
+  deleted immediately after use, never committed) seeded a real account,
+  a strategy version with three `pre_entry` fields (`rating`, `pick_one`,
+  `bool`), and a trade bound to it with zero captures, against the live
+  shared dev Supabase project, then logged in via the real `/login` form
+  and captured four screenshots (`tmp/dev-screenshots/closeout-*.png`,
+  gitignored, read directly with the `Read` tool, not just asserted by
+  the test):
+  1. `closeout-late-fill-before.png` — the "Missed pre-entry notes" well
+     renders three fast-capture controls (5 dot-circles for Conviction,
+     three pills for Setup type, two pills for News nearby check), each
+     with its own "Skip." Zero keyboard fields present.
+  2. `closeout-late-fill-after.png` — tapping the "Breakout" pill
+     immediately locks it to a "Saved" tag (`.rq-tag--on`, amber, not a
+     red/green pair) and removes its control from the list; the other
+     two fields remain open. Confirms the pick_one/bool/rating
+     "immediate submit" path genuinely round-trips through
+     `writeLateCaptureAction` end to end against the real DB.
+  3. `closeout-no-trade-day.png` — a genuine zero-trade day renders "I
+     didn't trade today" as the one primary button, with "Recorded as a
+     deliberate day off — your streak stays intact" beneath it.
+  4. `closeout-coverage-gap-blocked.png` — a day with a real unresolved
+     `coverage_gaps` row renders the proactive banner ("1 unresolved
+     coverage gap overlap this day — confirming is blocked until the gap
+     is filled") AND the submit button is visibly, genuinely disabled
+     (greyed, non-interactive), not merely refused after a tap.
+  Confirmed no red/green anywhere in any of the four; exactly one
+  primary `.rq-btn` per view throughout (every "Skip"/pill/dot control
+  is `.rq-btn--ghost`, a plain unstyled radio/pill, or the design
+  system's own `.rq-rating`/`.rq-pills` — never a second competing
+  primary).
+
+**What this slice did NOT touch, deliberately, per its own scope:** the
+weekly review flow, prompt ranking, the three-per-week cap, graduation/
+relaxation/promotion/retirement decision UI, deferral/backlog, the
+monthly trend view — none of `review_prompts`' consumers exist yet.
+
+**Documentation:** no new ADR — no deliberate deviation from a
+00-foundation convention was made this slice (the migration transcribes
+§3's DDL faithfully; the schema-before-consumers sequencing itself is
+normal incremental slicing, already this repo's own established
+pattern, per AGENTS.md's own explicit carve-out). No new
+`docs/runbook.md` entry — everything built this slice is a synchronous,
+user-facing request/response path (a Server Action returning a named
+error inline), not a background/scheduled job with its own failure mode
+to alert on; §14's own call for "a runbook entry for review
+materialisation lag" applies to the weekly-review materialisation job,
+which is explicitly out of scope for this slice and does not exist yet.
+
+**Not marked done. Needs, in order:** `retrospeq-tester` (unit/property/
+RLS coverage on the new schema and the new `captured-value-validation.ts`/
+`writeLateCaptureAction` logic — including the 100%-cross-user-isolation
+RLS assertion this repo requires on every table, and the live-DB
+verification the migration's own footer explicitly defers to this gate)
+→ `retrospeq-security-reviewer` (the new client-reachable
+`writeLateCaptureAction` boundary — ownership check, strategy-version
+membership re-derivation, rate limiting — is exactly the class of
+"never trust a client-supplied id" surface this repo's security bar
+exists to catch) → `retrospeq-qa` (design-system/non-negotiables
+re-check, ideally with its own independent screenshot read rather than
+trusting this entry's own description). Not committed, not pushed.
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 1 — TESTER PASS: 1 REAL BLOCKING BUG FOUND. Not ready for security-reviewer until fixed.
+
+Independent `retrospeq-tester` pass against the coder's 2026-09-11 "CODED,
+not yet tested/reviewed" entry immediately above, per that entry's own
+handoff and 00-foundation §9 / `06-review-and-graduation.md` §7. Wrote
+five new, real, committed test files (all run against the live shared dev
+Supabase project, never mocked/faked) — no test file existed for any of
+this slice's new code before this pass, confirmed by grep before writing
+anything:
+
+- `lib/supabase/__tests__/review-graduation-schema.rls.test.ts` — RLS
+  shape audit (RLS enabled, exact owner-ALL-policy shape, every CHECK
+  constraint) plus a genuine cross-user-isolation suite for all three new
+  tables (`reviews`, `review_prompts`, `prompt_history`): 27/27 PASS.
+  Covers SELECT, UPDATE (0 rows affected, not an error), DELETE (0 rows),
+  and spoofed-`user_id` INSERT (rejected by `with_check`) for each table,
+  against two real auth users. This is the real, permanent test file the
+  migration's own footer deferred to this gate — the coder's own
+  verification was a deleted throwaway script, never a committed test.
+- `lib/ingestion/__tests__/coverage-gap-check.live.test.ts` — story 1.4's
+  `listUnresolvedCoverageGapsForAccountDay` had ZERO prior test coverage
+  (confirmed by grep — `trades-repository.live.test.ts` never calls it).
+  7/7 PASS: true positive (gap fully inside day), a gap crossing the day
+  boundary, true negative (clean day, zero rows), both half-open-interval
+  edges (`gap_to` exactly at day start, `gap_from` exactly at day end —
+  neither flags, matching `confirmDay`'s own transaction semantics
+  exactly), a resolved gap correctly ignored, and RLS cross-user
+  isolation. The proactive check is accurate — no false positives (would
+  block a trader from ever confirming a fine day) and no false negatives
+  (would let story 1.4's own bug back in) found.
+- `lib/fields/__tests__/captured-value-validation.test.ts` — the new
+  `validateCapturedValue` validator had zero prior coverage. 19/19 PASS,
+  95.16% line coverage (only the structurally-unreachable `exhaustive:
+  never` default branch uncovered) — clears the 90% engine-adjacent bar
+  on this file specifically.
+- `app/(app)/trades/__tests__/write-late-capture-action.live.test.ts` —
+  `writeLateCaptureAction` (the new client-reachable write boundary) had
+  zero prior coverage of any kind. 7/7 PASS: happy path (writes
+  `moment='pre_entry'`, `captured_late=true`, real row confirmed);
+  rejects a field not bound as `pre_entry` on the trade's own strategy
+  VERSION even when it's a real field the same user owns; rejects a
+  cross-user attempt (attacker session, victim's real `tradeId` — hits
+  `TRADE_NOT_FOUND` via the RLS-scoped trade lookup, never a silent
+  write, confirmed no row was created); rejects an invalid value
+  (`TRADE_LATE_CAPTURE_VALUE_INVALID`); rejects a trade with no strategy
+  bound (`TRADE_LATE_CAPTURE_NO_STRATEGY`); rejects malformed
+  `valueJson` (`TRADE_LATE_CAPTURE_INVALID_INPUT`); and proves "never
+  after lock" end to end (a second late-fill attempt on an
+  already-filled field is rejected, the first value is never
+  overwritten). The ownership/strategy-version-membership re-derivation
+  this action's own header describes is real, not aspirational — verified
+  against a genuine attacker/victim pair, not a mock. 6 of 7 named error
+  codes on this action now have direct test coverage; the seventh
+  (`TRADE_LATE_CAPTURE_FIELD_NOT_FOUND`, a field archived between being
+  confirmed as a version's `pre_entry` field and the subsequent field-def
+  fetch — a narrow race, not a common path) does not. Flagged, not
+  silently skipped.
+
+**→ THE REAL BUG, found via a new
+`lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts`
+(2/2 tests FAIL, against the live DB, reproducibly):** story 1.3's own
+acceptance criterion — "Late fill allowed, marked `captured_late`,
+**excluded from judgment findings**" — and Module 02 §4.5's identical
+text ("excluded from judgment findings by default") are not honoured
+anywhere in this repo. `lib/analytics/edge-engine/repository.ts`'s
+`fetchCapturesForTrades` — the ONE query that feeds every `(trade,
+field)` value into Module 05's segmentation/finding computation —
+selects `trade_id, field_id, value` from `trade_captures` with **no
+`captured_late` in its SELECT list and no filter on it at all**. Traced
+the full pipeline (`field-values.ts`'s `extractFieldValue`,
+`edge-engine.ts`'s `computeEdgeFindingsForStrategy`, `segmentation.ts`)
+and confirmed the flag is dropped at the very first read and never
+recovered downstream — `lib/rules/distributions-repository.ts`'s
+`bool_or(captured_late)` is Module 04's own ADHERENCE-fact use of the
+same column (a genuinely different consumer/question, "did the trader
+ever late-fill," not "exclude this value from a finding") and does not
+touch Module 05's pipeline at all.
+
+Proved this two ways against the real DB, not just by reading the code:
+(1) `fetchCapturesForTrades` called directly on a trade with a
+`captured_late=true` row — the row comes back in the result map exactly
+like an on-time one (expected: absent). (2) End-to-end through
+`recomputeEdgeFindingsForUser`: seeded 20 on-time flag=true trades, all
+losses (true win rate 0%), plus 5 CAPTURED-LATE flag=true trades, all
+wins — the written `findings` row reads `n=25, win_rate=0.20`, i.e. the
+5 late-filled wins fully leaked into the segment and changed its
+computed win rate from the honest 0% to a misleadingly positive 20%.
+This is exactly the failure mode the spec text warns against, reproduced
+live, not hypothesised.
+
+**Why this is this slice's fault to flag even though the gap is
+technically inside Module 05's own file, not Module 06's:** `writeLate
+CaptureAction` is the FIRST real, live code path anywhere in this repo
+that ever sets `captured_late = true` on a real, registry-defined
+field's capture row (confirmed by grep before this slice existed) — every
+prior write either always wrote `false` or wrote the literal built-in
+trim-reason field, never a value Module 05 would ever segment on. The
+gap in `fetchCapturesForTrades` was latent and harmless until this
+slice made it live and reachable by a real trader tapping a real pill on
+the close-out screen. Per the dispatch's own instruction: report the gap
+rather than silently route around it or weaken the test to match current
+(wrong) behaviour — the two new failing tests encode the SPEC's actual
+requirement and should stay red until `fetchCapturesForTrades` (or
+`field-values.ts`) is fixed to exclude `captured_late = true` rows, at
+which point both should go green with no other change needed.
+
+**Screenshots — fresh, this tester's own capture, not the coder's
+deleted throwaway spec** (`tmp/dev-screenshots/tester-closeout-*.png`,
+gitignored, seeded against the live shared dev Supabase project, read
+directly with the `Read` tool): (1) late-fill well before any tap — 5
+dot-circles (Conviction, rating), 3 pills (Setup type, pick_one), 2
+pills (News nearby, bool), each with its own ghost "Skip," zero keyboard
+fields, one primary amber `.rq-btn` ("Day done") for the whole view; (2)
+after tapping "Breakout" — locks to an amber `.rq-tag--on` "Saved" tag
+(not a red/green pair), the other two fields stay open, confirmed via a
+direct DB read that `captured_late=true` actually landed; (3) a genuine
+zero-trade day — "I didn't trade today" as the one primary button, "your
+streak stays intact" beneath it; (4) an unresolved coverage gap — the
+named-reason banner renders AND the primary button is visibly desaturated
+and genuinely `disabled` (confirmed via Playwright's own `toBeDisabled`
+assertion, not just visual inspection) before any tap. All four: no
+red/green anywhere, exactly one primary `.rq-btn` per view, dots/pills
+only on the fast-capture surface — design-system compliant. (One test-authoring
+mistake caught and fixed during this pass, not a product bug: the
+pick_one/bool pills render `role="radio"`, not `role="button"` — a
+Playwright locator mismatch on my first attempt, corrected before this
+entry was written.)
+
+**Story 1.1 re-confirmed directly, not assumed:** read `page.tsx` in
+full — no import of `reviews`/`review_prompts`/`findings`/`detections`
+tables or any related repository function anywhere in this slice's diff.
+N/A holds.
+
+**Full verification run, this tester, against the live shared dev
+Supabase project:** `npx tsc --noEmit` — clean, whole project. `npx
+eslint` on every new/touched file — 0 errors (2 pre-existing warnings in
+`resolveAmbiguousGroupingAction`, confirmed pre-existing via `git diff
+--stat` showing this slice's diff as purely additive, not introduced by
+this pass or the coder's). `npm run build` — clean, Turbopack, 28
+routes, `/trades/close-out` present. `npm run check:import-boundaries`
+— clean, no violations, 103 modules/264 dependencies cruised. Full
+regression pass on adjacent pre-existing suites (`actions.test.ts` 52/52,
+`confirm-day-action.live.test.ts` 2/2, `trades-repository.live.test.ts`
+11/11, `edge-engine/repository.live.test.ts` 1/1) — all still green, no
+existing behaviour broken by this pass's own test additions (this
+tester wrote tests only, no product code changes).
+
+**Coverage, real numbers, not estimated:** `captured-value-validation.ts`
+95.16% line / 93.33% branch (19 tests) — clears the 90% bar.
+`trades-repository.ts` 100% line/branch when the new
+`coverage-gap-check.live.test.ts` runs alongside the pre-existing
+`trades-repository.live.test.ts` (18 tests combined) — clears the bar
+comfortably, including the previously-untested coverage-gap function
+specifically. `app/(app)/trades/actions.ts` (the whole file, most of
+which predates this slice) reads 87.77% line coverage from just the two
+`writeLateCaptureAction`-focused test files run together — a real,
+not-fully-comprehensive number since the file's other ~15 actions are
+each covered by their OWN separate test files elsewhere in the suite
+(not re-run together here for the sake of a single aggregate); reported
+honestly rather than inflated by only citing the narrower captured-value
+file's number.
+
+**Verdict: NOT ready for `retrospeq-security-reviewer`.** The schema/RLS
+work, the coverage-gap proactive check, and `writeLateCaptureAction`'s
+own ownership/strategy-version boundary are all genuinely solid and
+independently proven — no security concern found in any of those three.
+But story 1.3's own headline acceptance criterion ("excluded from
+judgment findings") is provably false today, live-DB-reproduced, and a
+security review of the write boundary would be reviewing a slice that
+does not yet do what its own spec says it does. Fix
+`fetchCapturesForTrades` (exclude `captured_late = true`, or thread the
+flag through to `field-values.ts` so a late value resolves to `null` for
+segmentation the same way a genuinely uncaptured field already does),
+confirm both new failing tests in
+`captured-late-exclusion.live.test.ts` go green, THEN dispatch
+security-reviewer.
+
+**New files this pass (all committed-ready, none temporary):**
+`lib/supabase/__tests__/review-graduation-schema.rls.test.ts`,
+`lib/ingestion/__tests__/coverage-gap-check.live.test.ts`,
+`lib/fields/__tests__/captured-value-validation.test.ts`,
+`app/(app)/trades/__tests__/write-late-capture-action.live.test.ts`,
+`lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts`.
+No product code touched by this tester pass — the bug fix itself belongs
+to whichever coder picks this up next.
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 1 — BUG FIX: `captured_late` now excluded from Module 05 judgment findings. Tester's blocking finding closed; slice ready for security-reviewer.
+
+Fixes the one real, live-DB-proven blocking bug the immediately-preceding
+tester pass found (see that entry, same date, "TESTER PASS: 1 REAL
+BLOCKING BUG FOUND"). Story 1.3's own acceptance criterion — "Late fill
+allowed, marked `captured_late`, excluded from judgment findings" —
+Module 02 §4.5 in identical words — was not honoured anywhere in this
+repo: `lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades`
+read `trade_captures.value` with no filter on `captured_late` at all, so
+a late-filled value written by this same slice's new
+`writeLateCaptureAction` flowed straight into Module 05's
+segmentation/statistics indistinguishably from an on-time capture.
+
+**The fix, exactly:** added `and captured_late = false` to
+`fetchCapturesForTrades`'s own `select ... from retrospeq.trade_captures`
+WHERE clause (`lib/analytics/edge-engine/repository.ts`) — one line,
+plus an extended header comment on the function documenting the
+exclusion, why it's scoped here, and the one genuinely different
+consumer of the same column (`lib/rules/distributions-repository.ts`'s
+`bool_or(captured_late)`, an ADHERENCE fact — "did the trader ever
+late-fill" — that never touches Module 05's pipeline and is correctly
+untouched by this fix).
+
+**Why the SQL-filter approach over the tester's other suggested option
+(thread the flag through `field-values.ts`, resolve to `null` there)**:
+`fetchCapturesForTrades`'s own pre-existing header already scoped it as
+"the ONE query that feeds every (trade, field) value into Module 05's
+segmentation/finding computation" — confirmed by grep before touching
+anything: its only product call site anywhere in this repo is
+`computeEdgeFindingsForStrategyId`, in the same file, a few lines below.
+No other real consumer of `fetchCapturesForTrades` exists (the only
+other reference is this bug's own test file and a service-role-call-site
+inventory test, neither a second product caller). Given that, filtering
+at the source is strictly narrower and safer than threading a flag
+downstream: a future second caller of this specific function would
+inherit the correct (excluded) behaviour automatically rather than
+depending on remembering to check a flag every consumer would otherwise
+need to know about. A row this query never returns is already
+indistinguishable, to `computeEdgeFindingsForStrategyId`'s
+`captures.get(fieldId)?.get(tradeId)` lookup, from a trade that was never
+captured at all — `extractFieldValue` (`field-values.ts`) already
+resolves a missing map entry to `null` (§4.2's own "no value" contract,
+unchanged), so a late-filled value now gets EXACTLY the same "not enough
+data" treatment as a genuinely-uncaptured field, with zero changes needed
+in `field-values.ts` itself. This matches how this repo already treats
+other excluded-from-findings cases (e.g. `note`-typed fields skipped by
+`edge-engine.ts`'s own §4.2 rule, `spec.weekday`'s `permanently_shadow`
+exclusion) — exclude at the one real gate, not by threading a flag
+through every downstream consumer.
+
+**Blast-radius check, done before and after the fix, not assumed:**
+searched the whole repo (not just `lib/analytics/edge-engine/`) for every
+caller of `fetchCapturesForTrades` and every other reader of
+`trade_captures`/`captured_late`. `fetchCapturesForTrades` has exactly
+one product caller (`computeEdgeFindingsForStrategyId`, same file) — no
+detection engine, decay engine, or weekday canary call site exists.
+Specifically checked each of the four named-in-dispatch consumers:
+- **Detection engine** (`lib/analytics/detection-engine/`) — greped for
+  `trade_captures`/`captured_late`: zero matches anywhere in that
+  directory. It operates over its own trade-fact population, never reads
+  `trade_captures`. Unaffected, no fix needed there.
+- **Decay checking** (`lib/analytics/decay-engine/`) — reads the
+  `findings`/`finding_rule_links` tables (already-computed results), not
+  `trade_captures` directly. It inherits the fix transitively (a
+  recomputed finding it later checks for decay is now itself correct),
+  needs no separate change.
+- **Asset-class suppression** (`asset-class-suppression.ts`) — pure,
+  operates only on `SegmentComputationResult[]` already produced by
+  `computeEdgeFindingsForStrategyId`, downstream of the fixed query.
+  Inherits the fix transitively, confirmed by its own 5/5 live test suite
+  still green after the fix (below).
+- **Weekday canary** (`lib/analytics/spec-weekday/weekday-canary.ts`) —
+  read in full: `drv.day_of_week`'s value is derived directly from
+  `trades.server_day`, the SAME derivation `field-values.ts`'s own
+  `extractDayOfWeek` uses — this analytic never reads `trade_captures` at
+  all (confirmed via the file's own header comment, "this file never
+  reads or writes `retrospeq.fields`/`trade_captures`"). Not a
+  consumer of this bug's data path; no fix applicable.
+- **Module 04's own use of the same column**
+  (`lib/rules/distributions-repository.ts`'s `bool_or(captured_late)`) —
+  intentionally different question (adherence fact, not a judgment
+  finding), intentionally untouched — confirmed still correct by re-running
+  its own live suite (below), unaffected since it never calls
+  `fetchCapturesForTrades`.
+
+No other function in `repository.ts` or `field-values.ts` reads
+`trade_captures` a second, separate way — `fetchCapturesForTrades` really
+was the single choke point the tester's finding named it as.
+
+**Verification, this session, against the live shared dev Supabase
+project:**
+- Both of the tester's RED tests in
+  `captured-late-exclusion.live.test.ts` now PASS (2/2): the direct
+  `fetchCapturesForTrades` check (late row correctly absent) and the
+  end-to-end `recomputeEdgeFindingsForUser` check (20 on-time losses + 5
+  late-filled wins now correctly yields `n=20, win_rate=0`, not the prior
+  `n=25, win_rate=0.20`).
+- Full `lib/analytics/edge-engine/**` suite: 13 test files, 115/115
+  tests PASS (segmentation, gates, monotonicity, asset-class-suppression
+  ×2 files, edge-engine ×2, field-values, stats, both concurrency
+  independent-verify files, repository.live, the new
+  captured-late-exclusion file).
+- Adjacent suites re-run for regression: `decay-engine.test.ts` (15/15),
+  `decay-engine/repository.live.test.ts` (10/10), `spec-weekday`'s
+  `render-rate.test.ts` (6/6) and `weekday-canary.test.ts` (8/8),
+  `lib/rules/__tests__/distributions-repository.live.test.ts` (5/5,
+  Module 04's own adherence-fact use of `captured_late` unaffected),
+  `lib/ingestion/__tests__/arm-matching.live.test.ts` (8/8, 1 skipped,
+  pre-existing skip unrelated to this fix) — all still green.
+- This slice's own five tester-written files re-run together:
+  `review-graduation-schema.rls.test.ts` (27/27), `coverage-gap-check.live.test.ts`
+  (7/7), `captured-value-validation.test.ts` (19/19),
+  `write-late-capture-action.live.test.ts` (7/7) — all still green,
+  confirming the fix touched nothing these depend on.
+- `npx tsc --noEmit` — clean, whole project. `npx eslint` on the touched
+  file — 0 errors/warnings. `npm run check:import-boundaries` — clean,
+  103 modules/264 dependencies, no violations (the fix added no new
+  import). `npm run build` — clean, Turbopack, 28 routes.
+- One PRE-EXISTING, unrelated failure noted and NOT fixed as out of
+  scope: `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+  call-site allowlist is missing `lib/analytics/spec-weekday/repository.ts`
+  (added by the 2026-09-11 weekday-canary slice, commit `716e1a0`,
+  before this bug-fix session ever started) — reproduced on a clean
+  `git stash` with none of this fix's changes applied, confirming it
+  predates and is unrelated to this fix. Flagged here rather than
+  silently fixed outside this dispatch's scope; whoever picks up the
+  weekday-canary slice's own follow-up should add that one path to the
+  allowlist.
+
+**Verdict: the tester's blocking finding is CLOSED.** Story 1.3's
+acceptance criterion ("excluded from judgment findings") now holds,
+live-DB-proven, both directly and end-to-end. The three
+already-solid pieces the tester separately verified (schema/RLS,
+`writeLateCaptureAction`'s ownership boundary, the coverage-gap proactive
+check) are untouched by this change. This coder is not the one who gets
+to mark the slice "done" (that's qa/security-reviewer's call per this
+repo's own convention) — but per the tester's own stated gate, Module 06
+Slice 1 is now ready to move to `retrospeq-security-reviewer`.
+
+**Files touched this session:** `lib/analytics/edge-engine/repository.ts`
+(the fix + extended header comment). No other product file changed. Not
+committed or pushed, per this dispatch's own instruction.
 
 ## Autonomous continuation — cost/cadence policy (owner decision 2026-08-20)
 

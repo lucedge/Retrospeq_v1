@@ -325,6 +325,19 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // the same commit that introduces the call, per every entry above's own
   // cautionary note.
   'lib/analytics/decay-engine/repository.ts',
+  // Module 05 §4.10, the `spec.weekday` canary: `recomputeWeekdayCanaryForUser`
+  // runs under `withServiceRoleConnection` for the identical reason
+  // `lib/analytics/decay-engine/repository.ts`'s own entry above documents —
+  // a BACKGROUND recompute triggered from `lib/ingestion/sync.ts`'s
+  // post-sync hook, no authenticated session at the call site. Both the
+  // `shadow_runs` read and insert are explicitly parameterized on the
+  // caller-supplied `userId` (independently confirmed by the 2026-09-11
+  // security-reviewer PASS for this slice, commit `716e1a0` — that review
+  // already happened; this allowlist entry closes a mechanical omission
+  // from it, not a re-review). Missed at commit time, caught and closed
+  // 2026-09-11 by `service-role-inventory.test.ts`'s own mandatory
+  // failure mode doing exactly its job.
+  'lib/analytics/spec-weekday/repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
