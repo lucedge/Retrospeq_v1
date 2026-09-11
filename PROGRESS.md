@@ -26,12 +26,14 @@ authority.
 
 **Module 04 scope gap found by this slice's own QA pass, not yet tracked anywhere — given its own number, Slice 10e, rather than staying invisible.** Slice 7 (2026-08-25) built `promoteRule`/`demoteRule`/`retireRule` as backend-only Server Actions, explicitly scoping their UI as future work at the time. That UI has never shipped — confirmed via `grep`: those three functions are called nowhere in `app/` except their own Server Action definitions and test file. This is NOT Slice 10c (discovery, story 1.3 — correctly tracked as blocked on Module 05) and is NOT this slice (10d part 2, adherence) — it is a genuine, currently-unclaimed gap: the rule list/browsing view (story 1.1's "one sentence, one tappable number" list, the natural home for `app/(app)/rules/page.tsx`'s own already-reserved future-list placeholder from this slice) PLUS the severity promote/demote/retire controls (§6.1's `alert--choice` hard-cap swap markup, deferred all the way back at Slice 10b's own dispatch for exactly this reason — it needs an existing-rules list to select a demote target from, which didn't exist until now). Today, a trader who wants to promote a rule to hard, or simply see their existing rules, has no UI path to either — a real product gap, not a documentation nit. Per AGENTS.md step 8/"never fake it," this is logged here rather than left silently dropped; Module 04 is NOT done until Slice 10e is either built or deliberately, visibly deferred with a real reason. See "Next" below for the priority call on 10e vs. 10c.
 | 3 | Module 03 (Field Registry & Strategy) + Module 05 (Analytics & Findings) | **In progress, started 2026-09-02.** Both full specs read before any code, per this build's own standing discipline. Module 03 goes first — Module 05's own §10 Dependencies table names Module 03 (field definitions and types) as a real dependency, and Module 04's own field-based rule scoping (`strategy_var`) has been waiting on it since Slice 10b. **Slice 03a (field-registry schema + §3.2's 9-entry derived-field seed catalogue) CODED (2026-09-02), independently verified (2026-09-02) — the erasure regression that verification found is now FIXED (2026-09-02, see the matching decision-log entry and "Current task" for the full write-up) — schema/RLS/PK/uniqueness work AND the erasure fix are both verified; this slice is ready for security-reviewer/qa, not yet marked "done" by this coder (that call belongs to qa/security-reviewer per this repo's own convention). **UPDATE: security-reviewer gate PASSED, 2026-09-02 -- all 9 checklist items plus both named erasure deep-dive items, see the matching 2026-09-02 decision-log entry (search "SECURITY REVIEW GATE"); qa is the one remaining gate before this slice can be called done.** Schema/RLS/PK/uniqueness work itself independently re-proven sound with fresh adversarial fixtures. Built all 5 tables (`fields`/`strategies`/`strategy_versions`/`field_usages`/`trigger_conditions`), RLS on all 5 (100% coverage, live-verified), `handle_new_user` extended a 4th time to seed the 9 derived fields atomically at signup (backfilled live against all 328 pre-existing profiles, 0/328 mismatched), the `fields_forbid_derived_update`/`fields_forbid_derived_delete` triggers (adversarially proven, including the erasure escape hatch a real bug surfaced needing). **Two real, load-bearing bugs found and fixed in the spec's own literal DDL before it ever shipped** (not transcribed verbatim): `fields.id` would have been a globally-collide-on-second-signup primary key (fixed to composite `(user_id, id)`, `docs/adr/0017-fields-composite-primary-key.md`), and the literal `unique (user_id, name, owner_strategy_id)` constraint would not have enforced uniqueness for NULL `owner_strategy_id` rows at all (fixed with two partial unique indexes). **A third, cross-cutting regression found and fixed while writing this slice's own tests, not shipped**: the new derived-field delete-block trigger broke every OTHER RLS test file's cleanup (`deleteTestAuthUser`'s cascade from `auth.users` now hits it) — fixed at the source (`deleteTestAuthUser` itself now pre-deletes under the erasure escape hatch, one shared connection per test file, not per call, after a first per-call-connection draft was proven via live A/B testing to slow down `confirm.live.test.ts` before being replaced) rather than editing 40+ call sites individually. **A fourth, critical regression — the REAL production `executeErasure` path (not test cleanup) was broken for every user — found by independent verification and fixed 2026-09-02**: see the matching decision-log entry for the full root cause/fix/verification write-up; `lib/fields/fields-repository.ts`'s new `deleteAllFieldsForUser`, wired into `executeErasure`. **A genuine, flagged-not-resolved naming overlap with Module 04's operand catalogue** (`risk_pct`/`hold_seconds`/`day_of_week`/`order_type`/`instrument` vs. this slice's `drv.*`-prefixed field ids for the same underlying facts) is documented in the migration's own header and this slice's report, not silently picked a side on. **A separate instance of the same erasure-bug class, found while fixing the fields one and initially left open and tracked, has now ALSO been fixed (2026-09-02, same day, dedicated follow-up dispatch)** — `rules`/`rule_evaluations` (Module 04) had the identical gap: `lib/rules/rules-repository.ts`'s new `deleteAllRulesForUser` closes it, same mechanism as `deleteAllFieldsForUser`, wired into `executeErasure` and documented in `docs/adr/0010`'s own follow-up addendum — see the matching 2026-09-02 decision-log entry below for the full write-up. `erasure.live.test.ts` is now 8/8 (a new dedicated regression test seeding a real `rules` row and a real, genuinely-frozen `rule_evaluations` row). 41/41 (now 41/42, 1 intentionally skipped) live-DB schema tests passing, `tsc`/`eslint`/`npm run build` all clean. **Slice 03b (strategy CRUD + versioning, §4.6) is now FULLY DONE (2026-09-04)** — full coder → tester → security-reviewer → qa gate sequence passed. Backend only (no UI, no field-creation flow, no trigger-condition authoring UI). `lib/fields/strategy-repository.ts` (`createStrategy`/`editStrategy`, mirroring `rules-repository.ts`'s guarded-UPDATE versioning shape exactly, built to avoid repeating Slice 10f's own found bug) + `lib/fields/strategy-validation.ts` (§4.4 capture-moment validation, §9 trigger-count soft warning) + `lib/entitlements/strategy-usage.ts` (real `strategy.create` counter wired into `defaultCanDeps`) + one new migration (`strategies_one_default_per_user` partial unique index, applied live, a real gap the coder found and fixed on its own — Slice 03a had left this implicit) + `docs/adr/0018` (edit reuses the `strategy.create` capability, documented reasoning). Independent tester verification PASS on every item, using a genuinely DIFFERENT concurrency mechanism than the coder's own two-connection proofs (same-session `Promise.all` double-submit vs. held-open-transaction), plus a real concurrent (not sequential) double-attempt on the default-strategy uniqueness constraint the coder's own suite never tried; `field_usages`' delete-then-reinsert race window confirmed closed both structurally and empirically. **Security-reviewer PASS on all 6 items (2026-09-04)** — entitlement-gate reasoning from ADR 0018 independently re-derived and confirmed sound; `isDefaultStrategy` bypass confirmed genuinely unreachable via repo-wide grep AND direct code reading; RLS confirmed on `strategies`/`strategy_versions`/`field_usages`; all SQL parameterized; both two-connection concurrency proofs spot-checked directly. Two non-blocking follow-ups, BOTH logged in the Infra gaps list (search "isDefaultStrategy has no built-in check" and "field_usages_owner_insert"): `isDefaultStrategy` has no built-in "does this user already have zero strategies" check (not exploitable today, no live caller — flagged for Module 08's future default-strategy wiring); `field_usages_owner_insert`'s RLS policy doesn't verify `used_by_id` ownership at the RLS layer (closed today only by the application layer — added as a further confirmed instance to the repo-wide FK-ownership-check gap already tracked). **QA PASS on 6 of 7 items directly, with the 7th (ledger currency) failing and then fixed as part of closing this entry out** — spec fidelity to §4.6/§6.2 confirmed against the literal flow diagram, both Infra-gaps follow-ups confirmed accurate, ADR 0018 confirmed complete, §4.4 validation spot-checked (50/50 tests), non-negotiables clean, no new untracked gap. 46 fields tests + 10 entitlement tests, all green. `tsc`/`eslint` clean; `npm run build` hit this session's own already-escalated host-memory OOM pattern (now reproduced 3 times this session across different slices) — TypeScript compilation itself clean every time, reported honestly as infra-unverified, not a pass. Field creation, trigger-condition authoring, and any UI all remain future sub-slices. **Slice 03c (field CREATION -- §4.1's pruning rule + §4.3's type/config validation, backend only) is now FULLY DONE (2026-09-08) -- full coder -> tester -> security-reviewer -> qa gate sequence passed (tester found and the coder fixed a real §4.1 pruning-rule gap: zero tolerance for word-order reordering/pluralization, even against the curated list's own entries -- see the matching decision-log entries for the tester's finding, the coder's fix, security-reviewer PASS 6/6 (2026-09-08), and this qa PASS).** Built: `lib/fields/field-validation.ts` (`checkPruningRule` -- a curated, hand-reviewable per-derived-field list of known duplicate-name variants matched after Unicode-aware normalization, deliberately NOT a full NLP/embedding-similarity system nor a `data_type`-based match, reasoning documented in the file's own header; `validateFieldConfig` -- §4.3's per-`data_type` config shape, e.g. `pick_one`/`pick_many` require non-empty distinct `options[]`, `number` requires `min < max` plus a positive `step`, `rating`'s `min`/`max` are optional-but-paired with a 1-5 default applied by the caller) + `lib/fields/fields-repository.ts`'s new `createField` (kind=`account`|`strategy_var`, entitlement-gated, cross-user strategy-ownership-checked, clean-error-on-collision) + `lib/entitlements/fields-usage.ts`'s new `countActiveCustomFields` wired into `defaultCanDeps` + `docs/adr/0019-field-creation-entitlement-gate.md`. **Entitlement decision**: gates on the ALREADY-EXISTING `fields.custom` capability (`free: 0, pro: null`, present in `capability-table.ts` since Module 01's own first entitlements slice with zero real callers until now) rather than gating transitively through `strategy.create` -- ADR 0019 has the full reasoning (a field can be `kind='account'` with no strategy relationship at creation time at all, and the two capabilities could diverge in a future pricing change even though they resolve identically today). **Field id generation scheme** (a genuine judgment call, §3.1's own `'str.<uuid>.pd_array'` is confirmed-by-re-reading to be an illustrative example, not a mandated format): `'acct.' || uuidv7` / `'str.' || uuidv7`, generated server-side in SQL via the same `retrospeq.uuid_generate_v7()` every other PK in this schema uses -- deliberately NOT slugifying the trader's name into the id (renames would make a name-derived id segment permanently stale per §4.5, and arbitrary-name slugification can collide independently of the real `name` uniqueness constraint) and NOT embedding `owner_strategy_id` in a `strategy_var` field's id (would leave a stale artifact after a future §4.5 promotion to `account`) -- full reasoning in `createField`'s own header comment. Real `(user_id, name, owner_strategy_id)` collisions (already DB-enforced by Slice 03a's two partial unique indexes) are caught and translated into a clean `FieldNameConflictError`, matching `lib/broker/accounts-repository.ts`'s own `isUniqueViolation` precedent, never a raw Postgres error reaching the caller. 49 pure unit tests (`field-validation.test.ts`, incl. 20 pruning-rule duplicate-variant cases across all 9 derived fields plus 6 genuinely-novel-name accept cases) + 21 live-DB tests (`fields-repository.live.test.ts`: both kinds, id-prefix shape, config normalization/defaulting, the pruning rule end-to-end, config validation end-to-end, kind/scope mismatch, name-length bound, the real unique-index collision on both the unscoped and scoped index, independence of the two indexes, a cross-user `ownerStrategyId` hijack attempt correctly rejected with `StrategyNotFoundError` and no row written, a malformed non-UUID `ownerStrategyId` short-circuited before ever reaching Postgres, entitlement gate free/Pro incl. gate-runs-before-ownership-check ordering, and cross-user RLS isolation both for uniqueness scoping and for direct row visibility via `asRole`), all green (70 new tests total). `tsc --noEmit` and `eslint` both clean. `npm run build` hit this session's own already-escalated, NEEDS_YOUR_INPUT.md-tracked host-virtual-memory OOM pattern at the "Collecting page data" phase (TypeScript compilation itself completed cleanly first, same signature as every prior occurrence this session) -- reported honestly as infra-unverified, not a pass; no new NEEDS_YOUR_INPUT.md entry needed since this exact failure mode is already tracked there. No new runbook entry (no alerting/background-job condition introduced -- `createField`'s errors are ordinary synchronous validation rejections, not §7.3-shaped alerting conditions). Field rename/archive/type-change/promotion (§4.5), the field-cap warning (§4.8), trigger-condition authoring (§4.7), and any UI (field picker, field editor) all remain future sub-slices, unchanged in scope. **Slice 03d (§4.5's field LIFECYCLE -- rename + archive, backend only) is now CODED (2026-09-08), coder pass only, NOT yet independently tested/security-reviewed/QA'd.** Built: `lib/fields/fields-repository.ts`'s new `renameField`/`archiveField`, plus three new error classes (`FieldRecordNotFoundError` -- deliberately NOT reusing `strategy-validation.ts`'s own differently-scoped `FieldNotFoundError` name, to avoid a future forced import alias; `FieldDerivedImmutableError`; `FieldInUseError`, §9's real `FIELD_IN_USE`). `renameField` reuses `createField`'s own `checkPruningRule`/`FieldNameConflictError`/`FieldNameInvalidError` verbatim (renaming TO a derived-duplicate name or an active-field collision is rejected the same way creating it that way would be) and confirms-then-surfaces the derived-field block cleanly BEFORE ever attempting the UPDATE the `fields_forbid_derived_update` trigger would otherwise reject with raw trigger text -- verified live, not assumed (a real `renameField(_, 'drv.session', _)` call asserted to throw the new typed error with no trigger-shaped text in the message). `archiveField` checks `field_usages` generically across BOTH `used_by` values (only `'strategy'` rows can exist in this repo today -- no Module 04 rule-authoring-against-the-registry pipeline exists yet -- but the query is written to need zero changes once one does), resolves dependent labels via a direct schema-qualified SQL join to `retrospeq.strategies`/`retrospeq.rules`+`rule_versions` rather than a new `lib/fields -> lib/rules` TS import (no such import exists anywhere in this repo today, confirmed by grep; AGENTS.md's own "Analytics code cannot import rule code" non-negotiable made this feel worth avoiding by construction rather than by discipline alone), is idempotent on an already-archived field (no re-throw, returns the existing `archivedAt`), and closes the real check-then-write TOCTOU window (a concurrent `editStrategy` inserting a fresh `field_usages` row between the friendly pre-check and the write) with a single guarded UPDATE whose own WHERE clause re-checks `not exists (... field_usages ...)` atomically -- the same "encode the real invariant in the guarded write, not just an earlier read" posture this build's own Slice 7/10b races already established, applied here up front rather than found later. **Two judgment calls made explicit per this slice's own dispatch instruction, documented in both this entry and a substantial code comment in `fields-repository.ts` itself, not silently assumed either way**: (1) "change a field's type" (§4.5) needs NO new function -- it is `createField(...)` (already built, Slice 03c) optionally followed by a separate, caller-initiated `archiveField(...)` call on the old field id, decided NOT to auto-archive the old field as a side effect, since §4.5's own row never says the old field is archived automatically and the old field's captured history stays independently valid and useful; (2) `pick_one`/`pick_many` option add/remove is explicitly DEFERRED, not built -- removing an option needs a genuinely new `config` jsonb shape (a per-option soft-archive marker) this schema does not have today, is real design work outside a "rename + archive" dispatch's own scope, and has no caller yet (no field-editor UI exists at all). 19 new live-DB tests (`fields-repository.lifecycle.live.test.ts`): rename basics/trim/name-length, the pruning rule applied to rename (both an exact derived-name match and a curated variant), a real active-field name collision, a self-rename no-op, an archived-field rename reusing an active field's name (proving the two partial unique indexes' `state = 'active'` scoping), the derived-field block on both operations (message asserted clean of trigger/raise-exception text), not-found handling, idempotent double-archive, and -- the dispatch's own required centerpiece -- archiving BLOCKED by a real `field_usages` row seeded through Slice 03b's own real `createStrategy` (dependents array asserted to name the actual strategy), then confirmed to UNBLOCK once `editStrategy` rebuilds `field_usages` with that field removed, plus cross-user adversarial isolation (RLS + app-layer ownership check) for both operations. Full `lib/fields` suite re-run clean: 186/186 (167 pre-existing + 19 new). `tsc --noEmit` clean, `eslint .` clean (0 errors, the same 19 pre-existing warnings). **`npm run build` completed CLEAN this time** (~5.7GB free host memory checked first, no leftover node processes found before starting) -- the first time this exact session's own escalated OOM pattern did not recur, consistent with it being genuine host memory pressure rather than a code defect (matches the prior session's own "killing leftover processes recovers enough headroom" finding). No new migration (no schema change -- both operations write within `20260902010000_field_registry_schema.sql`'s existing columns). No new ADR (a Module 03 spec-interpretation judgment call, not a 00-foundation convention deviation -- documented in-file per this slice's own explicit instruction: code comment + this report, matching `docs/adr/0018`'s OWN threshold for when a judgment call gets a dedicated ADR file rather than an in-file comment). No new `docs/runbook.md` entry (same reasoning as Slice 03c's own entry just above -- `renameField`/`archiveField` are ordinary synchronous, caller-facing rejections, not a §7.3-shaped alerting/background-job condition). Promotion (§4.4/§6.1), trigger-condition authoring (§4.7), the field-cap warning (§4.8), pick_one/pick_many option add/remove (deferred above), and any UI all remain future sub-slices, unchanged in scope. **Slice 03d is now FULLY DONE (2026-09-08)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, including a coder follow-up round that closed a real TOCTOU gap the tester found in `archiveField`'s guarded UPDATE (Postgres's `FOR KEY SHARE`/`FOR NO KEY UPDATE` lock modes don't actually conflict -- fixed with `pg_advisory_xact_lock(hashtext(fieldId))`, re-verified twice from two different call paths) -- see the matching decision-log entries (search "Module 03 Slice 03d") for the full multi-round write-up. Committed as `bc5425c`. **Module 05's own first slice, Slice 05a (the module's core schema -- `analytic_config`/`analytic_user_suppression`/`user_cohorts`/`findings`/`detections`/`analytic_renders`/`finding_rule_links`, 100% RLS coverage -- plus the `canRender` registry runtime, §4.8, and the ESLint-enforced Module 04/05 isolation boundary, §7.5/AGENTS.md's own "Analytics code cannot import rule code" non-negotiable -- backend only, no UI, no edge/detection engine, no real analytic computation) is now FULLY DONE (2026-09-08)**, closing Module 05's foundational schema and registry runtime. Two full fix-and-reverify rounds: the first independent-verification pass found 5 issues (a fail-closed-guarantee coverage gap since closed with new tests, the `user_cohorts` RLS deviation re-derived clean, three real ESLint-boundary bypasses -- dynamic import, re-export indirection, deep relative-path nesting -- an inaccurate "all failures in one file" claim since corrected, and an undocumented §4.8 "config cached 60s" deviation); a coder fix dispatch closed the migration-idempotency gap (all 7 tables' `CREATE POLICY` statements now guarded, verified via 4 independent consecutive re-applies), built a real 60s in-process TTL cache for `getAnalyticConfig` with defensive never-cache-a-failure semantics, and closed two of the three ESLint bypasses with a principled fix (a single depth-agnostic regex shared character-for-character across a `no-restricted-imports` pattern and two `no-restricted-syntax` selectors covering both `Literal`- and quasi-only-`TemplateLiteral`-sourced dynamic imports -- confirmed via direct `no-restricted-imports` source inspection that it structurally can never see `ImportExpression` nodes at all, motivating the custom selectors); a second independent-verification round then found one precise residual gap in that fix (a zero-substitution template literal, `` import(`@/lib/rules/x`) ``, wasn't covered by the `Literal`-only selector), closed by a small follow-up coder dispatch adding the matching `TemplateLiteral`-source selector. The third bypass (re-export indirection through a file outside `lib/analytics/**`) was deliberately, explicitly deferred as accepted residual risk -- `retrospeq-security-reviewer`'s own blocking-authority PASS makes this conditional: **it must be closed (via `dependency-cruiser` or equivalent import-graph tooling) before Module 05's edge/detection-engine slices land real analytic computation** -- tracked durably in the Infra gaps list above, not just the decision log, plus a canary test (`eslint-boundary.test.ts`'s "KNOWN RESIDUAL RISK (b)" case) that fails loudly if the gap is ever accidentally closed without anyone noticing or reopened wider. `retrospeq-security-reviewer` and `retrospeq-qa` both gave clean PASSes on the final corrected slice, independently re-deriving rather than re-trusting prior rounds (fresh RLS reads, a fresh live re-application of the migration, fresh cache adversarial scenarios, a fresh reproduction of the fixed template-literal case) -- QA additionally caught and fixed two small same-day documentation-staleness slips (a runbook entry that still claimed no caching layer existed after the caching fix landed, and a stale top-level PROGRESS.md synthesis paragraph). See the matching decision-log entries (search "Module 05 Slice 05a") for the full multi-round write-up. **Slice 03e (field promotion, §4.5/§6.1) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, including one round-trip where the tester found a real (if ultimately benign) gap in the coder's own race-surface documentation -- `promoteField` racing a concurrent `rebuildFieldUsagesForStrategy` doesn't lock-block at the Postgres level (the same `FOR KEY SHARE`/`FOR NO KEY UPDATE` non-conflict class Slice 03d's `archiveField` bug belonged to), but traced and confirmed harmless because `promoteField` never reads `field_usages` and the rebuild's own guard never checks `kind`/`owner_strategy_id` (what promotion actually touches) -- fixed with an honest, complete doc update (not a reflexive copy of Slice 03d's advisory-lock fix), independently re-derived and agreed sound by `retrospeq-security-reviewer` on both correctness AND security-posture grounds (no cross-user exposure, no entitlement-cap bypass). `promoteField`/`findPromotionCandidates` built in `lib/fields/fields-repository.ts`, reusing `fetchFieldForLifecycleOp` and `field-validation.ts`'s `normalizeForMatch` (now exported) rather than duplicating logic. **This closes Module 03's entire backend** (schema through promotion, Slices 03a-03e, all coded/tested/security-reviewed/QA'd). One new non-blocking gap found along the way, tracked in the Infra gaps list above (distinct from the existing `field_usages_owner_insert` entry -- that one is cross-user RLS, this one is same-user application-layer scope): `field_usages` never verifies a `strategy_var` field's `owner_strategy_id` actually matches the referencing strategy. **Trigger-condition authoring (§4.7) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed, the most architecturally significant Module 03 slice yet (the first genuine Module 03/04 cross-module integration). The coder read past the dispatch's own suggested framing (Module 03 §4.7's 'by the boundary test it is a rule... evaluated by Module 04') and found Module 04 §5.2 explicitly contradicts it ('Machine-evaluated only. Self-attested statements belong in Module 03 as trigger conditions'), plus that Module 04 Slice 1's own original migration had already deferred a dedicated `trigger_evaluations` table for exactly this purpose -- followed the spec's actual pre-planned schema instead of the suggested reuse-Module-04's-rules-pipeline framing, documented in `docs/adr/0022`. `trigger_evaluations` (Module 04-side schema, owner-SELECT-only, zero client write, immutability triggers confirmed to hold against both authenticated AND raw service_role attempts) is a genuinely separate table from `rules`/`rule_versions` -- no cross-module table write occurs, so this doesn't touch the Module 04/05 ESLint isolation boundary at all (confirmed by QA as correctly distinguished in the ADR). `freezeTriggerEvaluationsForTrade` wired into BOTH `confirm.ts` freeze paths (`confirmDay`/`autoConfirmStaleTrades`), same transaction as the existing rule-evaluation freeze, atomicity confirmed live with a forced-rollback test. A real Pro-tier paywall bypass was found and closed along the way: `createTriggerCondition` reuses `strategy.create`'s entitlement gate (matching `editStrategy`'s ADR 0018 precedent) -- without it, a free user's onboarding-created default strategy would have let them author trigger conditions for free; the tester's own re-verification went further and rewrote the coder's test to exercise the REAL default-strategy path (`createStrategy({isDefaultStrategy: true})`), not an unreachable synthetic one. `trigger_evaluations` was checked specifically against the exact erasure-bug class that has now hit this build twice (`fields`, then `rules`, both requiring an explicit pre-delete function before Module 01's `admin.deleteUser()` cascade) -- confirmed NOT a third instance, already safely reached by the existing `deleteAllTradingAccountsForUser` cascade (`trigger_evaluations -> trades -> trading_accounts`, all `on delete cascade`, same transaction as the erasure flag) -- the reasoning is now written into a new `docs/adr/0010` addendum so a future reader doesn't have to re-derive it or wonder if the pattern is repeating. Hedge-word detection (§2.4) built as a soft warning only, never a block, length-capped with static patterns (no ReDoS/injection surface). The already-tracked stale `lib/privacy/export.ts` Infra gap was updated to explicitly name `trigger_evaluations`/`trigger_conditions` as newly-missing too, rather than letting that be rediscovered separately later. **This closes Module 03's entire backend, including its one real cross-module integration point with Module 04.** Remaining Module 03 scope, all future work: the field-cap warning (§4.8 UI) and ALL of Module 03's UI (field picker, field editor, the strategy builder, the strategy screen -- zero UI exists for this module today). **Module 05's edge engine core statistics (section 4.1-4.3) is now FULLY DONE (2026-09-09)** -- the most heavily-scrutinized slice this build has produced, and the first real analytic computation Module 05 has ever run. Full coder -> tester -> security-reviewer -> qa gate sequence passed, but only after two full rounds of real, blocking findings, each independently confirmed and each properly fixed rather than smoothed over: (1) a genuine statistical defect -- the coder's own false-positive-rate validation (1,000 synthetic no-effect users) measured a family-wise FPR of 0.079 against nominal alpha=0.05, and an independent tester investigation (a from-scratch pure-Python/mpmath simulation sharing zero code with the implementation) isolated the exact mechanism: min(p_winRate, p_avgR) treated as a single per-segment p-value is not itself a valid p-value, breaking Holm-Bonferroni's family-wise-error-rate guarantee one layer before Holm's own correction even runs. Fixed with a Sidak/Bonferroni adjustment on the two-test combination before Holm correction (gates.ts's computeRawPValue); re-measured at full scale (N=10,000, two independent seeds) confirming the family-wise rate drops to ~0.035-0.041, comfortably under nominal. (2) A genuine concurrency defect -- the same tester round live-reproduced (via real pg_stat_activity lock-wait polling, not timing) two simultaneously-active findings rows for the identical (user, strategy, field, segment) tuple, since nothing at the DB level enforced at-most-one-active-row-per-tuple and READ COMMITTED let two concurrent writers each miss the other's in-flight insert. Fixed with a two-layer defense (a partial unique index as an unconditional backstop, plus a pg_advisory_xact_lock for graceful handling) matching this repo's own established archiveField/promoteRuleSeverity pattern -- which then surfaced a THIRD, smaller finding in the follow-up security review: the per-segment lock-acquisition loop wasn't sorted into a deterministic order, risking a genuine deadlock under concurrent recomputes of the same strategy (the same problem class rebuildFieldUsagesForStrategy had already solved once for a sibling module) -- fixed with the same sort-before-lock discipline, verified with a pg_locks-inspection test stronger than 'no deadlock error occurred.' A final QA pass found one small, mechanical, non-statistical gap (a missing service-role-inventory allowlist entry, Module 01 section 7.2's mandatory no-exceptions test) -- closed directly without a new gate cycle. Every fix is independently re-verified, every ADR (0023-0026) reflects the real, final, corrected reasoning, not the original (sometimes wrong) first-draft rationale. Full detail across many decision-log entries (search "Module 05" from this point in the log). **Module 05's detection engine (section 4.4's three gates + the section 4.5 v1 five-detection catalogue) is now FULLY DONE (2026-09-09)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed (coder ran in a prior, separately-terminated session; tester/security-reviewer/qa all ran and passed in this resumed session -- see the matching 2026-09-09 decision-log entries, search "TESTER GATE" and the security-reviewer/qa entries immediately around it, for full detail). 78 tests (unit 100%/99%/94% line coverage across gates.ts/occurrence-detectors.ts/detection-engine.ts, property-based invariant tests, live-DB RLS cross-user isolation, a byte-for-byte ISO-week-convention cross-check against Module 04's own implementation confirming no divergence), all green. The one standing conditional from Slice 05a's security review -- the ESLint Module 04/05 isolation boundary's re-export-indirection bypass, explicitly deferred THEN on the condition it be closed before real detection-engine computation landed -- was genuinely CLOSED this slice, not re-deferred: `dependency-cruiser` installed and verified (via a reconstructed real bypass fixture) to catch the exact gap the ESLint-only boundary couldn't. One real, non-blocking gap found (by tester, independently confirmed by security-reviewer and qa): `rule_proposable` (spec section 5's own named mechanism for enforcing "the count tier never proposes a rule on frequency alone") does not exist anywhere in the code or schema -- not currently exploitable (repo-wide grep found zero downstream readers of `detections` today), tracked in the Infra gaps list with a binding condition that it must be added before any code reads the `detections` table. Section 4.7's "never name the syndrome" rule confirmed clean (this slice renders nothing yet; internal `analytic_id` strings and code comments only, no user-facing diagnosis language). ADR 0029's supersession-key claim verified against the actual `writeDetectionsForUser` code, not just trusted. **Next: orchestrator's call between Module 03's remaining UI work (field picker, field editor, the strategy builder, the strategy screen, the field-cap warning section 4.8 UI -- zero UI exists for Module 03 today, though a separate concurrent session has uncommitted strategy-builder UI work in progress in this same tree as of 2026-09-09, not yet gated or committed) and Module 05's remaining scope (section 4.6 improvement detection, section 4.11 decay checking, section 4.10 the weekday canary, `rule_proposable`'s own addition per the binding Infra-gaps condition above, shadow-harness wiring for real analytics) -- no hard blocker either way, per standing build-order judgment.** **UPDATE 2026-09-09 (retrospeq-qa, final gate on Module 03 strategy list + creation builder UI, app/(app)/strategies/**): PASS, cleared to commit.** This is a deliberate out-of-order landing, not a silent reversal of the build-order decision recorded immediately above in this same cell (that concurrent-session UI work had already been built, uncommitted, before this cell's own note about it was written) -- the tester -> coder-fix -> security-reviewer -> qa gate chain this cell called for has now fully run: independent tester CONDITIONAL PASS (found the STRATEGY_BUILDER_PARTIAL orphan-strategy gap and pushed back on it being merely documented) -> coder fix (deleteOrphanedStrategyShell, a narrow guarded compensating delete) -> security-reviewer PASS (6/6) -> this qa pass, all dated 2026-09-09, see that date's Decision-log entries for each. This qa pass independently re-ran all three of the review chain's own test files against the live DB/dev server rather than trusting prior pass counts (orphan-cleanup live test 3/3, entitlement defense-in-depth live test 3/3, strategies-builder E2E independent-verify 3/3 -- all still green) and re-captured all 7 design-system screenshots itself (no red/green, exactly one primary .rq-btn per view, .rq-num correctly on genuine numbers with one pre-existing non-blocking cosmetic nit on the success screen's strategy-name span still present, not yet fixed). One residual, explicitly non-blocking item carried forward: zero unit/component tests exist for actions.ts/StrategyBuilder.tsx beyond the E2E/live-DB coverage -- judged acceptable to ship given the security-relevant paths (two-phase write, entitlement gate, compensating delete) all have genuine live-DB/E2E proof, but flagged as a real, trackable gap against this repo's own rules/actions.test.ts precedent, not silently closed. Full detail in this date's qa Decision-log entry.** **UPDATE 2026-09-09 (full coder -> tester -> security-reviewer -> qa chain, Module 05 `rule_proposable` + section 4.6 improvement detection): PASS, cleared to commit -- all four gates independently verified rather than trusting prior reports, see this date's Decision-log entries (search "PART 1 -- rule_proposable" for the coder entry; the tester, security-reviewer, and qa entries are dated the same day immediately above/below it in the log).** This closes the standing, binding `rule_proposable` Infra-gaps item (now struck through in that list) and builds section 4.6's "a pattern that was above base rate for >= 4 weeks and has been absent for >= 4 weeks" as a genuinely new `direction: 'active' | 'improved'` computation sharing gate machinery with the existing section 4.4 engine via a refactored `computeDetectionCore`, not a parallel reimplementation. Section 4.4's own already-shipped behaviour is proven byte-identical (zero existing tests edited, only extended) by both the tester's and the qa pass's own independent re-runs. Real, non-cosmetic findings along the way, not a rubber-stamped chain: the coder found and fixed a genuine bug in its own dispatch's design (`computeDetectionCore` returning a non-null `'incident'`-classified result on persistence failure, not `null` -- a naive nullness check in the new improvement path would have let a too-short elevated period wrongly qualify); the tester found and fixed a real gap (`repository.ts`'s new `withServiceRoleConnection` caller was missing from the repo-wide `service-role-inventory.test.ts` allowlist, plus thin property-based coverage on the improvement invariants, both closed same-pass); the security reviewer independently confirmed (not re-derived from the other two) that `rule_proposable` can never be `true` for an incident or a bare count -- the exact non-negotiable this whole tracked gap existed to protect -- and that the mutual-exclusivity tie-break between the two write paths is race-safe under the existing advisory-lock/transaction shape with zero index changes needed; qa confirmed section 4.7 ("never name the syndrome") compliance across every new comment/ADR/test string, genuine ISO-calendar-week bucketing (not a day-count approximation) for the new 4-week thresholds, and fixed one stale trailing sentence in the Infra-gaps bullet itself that still claimed "not yet independently re-verified" after both reviews had already passed. No UI in this slice (pure computation + schema + migration `20260909040000_detections_direction_and_rule_proposable.sql`), so no screenshot self-check was required. New ADR `docs/adr/0031-detection-direction-and-rule-proposable.md` plus an addendum to `docs/adr/0029` closing that ADR's own explicitly-flagged open question about the "now-stale forward row" case. Explicitly OUT of scope, not silently absorbed: section 4.11 decay checking, section 4.12 asset-class suppression, section 4.10's `spec.weekday` canary, and all Module 05 UI -- next candidates for a future Module 05 slice, orchestrator's call per standing build-order judgment. **Module 03 fields management screen (§4.5/§6.1) CODED, 2026-09-09** — `app/(app)/fields/{page.tsx,actions.ts,FieldsList.tsx,new/{page.tsx,FieldCreateForm.tsx}}`: a list/management screen (derived fields as read-only chips, custom fields grouped active/archived with rename/archive/promote wired to the already-reviewed `lib/fields/fields-repository.ts` backend) plus a standalone field-creation flow at `/fields/new`, entitlement-gated on `fields.custom` the same way `/strategies/new` gates `strategy.create`. One new repository read added (`fetchFieldsForManagement`, additive, does not touch any existing exported function's behaviour — full existing `lib/fields` suite, 272 tests/17 files, still green after the change). Field-cap warning UI (§4.8) explicitly NOT built — scoped out per this slice's own dispatch, a separate follow-up. Self-checked via Playwright screenshots against a real Pro-plan and free-plan user on the live dev DB (full lifecycle: create account-kind + strategy_var-kind fields, rename, archive-with-dependents-blocked, promote) — all screens confirmed clean against the design-system rules (no red/green, exactly one primary `.rq-btn` per view, `.rq-num` on the archived-count only where a real number exists). `npx tsc --noEmit`, `npx eslint .` (0 errors; same pre-existing warning set elsewhere in the repo, none in the new files), and `npm run build` (Turbopack, 28 routes incl. `/fields` and `/fields/new`) all clean — build needed one retry due to this session's own well-documented host-memory OOM pattern in the "Collecting page data" phase, not a code issue. **Not marked done by this coder dispatch** — needs the tester -> security-reviewer -> qa chain before that call, per this repo's own convention. One incidental infra finding while self-checking: `chromium_headless_shell-1234` crashed outright (fatal exception, not a memory/disk issue) launching against this session's dev server; the already-documented `chromium-1223` (full, non-headless-shell Chrome) workaround from the ENOSPC entry below also fixes THIS distinct crash mode, so `playwright.config.ts` now reads an optional `PLAYWRIGHT_CHROME_PATH` env var (unset by default, zero effect on every other run) rather than requiring every future agent to rediscover the same workaround from scratch. **UPDATE 2026-09-09 (full coder -> tester -> security-reviewer -> qa chain, fields management screen): PASS, cleared to commit.** Independent tester pass added 61 new tests (49 mocked action-layer unit tests, 8 live-DB lifecycle tests, 4 real-browser E2E tests) and found/fixed one real defense-in-depth gap: `renameFieldAction`'s Zod schema checked `.min(1)` on the RAW un-trimmed name, letting a whitespace-only value reach the repository layer and fall into a misleadingly-*retryable* generic error instead of the correct non-retryable one -- fixed with `.trim()` on the schema plus a dedicated `FieldNameInvalidError` catch branch, regression-tested. Security-reviewer PASS on all 6 applicable checklist items (2 correctly recorded N/A -- no credential table, no broker-connect path in this slice) -- userId/ownership re-checked at the repository layer independent of RLS, entitlement gate genuinely server-side (re-verified live: a free-plan session calling `createFieldAction` directly is rejected `ENTITLEMENT_LIMIT`), all six new `lib/rate-limit/config.ts` scopes correctly wired, zero raw SQL/`eval`/compound-rule/XP-adherence surface, RLS unchanged and still 41/42 passing live. This qa pass independently re-ran every test file rather than trusting prior counts (57/57 unit+live-DB, 4/4 E2E, all reproduced fresh) and re-captured/read all 8 design-system screenshots directly: no red/green anywhere (the one accent color used for every primary button is amber, never a success/danger pair), exactly one primary `.rq-btn` on every screen including both the free-plan-gate and Pro-empty states, `FIELD_IN_USE` dependents rendered inline in a neutral well naming the real dependent strategy per section 9's own wording. Confirmed the one pre-existing, non-blocking design-system nit the tester flagged (`FieldCreateForm.tsx`'s success screen wrapping the new field's NAME in `.rq-num`) is genuinely a repeat of `StrategyBuilder.tsx`'s own identical pre-existing pattern (line 228, visually confirmed in this pass's own screenshot too), not a new regression -- correctly tracked as a repo-wide sweep item, not fixed piecemeal in one file. Confirmed `vitest.config.ts`'s `coverage.include: ['lib/**/*.ts']` structurally excludes every `app/**/actions.ts` file in this repo (9 files total, not unique to this slice) from any coverage percentage -- a genuine, pre-existing, repo-wide tooling gap, correctly left named rather than fixed unilaterally by one UI slice's own gate (widening it is a repo-wide decision affecting 8 other slices' own reported numbers). **This closes Module 03's fields management screen end to end (coder -> tester -> security-reviewer -> qa, all PASS).** See the matching 2026-09-09 "QA GATE (FINAL, pre-commit), Module 03 fields management screen" decision-log entry for full detail. **Module 05 sec 4.11 decay checking + sec 4.12 asset-class suppression is now FULLY DONE (2026-09-10)** -- full coder -> tester -> security-reviewer -> qa gate sequence passed; this slice's own coordinating session went offline mid-handoff after tester/security-reviewer both passed, picked up by the orchestrator for the final QA gate and commit. `lib/analytics/decay-engine/` (pure `decay-engine.ts` + `repository.ts`, wired into `lib/ingestion/sync.ts`'s post-sync hook) implements sec 4.11's "every 30 new trades: recompute; if current_delta < 0.5x delta_at_graduation, streak += 1 else reset; streak >= 2 emits decay signal" against `delta_win_rate` (ADR 0032, ADR 0033), with per-link error containment so one corrupt `finding_rule_links` row never blocks its neighbours on every future sync. `lib/analytics/edge-engine/asset-class-suppression.ts` + `edge-engine/repository.ts`'s `writeShadowedFindings` implement sec 4.12: a strategy counts as crypto only when EVERY distinct eligible-trade platform is `binance`/`bybit` (never `manual`), suppressed segments never reach `findings` at all, logged to `shadow_runs` instead (ADR 0033). Security reviewer found one real, non-blocking gap (missing `user_id` scoping on the findings state-transition UPDATE) -- confirmed fixed in the final code by this qa gate. Tester's and security reviewer's shared product-judgment finding (all-or-nothing suppression granularity) was taken to the project owner by the orchestrating session; decision (keep as-is, track as product debt) is now recorded as a dated addendum to `docs/adr/0033`, closing a real ledger-currency gap this qa gate itself found and fixed rather than left silent. 39 slice-specific tests (24 pure + 15 live-DB) plus the 3-test service-role-inventory allowlist check, all passing, independently re-run by tester/security-reviewer/qa across three separate dispatches. `tsc`/`eslint`/`npm run build`/`check:import-boundaries` all clean. No UI in this slice. See the matching 2026-09-10 TESTER/SECURITY REVIEWER/QA Decision-log entries for full detail. **Sec 4.10 `spec.weekday` canary CODED, 2026-09-10** (`lib/analytics/spec-weekday/`) — the last named-but-deferred Module 05 gap (sec 4.9's own shadow-harness scope note tracked this since Phase 0) is now built: the canary reuses the EDGE engine's own Holm-corrected `computeFamilyFindings` gate machinery (a flagged, deliberate divergence from this slice's own dispatch text, which pointed at the detection engine instead — see `weekday-canary.ts`'s own header and this date's CODER decision-log entry for the full reconciliation), is hard-blocked from promotion at two independent structural layers (`permanently_shadow` on the registration plus `promotion.ts`'s own id-keyed `PERMANENTLY_SHADOW_ANALYTIC_IDS`, not just a missing call site), and is wired into `sync.ts`'s post-sync hook so its own render-rate metric (`render-rate.ts`, §8 target < 5%) has real data to answer from. `docs/adr/0034` records why it must never promote. **UPDATE 2026-09-11 (full coder -> tester -> security-reviewer -> qa chain, sec 4.10 `spec.weekday` canary): PASS, committed and pushed as `716e1a0`.** This table row was found stale by this date's cold-start orchestrator run (still reading "Not marked done by this coder dispatch — needs tester -> security-reviewer -> qa" after all three follow-on gates had already run and passed, dated 2026-09-10/2026-09-11 — see the Decision-log entries and the top-of-file "Current task" AT A GLANCE block, which HAD already been kept current) — fixed here per this build's own ledger-currency convention. **This closes Module 05 section 4.10 end to end.** **Section 4.9 (shadow harness wiring for real analytics), tracked open since Phase 0, is now judged SATISFIED as of this same date** — not from vibes, from direct code evidence: `runShadowAnalytic`/`runShadowAnalyticBatch` (the generic harness runner built in Phase 0 against synthetic fixtures only) now has a genuine non-test production caller (`lib/analytics/spec-weekday/repository.ts`), and the edge engine's `writeShadowedFindings` (`lib/analytics/edge-engine/repository.ts`) independently writes real, governance-suppressed findings computations to `shadow_runs` on every sync. Both paths are wired into `lib/ingestion/sync.ts`'s post-sync hook and run against real (not fixture) data whenever real trades exist. The harness's own promotion criteria (shadow→beta: ≥30 real accounts, manual inspection on ≥10; beta→live: ≥4 weeks, no accuracy complaints) remain necessarily unexercised — there are no real production users yet, a fact about the product's launch stage, not a code gap — so "wiring" (the harness is a real, load-bearing part of the analytics pipeline, not a stub) is the correct and complete reading of what §4.9 itself asks for; the promotion criteria themselves are a runtime/ops decision for whenever real users exist, not a coding task. Logged here rather than left as a perpetually-open item nobody re-examines. **Module 03/05's remaining genuine scope, re-surveyed against both specs directly (not from memory) this same date**: Module 03 §5.1's own UI element list names "the strategy screen with per-field finding state" as a distinct, still-unbuilt UI surface (list + builder + fields-management + field-cap-warning UI all now exist; a per-strategy detail/view screen does not — confirmed by `find app -iname "*strategies*"` and `grep href` against `app/(app)/strategies/page.tsx`, zero links to any per-strategy route). Module 05 §5 states plainly "This module renders nothing. It supplies typed payloads" — so Module 05's own remaining "UI" scope is not a Module 05-owned screen at all, it's exactly this Module 03 strategy-detail screen (consuming `FindingPayload`/§5.1's reference markup) plus, later, Module 06's weekly review (Phase 4, not yet in scope). No fetch/read path for `findings` rows exists yet anywhere in `lib/` (confirmed by grep — only write paths exist) and the `canRender` registry runtime already defines a `'strategy'` surface (`lib/analytics/registry-runtime.ts`) with no caller yet, confirming this was the intended next consumer. **Picked as the next task**: build the Module 03 §5.1 strategy-detail screen (read path + UI), the one item that closes real, concretely-scoped, spec-named debt in both modules simultaneously. |
-| 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | **In progress, started 2026-09-11.** Module 03's UI (all 6 §5.1 elements) and Module 05's backend both fully shipped first, per build order. Module 06 Slice 1 (schema for `reviews`/`review_prompts`/`prompt_history` + daily close-out screen completion, stories 1.1-1.4) CODED 2026-09-11. **TESTER PASS also 2026-09-11: schema/RLS (27/27 new cross-user tests), the coverage-gap proactive check (7/7, true/false positive and negative all confirmed), and `writeLateCaptureAction`'s own ownership/strategy-version security boundary (7/7) are all genuinely solid — but a real, live-DB-reproduced blocking bug was found: story 1.3's own "excluded from judgment findings" acceptance criterion is false today (`lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segmentation/finding computation — reproduced live, 2/2 new tests FAIL on purpose in `captured-late-exclusion.live.test.ts`, encoding the spec's real requirement). See the matching 2026-09-11 "TESTER PASS" Decision-log entry for the full write-up. **BUG FIXED, same day (2026-09-11):** `fetchCapturesForTrades` now excludes `captured_late = true` rows (`and captured_late = false` in its own WHERE clause) — both tester tests now PASS, full `lib/analytics/edge-engine/**` suite (13 files/115 tests) plus adjacent decay-engine/weekday-canary/distributions-repository/arm-matching regression suites all still green, `tsc`/`eslint`/`check:import-boundaries`/`npm run build` all clean. See the matching 2026-09-11 "BUG FIX" Decision-log entry for the full write-up, including the blast-radius check across detection engine/decay engine/asset-class suppression/weekday canary. **Ready for security-reviewer now** (this coder's own call, not qa/security-reviewer's "done" call). Not committed, not pushed. |
+| 4 | Module 06 (Review & Graduation) + Module 07 (Engagement) | **In progress, started 2026-09-11.** Module 03's UI (all 6 §5.1 elements) and Module 05's backend both fully shipped first, per build order. Module 06 Slice 1 (schema for `reviews`/`review_prompts`/`prompt_history` + daily close-out screen completion, stories 1.1-1.4) CODED 2026-09-11. **TESTER PASS also 2026-09-11: schema/RLS (27/27 new cross-user tests), the coverage-gap proactive check (7/7, true/false positive and negative all confirmed), and `writeLateCaptureAction`'s own ownership/strategy-version security boundary (7/7) are all genuinely solid — but a real, live-DB-reproduced blocking bug was found: story 1.3's own "excluded from judgment findings" acceptance criterion is false today (`lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segmentation/finding computation — reproduced live, 2/2 new tests FAIL on purpose in `captured-late-exclusion.live.test.ts`, encoding the spec's real requirement). See the matching 2026-09-11 "TESTER PASS" Decision-log entry for the full write-up. **BUG FIXED, same day (2026-09-11):** `fetchCapturesForTrades` now excludes `captured_late = true` rows (`and captured_late = false` in its own WHERE clause) — both tester tests now PASS, full `lib/analytics/edge-engine/**` suite (13 files/115 tests) plus adjacent decay-engine/weekday-canary/distributions-repository/arm-matching regression suites all still green, `tsc`/`eslint`/`check:import-boundaries`/`npm run build` all clean. See the matching 2026-09-11 "BUG FIX" Decision-log entry for the full write-up, including the blast-radius check across detection engine/decay engine/asset-class suppression/weekday canary. **Ready for security-reviewer now** (this coder's own call, not qa/security-reviewer's "done" call). Not committed, not pushed. **Module 06 Slice 1 update, this same phase row, not yet reflected above at the time it was written:** the full coder -> tester -> coder-fix -> security-reviewer -> qa chain for Module 06 Slice 1 subsequently PASSED end to end (see the "Current task" section's own now-superseded 2026-09-11 QA-gate note and its matching Decision-log entry) — this row's own text above is left as the historical record of the mid-chain state rather than rewritten, per this repo's own "Current task" section being the place a reader should look for the up-to-date status, not this table cell. **Module 07 (Engagement) Slice 1 — streak mechanism only — CODED 2026-09-11**, dispatched because Module 06's own weekly-review Part 1 consistency panel needs a real streak number Module 07 is the only module that can supply. Schema (`engagement_state`/`week_completeness`, RLS + CHECK constraints) + the §5.2/§5.3 week-completeness/streak-walk logic + post-commit wiring into `confirmDay`/`autoConfirmStaleTrades`, verified live against the shared dev Supabase project. `engagement_events`/XP/milestones/UI explicitly out of scope for this slice. **Not marked done — needs tester -> security-reviewer -> qa** before commit; see this date's matching Decision-log entry. |
 | v1.1 | Module 09 (Prop firm rulebooks) + Module 10 (AI layer) | Deferred |
 
 ## Current task
 
-**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 1 -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (found 1 real blocking bug live) -> coder-fix (closed it) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06"). The one real bug -- `fetchCapturesForTrades` never filtered `captured_late`, letting a late-filled value leak into Module 05's segmentation exactly as story 1.3 exists to prevent (proven live: a 20-trade all-loss segment's win rate moved from an honest 0% to a misleading 20% once 5 late-filled wins were injected) -- was fixed with a single `and captured_late = false` clause, confirmed the sole caller of that function so no blast-radius surprise, and independently re-traced by both security-reviewer and qa. Separately, a pre-existing gap unrelated to this slice (the weekday canary's service-role call site missing from the mandatory allowlist test) was found as a side effect of this slice's test runs and fixed/committed on its own (`e6f6af7`), not bundled into this slice. **This closes Module 06 Slice 1: schema for `reviews`/`review_prompts`/`prompt_history` (RLS on all three, `review_prompts`/`prompt_history` deliberately schema-only, zero consumers yet -- confirmed by qa via a repo-wide grep) and real completion of the daily close-out screen against section 2 stories 1.1-1.4, including the first-ever UI caller of the `captured_late` late-fill mechanism that had existed backend-only since Module 02.** Module 06 is a large, multi-slice module (matching Module 04's own 10+-slice precedent) -- remaining scope, none of it started: the weekly review flow, prompt ranking + the 3-per-week cap, graduation/relaxation/promotion/retirement decision UI, deferral/backlog, the monthly trend view. (Superseded note, folded in rather than left stale: "UPDATE (same date, retrospeq-tester): the coder-stage note immediately below this line is otherwise accurate, but is now STALE on its bottom-line status." Independent tester pass (27 new RLS cross-user tests, 7 new coverage-gap-accuracy tests, 19 new validator unit tests, 7 new writeLateCaptureAction live-DB tests, all PASS) additionally found and live-DB-reproduced a real gap the coder's own self-check did not catch: story 1.3's "excluded from judgment findings" acceptance criterion is FALSE today — `lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segment/finding computation (proven live: 5 late-filled wins leaked into a 20-trade loss segment, moving its computed win rate from the honest 0% to a misleading 20%). Two new tests in `lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts` encode the spec's real requirement and FAIL on purpose until a coder fixes `fetchCapturesForTrades`. **Not ready for security-reviewer.** Full write-up in the matching 2026-09-11 "TESTER PASS" Decision-log entry (search "1 REAL BLOCKING BUG FOUND"). Module 06 is the next module in build order (Module 03's UI and Module 05's backend both fully shipped first). This is Slice 1 of a multi-slice module (same pattern Module 04 used, 10+ slices) — scoped narrowly to (a) schema-only migration for §3's three tables (`reviews`, `review_prompts`, `prompt_history`, RLS on all three, no consumer code) and (b) real completion of the daily close-out screen (`app/(app)/trades/close-out/**`) against §2 stories 1.1-1.4, taking real Module 06 ownership of a screen a prior Module 02 slice had explicitly left as a placeholder for this module to finish. Read the existing screen/backend in full before writing anything, per this slice's own dispatch: confirmed 1.1 (no findings/prompts/decisions leak) already held; 1.2's backend (`deliberate_no_trade` kind, streak-safe `day_closeouts` row) already worked but was framed generically ("Day done" for every case) — fixed to an explicit positive-choice framing ("I didn't trade today" / "Recorded as a deliberate day off — your streak stays intact") for the zero-trade case, copy-only, no new write path; 1.3's backend (`captured_late` marking in `trade-captures.ts`) existed since Module 02 Slice 7b but **no screen anywhere in this repo had ever called it** — confirmed by grep before writing code — so this is the one genuinely new capability this slice adds: a late-fill control for a trade's missing pre-entry fields (`LateCaptureField.tsx` + a new `writeLateCaptureAction`, restricted to the four fast-capture-safe data types `pick_one`/`pick_many`/`bool`/`rating`, dots/pills only, nothing that needs a keyboard); 1.4's refusal path existed reactively (post-submit) since Slice 7b — added a proactive coverage-gap check (`listUnresolvedCoverageGapsForAccountDay`, same overlap query `confirmDay`'s own transaction runs) so the block and a named reason are visible and the submit control is genuinely `disabled` before a wasted tap, not only after. New repo-reuse additions: `fetchStrategyVersionFields` (`lib/fields/strategy-repository.ts`, reads the field list off the exact strategy VERSION a trade was entered against — never the strategy's current version, 00-foundation §2.5) and a new, first-of-its-kind captured-VALUE validator (`lib/fields/captured-value-validation.ts` — distinct from the existing `field-validation.ts`'s proposed-field-CONFIG-shape validator). `npx tsc --noEmit` clean, `npx eslint` clean on every touched/new file (two pre-existing, unrelated warnings only). Screenshot self-check done against a real seeded trade/strategy on the live dev DB via a throwaway Playwright spec (deleted after use, per convention) — four scenarios confirmed correct: missing-pre-entry-fields rendering (dots/pills, no keyboard fields), a successful late-fill submit (locks to a "Saved" tag), the zero-trade-day positive framing, and the coverage-gap day showing the banner with the submit button genuinely `disabled` (not just refused after a tap). No red/green anywhere, one primary `.rq-btn` per view held throughout. Full detail in the matching dated Decision-log entry (search "Module 06 Slice 1"). **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.**
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 07 (ENGAGEMENT) SLICE 1 -- STREAK MECHANISM ONLY -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-11 Decision-log entries, search "Module 07"). Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet -- narrowly scoped to JUST the streak mechanism, deliberately NOT the whole module (`engagement_events`, XP accrual, `milestones`, every UI/notification surface all remain unbuilt). New `engagement_state`/`week_completeness` tables (RLS, owner-SELECT-only), the section 5.2 completeness formula and section 5.3 streak walk with grace (once per rolling 91-day window, silent, unpurchasable, applied only to the first broken week), wired post-commit/best-effort into both `confirmDay` and `autoConfirmStaleTrades`. The tester built the permanent test suite the coder's own throwaway checks never left behind (RLS isolation, both judgment-call edge cases, a live adversarial proof that auto-confirm genuinely cannot earn streak credit, a forced-write-failure non-blocking proof) -- all passing. Security-reviewer confirmed the whole mechanism is ungameable: exactly one INSERT into `day_closeouts` exists in the entire codebase, inside `confirmDay`'s own transaction, so a trader has no path to forge streak credit. QA hand-verified section 3.2's four completeness cases against the real formula and confirmed the grace rule's actual behavior matches its intended "silent, no celebration" framing. **This closes Module 07 Slice 1 -- the streak number Module 06 needs now exists and is exposed via `fetchEngagementSummaryForUser`, ready for a future Module 06 slice to wire into the weekly review's Part 1 assembly.** (Superseded CODER-stage note, folded in rather than left stale: "CODED, self-checked, ready for tester -> security-reviewer -> qa.") Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet. Narrowly scoped, per this slice's own dispatch, to JUST the streak mechanism -- `engagement_state` + `week_completeness` schema (RLS + real owner-SELECT-only policy on both, CHECK constraints including a real DB-level ISO-Monday `week_start` guard), the §5.2 week-completeness formula and §5.3 streak walk (grace applied once per rolling 91-day window, permanently persisted once spent, never re-litigated), wired post-commit/best-effort into BOTH `confirmDay` and `autoConfirmStaleTrades` (§3.3's "auto-confirm does not earn streak credit" verified to hold by construction, not by a special case), and a clean read function (`fetchEngagementSummaryForUser`) exposed for a later Module 06 slice to actually call. **Explicitly NOT the whole module** -- `engagement_events`, XP accrual, `milestones`, and every UI/notification surface are out of scope, not built. Verified live against the shared dev Supabase project: migration applied (RLS + all 4 CHECK constraints confirmed rejecting bad values), plus a throwaway live test (deleted after use) proving the actual walk logic (streak=3 across a seeded 2-complete/1-graced/1-stopped 4-week history, idempotent on re-run) and the real `confirmDay` wiring both work end to end. `tsc`/`eslint`/`npm run build` all clean, no new UI so no screenshot self-check applies. Full detail in the matching 2026-09-11 "Module 07 (Engagement) Slice 1 -- CODED" Decision-log entry. **Not marked done -- needs the tester -> security-reviewer -> qa chain** (§8.1/§8.2's own required unit/property tests, plus the 100%-cross-user-isolation RLS assertion, don't exist yet beyond this coder's own throwaway live check) before commit. Not committed, not pushed.
+
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 1 -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (found 1 real blocking bug live) -> coder-fix (closed it) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06"). The one real bug -- `fetchCapturesForTrades` never filtered `captured_late`, letting a late-filled value leak into Module 05's segmentation exactly as story 1.3 exists to prevent (proven live: a 20-trade all-loss segment's win rate moved from an honest 0% to a misleading 20% once 5 late-filled wins were injected) -- was fixed with a single `and captured_late = false` clause, confirmed the sole caller of that function so no blast-radius surprise, and independently re-traced by both security-reviewer and qa. Separately, a pre-existing gap unrelated to this slice (the weekday canary's service-role call site missing from the mandatory allowlist test) was found as a side effect of this slice's test runs and fixed/committed on its own (`e6f6af7`), not bundled into this slice. **This closes Module 06 Slice 1: schema for `reviews`/`review_prompts`/`prompt_history` (RLS on all three, `review_prompts`/`prompt_history` deliberately schema-only, zero consumers yet -- confirmed by qa via a repo-wide grep) and real completion of the daily close-out screen against section 2 stories 1.1-1.4, including the first-ever UI caller of the `captured_late` late-fill mechanism that had existed backend-only since Module 02.** Module 06 is a large, multi-slice module (matching Module 04's own 10+-slice precedent) -- remaining scope, none of it started: the weekly review flow, prompt ranking + the 3-per-week cap, graduation/relaxation/promotion/retirement decision UI, deferral/backlog, the monthly trend view. (Superseded note, folded in rather than left stale: "UPDATE (same date, retrospeq-tester): the coder-stage note immediately below this line is otherwise accurate, but is now STALE on its bottom-line status." Independent tester pass (27 new RLS cross-user tests, 7 new coverage-gap-accuracy tests, 19 new validator unit tests, 7 new writeLateCaptureAction live-DB tests, all PASS) additionally found and live-DB-reproduced a real gap the coder's own self-check did not catch: story 1.3's "excluded from judgment findings" acceptance criterion is FALSE today — `lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segment/finding computation (proven live: 5 late-filled wins leaked into a 20-trade loss segment, moving its computed win rate from the honest 0% to a misleading 20%). Two new tests in `lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts` encode the spec's real requirement and FAIL on purpose until a coder fixes `fetchCapturesForTrades`. **Not ready for security-reviewer.** Full write-up in the matching 2026-09-11 "TESTER PASS" Decision-log entry (search "1 REAL BLOCKING BUG FOUND"). Module 06 is the next module in build order (Module 03's UI and Module 05's backend both fully shipped first). This is Slice 1 of a multi-slice module (same pattern Module 04 used, 10+ slices) — scoped narrowly to (a) schema-only migration for §3's three tables (`reviews`, `review_prompts`, `prompt_history`, RLS on all three, no consumer code) and (b) real completion of the daily close-out screen (`app/(app)/trades/close-out/**`) against §2 stories 1.1-1.4, taking real Module 06 ownership of a screen a prior Module 02 slice had explicitly left as a placeholder for this module to finish. Read the existing screen/backend in full before writing anything, per this slice's own dispatch: confirmed 1.1 (no findings/prompts/decisions leak) already held; 1.2's backend (`deliberate_no_trade` kind, streak-safe `day_closeouts` row) already worked but was framed generically ("Day done" for every case) — fixed to an explicit positive-choice framing ("I didn't trade today" / "Recorded as a deliberate day off — your streak stays intact") for the zero-trade case, copy-only, no new write path; 1.3's backend (`captured_late` marking in `trade-captures.ts`) existed since Module 02 Slice 7b but **no screen anywhere in this repo had ever called it** — confirmed by grep before writing code — so this is the one genuinely new capability this slice adds: a late-fill control for a trade's missing pre-entry fields (`LateCaptureField.tsx` + a new `writeLateCaptureAction`, restricted to the four fast-capture-safe data types `pick_one`/`pick_many`/`bool`/`rating`, dots/pills only, nothing that needs a keyboard); 1.4's refusal path existed reactively (post-submit) since Slice 7b — added a proactive coverage-gap check (`listUnresolvedCoverageGapsForAccountDay`, same overlap query `confirmDay`'s own transaction runs) so the block and a named reason are visible and the submit control is genuinely `disabled` before a wasted tap, not only after. New repo-reuse additions: `fetchStrategyVersionFields` (`lib/fields/strategy-repository.ts`, reads the field list off the exact strategy VERSION a trade was entered against — never the strategy's current version, 00-foundation §2.5) and a new, first-of-its-kind captured-VALUE validator (`lib/fields/captured-value-validation.ts` — distinct from the existing `field-validation.ts`'s proposed-field-CONFIG-shape validator). `npx tsc --noEmit` clean, `npx eslint` clean on every touched/new file (two pre-existing, unrelated warnings only). Screenshot self-check done against a real seeded trade/strategy on the live dev DB via a throwaway Playwright spec (deleted after use, per convention) — four scenarios confirmed correct: missing-pre-entry-fields rendering (dots/pills, no keyboard fields), a successful late-fill submit (locks to a "Saved" tag), the zero-trade-day positive framing, and the coverage-gap day showing the banner with the submit button genuinely `disabled` (not just refused after a tap). No red/green anywhere, one primary `.rq-btn` per view held throughout. Full detail in the matching dated Decision-log entry (search "Module 06 Slice 1"). **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.**
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 03 SEC 5.1 STRATEGY-DETAIL SCREEN (per-field finding state) -- now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder (picked up from an interrupted dispatch, cut off by a host-level crash before it could write its own ledger entry -- verified complete, not redone: clean tsc/eslint/tests, two self-check screenshots read and confirmed correct) -> tester (found a real coverage gap, 88.88% on the two fail-closed `catch` branches in `findings-service.ts`) -> coder-fix (closed it, 96.82%, no bug found -- both branches already did the right thing, they just weren't exercised) -> security-reviewer (PASS, cross-user isolation confirmed at three independent layers: RLS policy, explicit repository filter, and an ownership check ahead of the read; one non-blocking timing side-channel noted -- a gated-off field's payload is byte-identical to a zero-rows field's but takes a hair longer, same-user-only, arguably an intended paywall signal) -> qa (PASS on all 9 of ADR 0035's documented judgment calls, independently screenshot-verified) chain, all dated 2026-09-11 Decision-log entries (search "strategy-detail" / "findings-service"). This is the FIRST place in the repo that reads `retrospeq.findings` back out of the database -- every prior Module 05 slice only ever wrote to it -- and the first real consumer of `FindingPayload` as an actual object rather than a type comment. New route `/strategies/[id]` renders one `.finding` card per captured field: a synthesized win-rate/avg-R statement for a confident/provisional result (styled identically, per ADR decision #5), a plain "no difference detected" for `null_result`, and an honest "Not enough data yet" -- rendered identically whether the field genuinely has zero rows or is silently gated off by plan/kill-switch, per Module 05 section 4.8's fail-closed contract -- never an error, never alarming. A bad/foreign strategy id gets a real 404, not a friendly same-URL message (no plausible stale-bookmark case exists for a strategy id, confirmed by qa: no strategy-deletion path exists anywhere in the repo today). No second entitlement gate was added -- relies solely on the already-wired `canRender`/`min_plan` check, avoiding two independently-maintained gates for the same fact. **This closes Module 03 section 5.1 end to end -- the last named UI element of that section.** One process item handled by this session, not left stale: the `supabase/.temp/` CLI-local-state directory (untracked debris, not part of the feature) was added to `.gitignore` rather than committed or left to recur in every future `git status`. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-10/2026-09-11 Decision-log entries, search "spec.weekday" / "weekday canary"). The promotion-block mechanism (a `PERMANENTLY_SHADOW_ANALYTIC_IDS` allowlist ORed unconditionally into `evaluateShadowToBetaPromotion`, regardless of caller-supplied options) was adversarially tested by both the tester and the security reviewer independently, and the security reviewer confirmed no second promotion entry point exists anywhere in the repo. The render-rate metric (section 4.10/section 8's <5%-of-users target) is a real, callable, ongoing function (`fetchWeekdayCanaryRenderRate`, wired into `docs/runbook.md`), independently spot-checked by the tester at 3.00% via a throwaway 1000-trial synthetic no-effect study (deleted after, per convention). `docs/adr/0034-weekday-canary-permanent-shadow.md` was confirmed by qa to read as a durable warning against ever promoting this analytic, not just a changelog entry. No UI in this slice. **This closes Module 05 section 4.10 end to end.** (Superseded CODER-stage note, now folded into this entry rather than left as a separate stale block: "CODED, self-checked, ready for tester -> security-reviewer -> qa.") Built the last named-but-deferred Module 05 gap: `lib/analytics/spec-weekday/` (`weekday-canary.ts` -- pure gate computation; `render-rate.ts` -- the §8 tracked-metric pure query; `repository.ts` -- DB fetch/write/recompute, wired into `lib/ingestion/sync.ts`'s post-sync hook as `recomputeWeekdayCanaryForUser`, same best-effort try/catch shape as every sibling §4.13 job) plus `docs/adr/0034-weekday-canary-permanent-shadow.md`, a `docs/runbook.md` update (the pre-existing "Shadow analytic diverging from expectation" entry, which had explicitly deferred this exact implementation, is now updated to describe the real thing), and two structural promotion-blocking layers in `shadow-harness/promotion.ts` (`permanently_shadow` on the registration itself, plus a NEW `PERMANENTLY_SHADOW_ANALYTIC_IDS` constant, id-keyed, ORed into `evaluateShadowToBetaPromotion` so a future caller that forgets to pass `{ permanentlyShadow: true }` still cannot promote it -- proven by a new test asserting exactly that "no options argument at all" case). **One flagged, deliberate reconciliation against this slice's own dispatch text** (logged per AGENTS.md §12): the dispatch pointed at `lib/analytics/detection-engine/` as "the existing gate machinery" to model this on, but §4.10's own wording ("the multiple-comparisons trap in its purest form") names the EDGE engine's own defining feature (Holm correction across a segment family) — the detection engine's volume/rate/persistence gates have no p-value or multiple-comparisons concept at all, and "Tuesdays underperform" is a win-rate/avg-R segment claim (`find.pickone`'s own shape), not an occurrence-frequency claim. Built against `edge-engine/gates.ts`'s `computeFamilyFindings` instead, reasoning documented in full in `weekday-canary.ts`'s own header and `docs/adr/0034`. **A second, real regression found, root-caused, and fixed before handoff, not left for the tester to discover**: wiring the new recompute into `sync.ts`'s post-sync hook added one more sequential, awaited DB round trip to a chain `lib/ingestion/__tests__/sync.live.test.ts` already ran close to its own per-test timeout ceiling on this machine -- two of the heaviest tests (`cross-account isolation`, `dedup is per-fill`) started timing out. Isolated with a real revert/restore A-B comparison (not guessed): both failed with the wiring restored, and re-ran clean with it reverted, confirming a genuine added cost. **Actual root cause** (found by direct investigation, not a bigger guessed number): every test in this file already carried its OWN explicit per-test timeout (`it(name, fn, 20_000)`), which in Vitest/Jest overrides a file-level `vi.setConfig` -- a file-level bump alone (tried at 30s, then 60s) provably had no effect on the two affected tests (confirmed via a throwaway diagnostic test that the config mechanism itself genuinely WAS working, ruling out a `vi.setConfig` failure before looking elsewhere). Fixed at the real call sites: the two affected tests' own explicit third argument raised `20_000` -> `60_000`, matching this repo's own existing 60s precedent (`trigger-conditions-repository.live.test.ts`) for the identical "several sequential live-DB operations in one test" shape. **Confirmed green by a real full-file run after the actual fix**: 13 tests, 12 passed + 1 correctly skipped, 0 failed -- `dedup is per-fill` (27432ms) and `cross-account isolation` (20966ms) both now comfortably pass. A one-off `shadow_runs_user_id_fkey` violation seen during investigation (caught, logged, non-blocking -- the sync itself still succeeded) did not recur across two subsequent clean runs, consistent with a transient shared-dev-DB artefact rather than a defect in the new write path -- flagged for the tester to watch, not asserted resolved with certainty. No UI in this slice — confirmed, no screenshot self-check applies (matching every prior no-UI Module 05 slice's own precedent, e.g. sec 4.6/4.11/4.12). Re-confirmed green after every fix: `lib/analytics/**` non-live suite (31 files, 345 passed + 1 skipped), `lib/ingestion/**` non-live suite (14 files, 206 passed), `npx tsc --noEmit` (clean), `npx eslint` (0 errors on every touched/new file), `npm run check:import-boundaries` (96 modules/235 dependencies, clean), and `npm run build` (Turbopack, 28 routes, clean). New unit tests: `weekday-canary.test.ts` (8 tests, including a deliberately well-powered case proving the gate machinery genuinely CAN clear, and a light synthetic no-effect empirical check — a full 1000+-trial false-positive-rate study is left to the tester per this repo's own "independent verification" convention for this exact class of statistical claim), `render-rate.test.ts` (6 tests), plus 3 new tests in `promotion.test.ts` for the structural hard-block. **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.
 
@@ -22613,6 +22615,791 @@ test files, not by trusting the testers/coders own prose. Next: `retrospeq-qa`.
 **Performance (00-foundation §8.1) — no budget-breaker found.** Close-out assembly budget is 500ms (§11); the new proactive coverage-gap check adds one query (`listUnresolvedCoverageGapsForAccountDay`) run in parallel with the existing `listTradeCaptures` fetch via `Promise.all` in `page.tsx`, not serially, and the missing-pre-entry-field computation batches one `fetchStrategyVersionFields` call per DISTINCT `(strategy_id, version)` pair on the page (a Map keyed by that pair, not a per-trade query) — not an N+1 across trades. No synchronous call to anything that should be precomputed.
 
 **Verdict: PASS. Cleared to commit and push to main.** No blocking finding. All items in this review's own checklist (non-negotiables, design-system rules, dependency boundary, documentation, performance) independently verified against the actual current code and fresh screenshots, not only against the prior four entries' own descriptions. The orchestrating session should commit and push immediately per this project's Autonomy policy — no further human review gate exists for this slice.
+
+## 2026-09-11 — Module 07 (Engagement) Slice 1 — CODED, not yet tested/reviewed. Streak mechanism ONLY, not the full module.
+
+Dispatched because Module 06's weekly review Part 1 ("Consistency |
+Module 07 | Days closed out, streak") has a real forward dependency on a
+streak number that did not exist anywhere in the repo (confirmed by grep
+before starting). Read `AGENTS.md`, `07-engagement.md` in full, and
+`retrospeq-design-decisions.md`'s "Weekend"/forex-week note before
+writing any code, per this repo's own standing discipline. **Explicitly
+NOT the whole module** — per the dispatch's own scope, only two of §4's
+four tables were built (`engagement_state`, `week_completeness`); the
+`engagement_events` append-only ledger, XP accrual, `milestones`, and
+every notification/UI surface are OUT of scope and NOT built here.
+
+**Schema** — `supabase/migrations/20260911030000_engagement_streak_schema.sql`.
+`engagement_state` (one row per user, materialised streak state) and
+`week_completeness` (one row per user per week) — both the "materialised
+CACHE, owner SELECT only, exclusively written by a service-role
+recompute" shape already established for `adherence_weekly`/
+`unlock_state`. RLS enabled with a real owner-SELECT-only policy on both
+(repo-wide non-negotiable). CHECK constraints encode real invariants at
+the DB layer, not just trusted to application code: `week_start` must be
+a real ISO Monday (`extract(isodow from week_start) = 1`, matching
+`lib/rules/week-boundary.ts`/ADR 0015 exactly), `longest_streak_weeks >=
+streak_weeks`, all counters non-negative. `handle_new_user` extended
+(fifth time, same established pattern) to give every new signup a
+default all-zero `engagement_state` row; `week_completeness` gets no
+signup-time row, deliberately (created on demand per week, self-healed
+lazily — see the repository file's own header). Neither table has a
+foreign key to `rules`/`rule_evaluations`/`adherence_weekly`/any
+findings/analytics table — §4.1's own "no dependency on Module 04 or 05,
+and the absence should be visible in the schema" is real in this
+migration, not just asserted in prose.
+
+**Application code** — new `lib/engagement/` module:
+- `week-completeness-repository.ts` — §5.2's formula
+  (`complete = daysTraded==0 OR daysClosed>=daysTraded`) as a pure,
+  directly-unit-testable function, plus the fetch (`days_traded` from
+  `trades` where `confirmed_at is not null`, `days_closed` from
+  `day_closeouts` directly, one round trip via two scalar subqueries) and
+  an idempotent upsert that recomputes `days_traded`/`days_closed`/
+  `complete` fresh every time but NEVER touches `grace_applied` on an
+  existing row (omitted from the `ON CONFLICT` SET list) — grace is owned
+  exclusively by the streak walk, a decision made once and never
+  revisited, per §10's "a wrong streak is worse than a missing one."
+- `streak-repository.ts` — the §5.3 walk. `decideWeekForStreak` (pure:
+  complete/already-graced -> count, else grace-available -> count with a
+  new grace, else stop) and `isGraceAvailable` (pure: a literal ROLLING
+  91-day window since `grace_used_at`, not a calendar quarter — "rolling
+  quarter" read literally) are both directly unit-testable in isolation
+  from any I/O, satisfying §8.1's own required test cases ahead of the
+  tester's own pass. `recomputeEngagementState` walks backward from the
+  last FULLY COMPLETED week (never the in-progress one, per §5.3's own
+  "a trader mid-week never sees a number that later goes down"),
+  self-heals any week with no materialised row by computing it live
+  rather than assuming absence means zero activity, and explicitly
+  re-refreshes any PAST week a confirmation actually touched (so a late
+  auto-confirm correctly breaks an already-materialised week rather than
+  being silently ignored). `longest_streak_weeks` is `GREATEST`'d in SQL,
+  not just in application code. `fetchEngagementSummaryForUser` is the
+  clean read Module 06 will call — reads ONLY the materialised rows
+  (never recomputes at read time, matching §10's own
+  `ENGAGEMENT_STATE_STALE` guidance, "serve stale with no indicator").
+  **Not yet wired into any UI or Module 06 code** — exposed cleanly, per
+  the dispatch's own scope, for a later Module 06 slice to actually call.
+
+**Two genuine judgment calls this spec text does not resolve explicitly
+— flagged here per 00-foundation §12, not silently decided:**
+1. **The streak floor.** §3.2's own "traded 0 days -> also intact"
+   read literally would let the walk count every quiet week since the
+   beginning of time for a user who has simply never traded. Bounded the
+   walk at the user's own `profiles.created_at` week — nothing before
+   account creation can count, since there is no product to have "closed
+   the loop" with before the account existed. A brand-new signup
+   therefore correctly starts at `streak_weeks = 0`, not an already-long
+   streak.
+2. **"Current server day" for a per-user (not per-account) streak.**
+   `trades.server_day`/`day_closeouts.server_day` are each fixed against
+   ONE account's own rollover config — there is no single "the trader's
+   current day" across accounts with different rollovers. Used a plain
+   UTC calendar date off wall-clock `now` (`currentServerDayForNow`,
+   deliberately NOT a reuse of `lib/ingestion/server-day.ts`'s account-
+   rollover-aware `computeServerDay`) purely to determine which ISO week
+   is currently in progress — an account-agnostic question by
+   construction, documented in `streak-repository.ts`'s own header.
+
+**Wiring into `lib/ingestion/confirm.ts`** — `recomputeEngagementForConfirmations`
+called post-commit, best-effort, never-throws, from BOTH `confirmDay` and
+`autoConfirmStaleTrades`, same shape as the pre-existing `adherence_weekly`/
+`unlock_state` calls. **§3.3's "auto-confirm does not earn streak" was
+explicitly checked, not assumed**: `autoConfirmStaleTrades` never inserts
+a `day_closeouts` row (confirmed by reading `confirm.ts`'s own existing
+header and code — the only INSERT into that table in the whole repo is
+inside `confirmDay`), so recomputing `week_completeness` after an
+auto-confirm sweep can only ever INCREASE `days_traded` without
+increasing `days_closed` — correctly able to BREAK a streak
+(§3.3's own stated consequence, "a returning trader sees broken streaks
+for the period they were away") but structurally unable to ever CREDIT
+one. No special-case filter was needed in the engagement code itself to
+preserve this — it falls out of reading the same two source tables §5.2
+already names. `confirmDay`'s own trigger condition is deliberately
+broader than adherence/unlock_state's (`tradesConfirmed.length > 0 ||
+dayCloseoutInserted`), since a bare `deliberate_no_trade` closeout with
+zero trades is exactly the case §3.2 says counts as "a logged decision."
+
+**Verification run by this coder before handoff:**
+- `npx tsc --noEmit` — clean, whole project.
+- `npx eslint` on every new/touched file — 0 errors, 0 new warnings.
+- `npm run build` — clean, Turbopack, 27 routes, no new warnings (this
+  slice added no route).
+- **Migration applied against the live shared dev Supabase project**
+  (`.env.local`'s `SUPABASE_DB_URL`, ADR 0002) via a throwaway script
+  (deleted after use, never committed): RLS enabled on both tables
+  confirmed via `pg_class.relrowsecurity`; both owner-SELECT-only
+  policies confirmed via `pg_policies` (exact shape, `authenticated`
+  role, `user_id = auth.uid()`); all four CHECK constraints
+  (non-Monday `week_start`, negative `days_traded`, negative
+  `streak_weeks`, `longest < current`) confirmed to reject their
+  corresponding bad value; a valid insert confirmed to succeed
+  (rolled back, never persisted).
+- **A second throwaway live test** (`lib/engagement/__tests__/
+  _tmp-selfcheck.live.test.ts`, deleted immediately after this run,
+  never committed) exercised the actual TypeScript walk logic — not just
+  the schema — against the live DB: (1) a seeded 4-week history (two
+  complete weeks, one grace-eligible broken week, one un-graceable second
+  broken week) produced `streak_weeks = 3`, persisted `grace_applied =
+  true` on exactly the graced week and `false` on the one that stopped
+  the walk, and was fully idempotent on a second call (same result, grace
+  not re-spent); (2) a real `confirmDay({ kind: 'deliberate_no_trade' })`
+  call against a real seeded account flowed through the actual post-
+  commit wiring (not a direct repository call) to a materialised
+  `engagement_state`/`week_completeness` row, proving the production call
+  site genuinely fires end to end. Both tests passed (2/2) before
+  deletion.
+
+**Documentation:** no new ADR — the two judgment calls above are spec-
+interpretation decisions (the spec leaves the floor and "current day for
+a per-user concept" genuinely open), not deviations from a 00-foundation
+convention, matching `unlock-state-repository.ts`'s own `weeks_active`
+precedent for the identical class of judgment call (logged here, not as
+a separate ADR file). New `docs/runbook.md` entry: "Engagement streak
+recompute failing after a confirmation" — same best-effort/post-commit
+alerting shape as the pre-existing `adherence_weekly`/`unlock_state`
+entries, plus its own note on why a wrong (not just stale) streak is the
+one failure mode this module must never produce, given the grace
+mechanism's own permanence guarantee.
+
+**Not marked done. Needs, in order:** `retrospeq-tester` (§8.1/§8.2's own
+required unit/property tests — week completeness across all four §3.2
+cases, the streak walk across a grace week, grace applying once per
+rolling quarter and no more, in-progress week never extending/breaking,
+idempotent emission, plus the 100%-cross-user-isolation RLS assertion
+this repo requires on every table — neither new table has a dedicated
+test file yet, only this coder's own throwaway live check) ->
+`retrospeq-security-reviewer` (RLS shape, the `withServiceRoleConnection`
+write boundary, confirming no client-reachable write path exists to
+either table) -> `retrospeq-qa` (non-negotiables re-check — no XP granted
+for adherence anywhere in this diff, streak genuinely counts weeks not
+days, no notification anywhere in this diff — and a check that Module 07
+§8.4's "dark pattern review" checklist has nothing to trip yet since no
+UI was built this slice). Not committed, not pushed.
+
+## 2026-09-11 — Module 07 (Engagement) Slice 1 — TESTER PASS. Ready for security-reviewer.
+
+Dispatched to build the real, permanent test suite §8.1/§8.2 and the RLS
+100%-coverage non-negotiable require — the coder's own live check was
+explicitly throwaway (deleted, never committed) and neither new table nor
+either new repository function had a real test file yet. Built five new
+files, none of which existed before this dispatch.
+
+**RLS/schema — `lib/supabase/__tests__/engagement-streak-schema.rls.test.ts`
+(18/18 passed, live).** RLS enabled on both `engagement_state`/
+`week_completeness` (100% coverage of this slice's own table surface —
+`engagement_events`/`milestones` don't exist yet, correctly out of scope).
+Owner-SELECT-only policy shape confirmed via `pg_policies` directly, not
+trusted to the migration file's own comment. `handle_new_user`'s
+`engagement_state` signup row confirmed exact-shape (all-zero,
+`current_week_start`/`grace_used_at` null); `week_completeness` confirmed
+absent at signup (created on demand). Cross-user isolation proven both
+directions, both tables. No client write path: an `authenticated`-role
+UPDATE/INSERT on either table is a no-op/rejected, re-confirmed by
+re-reading the row over the owner connection unchanged. All four CHECK
+constraints (`week_start` must be a real ISO Monday, `days_traded`/
+`days_closed`/`streak_weeks`/`total_xp` non-negative, `longest_streak_weeks
+>= streak_weeks`) fired for real bad values under `service_role`, not just
+asserted to exist.
+
+**Pure unit tests — `lib/engagement/__tests__/week-completeness-repository.test.ts`
+(21 tests) and `streak-repository.test.ts` (11 tests).** Exhaustive on
+`computeWeekCompleteness`'s all four §3.2 worked cases plus three boundary
+variants (`days_closed == days_traded`, one fewer, several no-trade days
+exceeding days traded), `assertCanonicalWeekStart`, `decideWeekForStreak`'s
+all four branches (including "an already grace_applied week counts WITHOUT
+spending a NEW grace, even if grace happens to be available again this
+walk" — the specific case that would silently double-spend a grace if
+gotten wrong), and `isGraceAvailable`'s exact-91-day-boundary /
+one-millisecond-short cases (proves the literal ROLLING window the spec's
+own "rolling quarter" phrasing calls for, not a calendar-quarter bucket).
+
+**Live-DB backward-walk suite — `lib/engagement/__tests__/streak-repository.live.test.ts`
+(11 tests, all passed).** Independently-derived fixtures — caught and fixed
+a bug in my OWN first draft before it reached this ledger: backdating
+`profiles.created_at` to merely "well before" the test's seeded weeks isn't
+enough, since the floor rounds DOWN to that date's own ISO Monday and then
+self-heals every earlier zero-trade week as complete too, inflating
+`streak_weeks` past what the seeded fixture intended (first draft got 7
+instead of 3 on four separate tests) — fixed by backdating to exactly the
+earliest seeded week's own Monday in each case; documenting this since it's
+exactly the kind of subtlety this dispatch brief asked to be adversarial
+about, including toward my own test code. Covers: a clean run of 3
+consecutive complete weeks; grace applied to the FIRST broken week only,
+persisted as `grace_applied`, with the walk provably continuing PAST it to
+count a further complete week, then correctly stopping at a SECOND broken
+week in the same walk (grace already spent this walk); grace already spent
+within the rolling 91-day window stops the walk without a second grace,
+with `grace_used_at` provably unchanged; zero-trade weeks self-heal to
+`complete=true` via the REAL (empty) `trades`/`day_closeouts` tables, not a
+manually-seeded row (proves the self-healing code path itself, not just the
+formula in isolation — the zero-trade unit test above proves the formula);
+the in-progress current week (a real confirmed trade, deliberately NO
+`day_closeouts` row) is confirmed incomplete but provably excluded from
+`streak_weeks` — "a trader mid-week never sees a number that later goes
+down"; the streak floor bounded at the user's own signup week — a
+pre-signup week marked complete is provably excluded even though it would
+otherwise be reachable; a brand-new signup starts at `streak_weeks = 0`; a
+real TWO-WRITE idempotency proof (`grace_applied` never re-toggled, the
+graced week's own `computed_at` byte-identical after a second identical
+call — proving no write touched that row at all the second time —
+`grace_used_at` never re-spent); a forced-write-failure test wrapping a
+real Postgres connection to reject only on the `engagement_state` UPSERT
+statement, proving no corruption/partial write and that an
+already-committed `confirmDay` transaction is completely unaffected; a real
+(non-mocked) proof that `recomputeEngagementForConfirmations` — the exact
+entry point `confirm.ts` calls — never throws even when the per-user
+recompute genuinely fails (a syntactically valid but nonexistent profile
+id, a real `EngagementProfileNotFoundError`, not simulated); an RLS sanity
+re-check on `fetchEngagementSummaryForUser`.
+
+**§3.3 auto-confirm exclusion, adversarial —
+`lib/ingestion/__tests__/confirm.engagement-exclusion.live.test.ts` (1
+test, passed).** Per this dispatch's own item 2: did not trust the coder's
+"by construction" reasoning. Seeded a real stale (8-real-days-old)
+unconfirmed trade, ran the REAL `autoConfirmStaleTrades` sweep (never a
+direct repository call), confirmed LIVE against Postgres that (a) zero
+`day_closeouts` rows exist for that account/day — the literal §4.6 "only if
+the user closed it out" mechanism, proven not assumed — and (b) the real
+`week_completeness` row the post-commit recompute actually produced has
+`days_closed = 0` despite `days_traded >= 1`, `complete = false`.
+`engagement_state.streak_weeks` itself was deliberately NOT asserted to an
+exact number (it depends on real wall-clock time relative to the test run,
+per `streak-repository.ts`'s own documented "current day" judgment call —
+see below); `week_completeness` is the deterministic, timing-independent
+proof this test relies on instead, and it is the literal per-week record
+§5.2 describes.
+
+**The two judgment calls the coder flagged — independently reviewed, not
+just trusted.** (1) The streak floor at `profiles.created_at`'s own week —
+sound; the "brand-new signup = 0" live test above independently confirms
+it in the one case that matters most (a user with zero data at all).
+(2) `currentServerDayForNow` as a plain UTC wall-clock read, deliberately
+NOT `lib/ingestion/server-day.ts`'s account-rollover-aware
+`computeServerDay` — reasonable for a per-USER (not per-account) concept,
+exactly as documented; this is also why the §3.3 test above cannot pin an
+exact `streak_weeks` value (a real consequence of this design choice, not a
+test limitation), flagged so the security-reviewer inherits the context
+rather than rediscovering it.
+
+**One thing worth flagging, NOT a blocking bug.**
+`recomputeEngagementForConfirmations` is called from BOTH `confirmDay` and
+`autoConfirmStaleTrades` with no try/catch at the call site itself —
+identical to the pre-existing `adherence_weekly`/`unlock_state` pattern.
+The "never blocks confirmation" guarantee is therefore entirely dependent
+on that function's own internal try/catch never being bypassed; there is
+no belt-and-suspenders wrap at the `confirm.ts` call site for any of the
+three recomputes. Tested this at the same layer this repo's own
+established precedent already uses (a forced failure on the real write
+step one level down, plus a real end-to-end proof that the exported batch
+entry point itself never throws for a genuine failure) rather than via a
+full-module mock replacing `recomputeEngagementForConfirmations` outright —
+a full-module-mock would only prove that `confirm.ts` has no independent
+try/catch of its own, which is already true by design and shared
+identically by adherence/unlock_state, not a defect specific to this
+slice.
+
+**Full suite regression check (232 files / 2747 tests):** 225 files / 2711
+tests passed, 7 files / 14 tests failed — ALL pre-existing, ALL in files
+this diff never touches (confirmed via `git status`): `lib/rules/__tests__/
+severity-lifecycle.live.test.ts` (5 failures, a single seed-query failure
+poisoning the rest of that file's shared transaction — "current
+transaction is aborted" cascade, the same shared-dev-DB-contention
+signature this repo's own PROGRESS.md has documented repeatedly, e.g.
+Slice 10d part 1's independent verification) and `lib/analytics/edge-engine/
+__tests__/repository.deadlock-ordering.independent-verify.live.test.ts` (1
+assertion on a Postgres advisory-lock classid/objid pairing, unrelated to
+engagement). Did NOT re-run these two files in isolation to fully
+re-confirm the contention diagnosis (time budget) — reporting this
+honestly as "not independently re-verified, but confirmed untouched by
+this diff" rather than silently assuming.
+
+**Coverage (`lib/engagement` only, `--coverage`):** 97.79% lines / 95.08%
+branches / 93.75% functions overall; `week-completeness-repository.ts`
+100%/93.61%/100%/100%, `streak-repository.ts` 93.75%/100%/87.5%/93.75% —
+both clear the 90% engine-class bar (00-foundation §9.1; this module's
+week-completeness/streak-walk logic is this repo's own "statistics/gate
+logic" class).
+
+**Static checks, independently re-run:** `tsc --noEmit` clean, whole
+project. `eslint` clean on every new/touched file (0 errors, 0 warnings).
+Full-repo `eslint .` has 2 pre-existing errors, both in
+`tmp/stub-server-only-preload.cjs` (an untracked scratch file, not part of
+this diff, confirmed via `git status`) plus pre-existing unused-var
+warnings elsewhere — none touched by this slice.
+`npm run check:import-boundaries` clean (scoped to `lib/analytics` only by
+its own config; separately confirmed by direct grep that every import in
+`lib/engagement/*.ts` is `server-only`, `pg`'s type, `@/lib/supabase/direct`,
+or `@/lib/rules/week-boundary` — the one pure calendar utility this
+dispatch's own brief and the migration's own header explicitly sanction
+reusing — nothing from `lib/analytics` or any rule/evaluation-bearing
+module, matching §4.1's "no dependency on Module 04 or 05" instruction).
+`npm run build` clean (28 routes, no new route from this slice).
+
+**Golden fixtures:** N/A — this slice does not touch the grouping engine.
+
+**RLS:** 100% of this slice's own table surface (both new tables),
+automated, live — the full current Module 07 RLS surface
+(`engagement_events`/`milestones` don't exist yet, correctly out of scope
+per the coder's own dispatch).
+
+**Verdict: PASS.** Ready for `retrospeq-security-reviewer` next (suggested
+focus: the RLS/service-role write boundary already covered above, plus
+confirming the `withServiceRoleConnection` write path has no
+client-reachable route to either table — the same shape already proven for
+`adherence_weekly`/`unlock_state`, and the one inherited
+no-call-site-try/catch architectural note flagged above). Not committed,
+not pushed — that decision belongs to the dispatching session per this
+repo's ledger-currency convention.
+
+New test files (all new, none pre-existing to modify):
+`lib/supabase/__tests__/engagement-streak-schema.rls.test.ts`,
+`lib/engagement/__tests__/week-completeness-repository.test.ts`,
+`lib/engagement/__tests__/streak-repository.test.ts`,
+`lib/engagement/__tests__/streak-repository.live.test.ts`,
+`lib/ingestion/__tests__/confirm.engagement-exclusion.live.test.ts`.
+
+## 2026-09-11 — Module 07 (Engagement) Slice 1 — SECURITY REVIEW: PASS. Cleared for qa and commit.
+
+Dispatched with blocking authority per this repo's security-reviewer
+role definition. Read `07-engagement.md` in full (section 2's "never reward
+anything the trader can fabricate" framing, section 3.3, section 3.5, section 4, section 5.2/5.3,
+section 8.2's property-test list, section 10) and 00-foundation section 3.1/4/9.1/11
+before starting. Did not trust the coder's/tester's own PASS entries --
+re-read the actual migration, both repository files, the RLS test
+file, and confirm.ts myself, and independently re-ran the live-DB
+checks and the import-boundary check rather than accepting the
+ledger's summary.
+
+**1. RLS on both new tables -- PASS.**
+`supabase/migrations/20260911030000_engagement_streak_schema.sql`
+lines 97-107 (week_completeness) and 143-152 (engagement_state):
+`enable row level security` plus exactly one `for select ... using
+(user_id = auth.uid())` policy each, `to authenticated`. No
+insert/update/delete policy for anon or authenticated on either
+table -- confirmed directly against pg_policies by
+`lib/supabase/__tests__/engagement-streak-schema.rls.test.ts` lines
+54-71 (cmd set for each table asserted to equal exactly SELECT,
+not merely "a policy exists") and lines 136-178/208-262 (cross-user
+isolation both directions, both tables, plus a direct UPDATE-as-owner
+attempt asserted to affect 0 rows). This is genuine owner-only scoping,
+not "RLS enabled with zero policies" (which would be full-lockout, the
+opposite failure mode) -- the SELECT policy's using clause is present
+and correctly scoped, and there is deliberately no write-granting
+policy of any kind for a client role.
+
+**2. Credential-table analogue -- N/A, correctly.** This slice has no
+credential table; engagement_state/week_completeness are the
+"materialised cache, owner-SELECT-only, service-role-write-only" shape,
+which is the correct analogous bar for a non-credential cache table and
+is met (see item 1).
+
+**3. Write-path integrity / day_closeouts forgery -- PASS.**
+Grepped the whole repo for "insert into retrospeq.day_closeouts" --
+exactly one hit, `lib/ingestion/confirm.ts` line 535-541, inside
+confirmDay's own withServiceRoleConnection transaction, on
+conflict (user_id, account_id, server_day) do nothing.
+autoConfirmStaleTrades (lines 637-765) contains no day_closeouts
+insert at all -- verified by reading the function body directly, not
+just its comments. confirmDay is only reachable from
+`app/(app)/trades/actions.ts`'s confirmDayAction (lines 561-620),
+which: requires a real session (requireSessionAndRateLimit), rejects
+unknown keys via confirmDayInputSchema = z.strictObject with
+accountId/serverDay/kind fields only (no "now" or any streak-affecting
+field is client-reachable), and enforces isAccountOwnedByUser(user.id,
+accountId) before calling confirmDay -- a trader cannot invoke this
+against an account they don't own, and cannot supply a fabricated
+day_closeouts row through any other path. week-completeness-
+repository.ts's fetchWeekActivityCounts (lines 139-156) reads
+days_traded from trades where confirmed_at is not null (Module
+02's own freeze point, not client-writable post-freeze) and
+days_closed from day_closeouts directly -- both are server-
+controlled, already-trusted inputs by the time this module reads them.
+
+**4. Section 3.3 auto-confirm exclusion -- PASS, verified independently, not
+just re-read.** Confirmed by direct code read
+(autoConfirmStaleTrades never inserts day_closeouts, only updates
+trades.confirmed_at/confirmed_by = auto_7d) AND by the tester's
+own adversarial live test,
+`lib/ingestion/__tests__/confirm.engagement-exclusion.live.test.ts`
+(1 test, read in full): seeds a real 8-day-stale unconfirmed trade,
+runs the actual autoConfirmStaleTrades sweep (not a mocked/direct
+repository call), and asserts live against Postgres that zero
+day_closeouts rows exist for that account/day and that the resulting
+week_completeness row has days_closed = 0 despite days_traded >=
+1 (complete = false). Since section 5.2's formula (complete = daysTraded
+== 0 OR daysClosed >= daysTraded) is the only thing that ever reads
+these two counts, and days_closed is structurally incapable of
+increasing from an auto-confirm sweep, this is genuinely impossible
+given the current code, not merely improbable -- there is no
+confirmed_by-conditional branch anywhere in the engagement code that
+would need to keep working correctly; the exclusion falls out of which
+tables are read.
+
+**5. Grace-week mechanism -- PASS, no manipulation path found.**
+markWeekGraceApplied (week-completeness-repository.ts lines
+233-241) is called from exactly one place,
+streak-repository.ts's own recomputeEngagementState walk (line
+327), itself only reachable via recomputeEngagementStateForUser /
+recomputeEngagementForConfirmations, both server-only
+(withServiceRoleConnection) and only invoked from confirm.ts's
+post-commit hooks -- no client input reaches either function.
+decideWeekForStreak (lines 173-177) only returns
+count_with_grace for a week that is both incomplete and not already
+graced, gated by graceAvailableThisWalk; graceUsedThisWalk
+is flipped to true and graceAvailable to false the instant one
+grace is spent in a walk (lines 328-330), so a single walk can never
+apply grace to more than one week -- confirmed by
+streak-repository.live.test.ts's own "grace applied to the FIRST
+broken week only... correctly stopping at a SECOND broken week in the
+same walk" case (read, matches the code). grace_used_at is only ever
+written via coalesce($6, existing grace_used_at)
+(streak-repository.ts line 354) -- $6 is null on every walk that
+didn't spend a grace, so it is structurally impossible for a recompute
+to reset grace_used_at early or blank it out; there is no other write
+path to that column (confirmed: grace_used_at appears in exactly one
+UPDATE/INSERT statement in the whole lib/engagement tree).
+
+**6. Idempotency / replay safety -- PASS.**
+recomputeWeekCompleteness's ON CONFLICT ... DO UPDATE (week-
+completeness-repository.ts lines 188-195) recomputes
+days_traded/days_closed/complete fresh every time but the SET
+list deliberately omits grace_applied -- a replayed recompute can
+never un-set or re-toggle a persisted grace. recomputeEngagementState's
+own UPSERT (streak-repository.ts lines 344-359) uses GREATEST for
+longest_streak_weeks (can only grow) and coalesce($6, ...) for
+grace_used_at (never clobbered by a null). A replayed walk re-derives
+streakWeeks from the same underlying trades/day_closeouts facts
+each time -- since those facts don't change between replays, and
+decideWeekForStreak treats an already-graced week as count (not
+count_with_grace, line 174), a second identical walk cannot double-
+spend a grace or inflate the streak. Independently corroborated by the
+tester's own "real TWO-WRITE idempotency proof (grace_applied never
+re-toggled, the graced week's own computed_at byte-identical after a
+second identical call -- proving no write touched that row at all the
+second time)" in streak-repository.live.test.ts -- read this test
+directly, not just the ledger's summary of it; it asserts on
+computed_at staying byte-identical, which is a genuinely strong
+no-op proof, not merely "the value is still correct."
+
+**7. Non-blocking guarantee -- ACCEPTABLE, matches established repo
+precedent, one hardening note (non-blocking).** confirm.ts calls
+recomputeEngagementForConfirmations (lines 579, 761) with no
+try/catch at the call site, identical to the pre-existing
+recomputeAdherenceWeeklyForConfirmations/
+recomputeUnlockStateForConfirmations calls immediately above it in
+the same file. Read recomputeEngagementForConfirmations itself
+(streak-repository.ts lines 417-447): the only await in the function
+is inside a per-user try/catch block that logs and records failures
+without rethrowing; everything before the loop (building a Map/Set
+from a plain array) is synchronous and cannot throw for any input this
+function's own callers ever pass it (arrays of userId/serverDay string
+pairs). This means the "never blocks confirmation" guarantee is not
+merely a documented convention here -- it is actually structurally
+true for this function as written, not just inherited by analogy from
+the adherence/unlock_state precedent. I agree with the tester's
+framing that a belt-and-suspenders try/catch at the confirm.ts call
+site would still be a reasonable defense-in-depth addition (protects
+against a future edit to this function accidentally introducing a
+pre-loop throw), but its absence today is not a real gap given the
+function's current, verified shape -- non-blocking, not a fail
+condition for this review.
+
+**8. Injection / parameterization sweep -- PASS.** Every SQL statement
+read across week-completeness-repository.ts, streak-repository.ts,
+and the touched portions of confirm.ts uses numbered placeholders
+with values passed as a separate pg params array; no string
+interpolation of any user-supplied or trade-derived value into a query
+string anywhere in this slice. assertCanonicalWeekStart/
+InvalidWeekStartError reject non-canonical week_start values by
+throwing before any query runs, not by string-checking inside SQL. No
+eval/new Function/dynamic code construction anywhere in
+lib/engagement/**.
+
+**9. Entitlement / Zod boundary validation -- PASS (for this slice's
+only client-reachable surface).** confirmDayAction's
+confirmDayInputSchema is a z.strictObject (rejects unknown keys),
+validating accountId (uuid), serverDay (regex), kind (enum) -- no
+streak/engagement field is client-settable through this or any other
+route; fetchEngagementSummaryForUser (the only read function this
+slice exposes) is not yet wired into any route/UI at all (confirmed by
+grep -- no caller outside its own test files), so there is no
+client-reachable read surface to entitlement-gate yet. This slice
+introduces no plan/tier-gated capability, so the "entitlement checked
+server-side" bar has nothing new to violate.
+
+**10. Import boundaries -- PASS, verified two ways.**
+npm run check:import-boundaries (scoped by its own config to
+lib/analytics only -- confirmed by reading .dependency-cruiser.cjs
+and package.json's script) passed, but does not itself assert
+anything about lib/engagement. Directly grepped every import in
+lib/engagement/*.ts: the only import from lib/rules/** in the
+entire directory is week-boundary.ts (weekStartForServerDay,
+weekEndForServerDay, addDaysToServerDay), imported by both repository
+files. Read week-boundary.ts in full: it is a pure calendar-
+arithmetic module (ISO-week Monday-start math on YYYY-MM-DD strings)
+with zero imports of its own, no rule/evaluation/adherence logic, no
+database access -- a defensible, documented exception to section 11's
+"no dependency on Module 04 or 05" (the same narrow calendar-utility
+reuse adherence_weekly itself already established as precedent). Ran
+"npx depcruise --config .dependency-cruiser.cjs lib/engagement"
+directly as an ad hoc check (0 violations, 57 modules/143
+dependencies) -- noting for the record that this ad hoc run does not
+add real enforcement of its own (the forbidden rule in that config
+is scoped from lib/analytics, so it would not fire even if
+lib/engagement imported real rule-evaluation code); the actual
+guarantee here rests on the grep and manual read above, not on tooling
+coverage. Recommend, non-blocking: add a second forbidden rule to
+.dependency-cruiser.cjs scoped from lib/engagement to lib/rules with
+an allowlist for week-boundary (or split that file out from
+lib/rules/ into a shared location), so this boundary is enforced by
+CI-runnable tooling rather than by review discipline alone --
+flagging as a hardening recommendation, not a blocker, since the
+current state is correct by manual verification.
+
+**Verdict: PASS. Cleared for retrospeq-qa and commit.** No blocking
+finding. One non-blocking hardening recommendation (item 10, the
+dependency-cruiser rule) and one non-blocking observation already
+raised by the tester and independently confirmed harmless (item 7).
+Files checked: supabase/migrations/20260911030000_engagement_streak_schema.sql,
+lib/engagement/week-completeness-repository.ts,
+lib/engagement/streak-repository.ts, lib/ingestion/confirm.ts,
+app/(app)/trades/actions.ts (confirmDayAction only),
+lib/supabase/__tests__/engagement-streak-schema.rls.test.ts,
+lib/ingestion/__tests__/confirm.engagement-exclusion.live.test.ts,
+lib/engagement/__tests__/streak-repository.live.test.ts,
+lib/supabase/direct.ts (withUserConnection/withServiceRoleConnection),
+.dependency-cruiser.cjs.
+
+## 2026-09-11 — Module 07 (Engagement) Slice 1 — QA REVIEW: PASS. Cleared to commit and push to main.
+
+Read AGENTS.md's Non-negotiables/Design system sections and
+retrospeq-design-decisions.md in full before starting (both already
+read this session in prior work; re-read for this dispatch). Read
+07-engagement.md sec2/sec3 in full. Did not trust the coder/tester/
+security-reviewer entries at face value -- independently re-read the
+migration, both repository files, confirm.ts's actual wiring, the
+runbook entry, and ran my own spot-checks against the four sec3.2
+cases and the grace rule, rather than accepting the ledger summaries.
+
+**1. Streak genuinely counts weeks, not days -- PASS.**
+engagement_state/week_completeness (supabase/migrations/
+20260911030000_engagement_streak_schema.sql) expose exactly one
+externally-meaningful streak number, streak_weeks (plus
+longest_streak_weeks, same unit). week_completeness.days_traded/
+days_closed are internal weekly bookkeeping inputs to the sec5.2
+formula, never themselves surfaced as a "daily streak" -- confirmed by
+reading EngagementSummary (streak-repository.ts lines 455-474):
+streakWeeks, longestStreakWeeks, currentWeek {daysTraded, daysClosed,
+complete}, totalXp. No daily-granularity concept is exposed as a
+streak anywhere in the schema or the one exported read function
+(fetchEngagementSummaryForUser). Matches sec6's own EngagementState
+type exactly.
+
+**2. Grace rule (sec3.5) -- PASS, matches the framing exactly.**
+Read decideWeekForStreak (streak-repository.ts lines 173-177) and
+the walk in recomputeEngagementState (lines 292-334) directly. Grace
+is silent (no event/notification path exists anywhere in this diff --
+confirmed by grep, zero hits for any notification/toast/celebration
+string in lib/engagement/), automatic (fires inside a server-only
+recompute with no client input), not purchasable (no write path to
+grace_used_at/grace_applied exists outside this walk -- confirmed
+independently by grep: grace_applied is written in exactly two
+places, week-completeness-repository.ts's upsert (never sets it
+true) and markWeekGraceApplied (only called from the walk itself)),
+applies to the FIRST broken week only in a given walk
+(graceUsedThisWalk flips graceAvailable false the instant one
+grace is spent, lines 328-330, so a second broken week in the same
+walk always hits stop), and is gated by a literal rolling 91-day
+window (isGraceAvailable, lines 150-154, millisecond math against
+grace_used_at, not a calendar-quarter bucket) -- "rolling quarter"
+read literally, as the spec's own phrasing distinguishes. An
+already-graced week from a prior walk correctly counts via 'count',
+not 'count_with_grace' (line 174), so a later walk can never
+re-spend or re-litigate a past grace decision -- the mechanism that
+keeps sec10's "a wrong streak is worse than a missing one" true even
+across repeated recomputes.
+
+**3. sec3.2's completeness table, all four rows -- PASS, verified
+directly against computeWeekCompleteness myself, not just trusted to
+the tester's count.** Read week-completeness-repository.ts lines
+106-113: complete = daysTraded === 0 || daysClosed >= daysTraded.
+Hand-checked all four: traded 3/closed 3 -> daysClosed(3) >=
+daysTraded(3) -> true (intact). Traded 0 -> daysTraded === 0 -> true
+(intact, "nothing was owed"). Traded 5/closed 4 -> daysClosed(4) >=
+daysTraded(5) is false and daysTraded !== 0 -> false (broken).
+Traded 0 with one deliberate no-trade closeout (daysTraded: 0,
+daysClosed: 1) -> daysTraded === 0 -> true (intact, the no-trade day
+counts as a logged decision). All four match the formula exactly, and
+lib/engagement/__tests__/week-completeness-repository.test.ts lines
+25-77 encode these same four cases plus three boundary variants with
+the identical numbers. The DB layer's absence of a "days_closed <=
+days_traded" constraint (explained in the migration's own header) is
+correct, since case 4 violates that relationship by construction.
+
+**4. No UI in this slice -- CONFIRMED.** git status shows this
+slice's diff as lib/engagement/** (new), two new test files outside
+that directory, one new migration, and modifications to
+lib/ingestion/confirm.ts, docs/runbook.md, PROGRESS.md only. Zero
+files under app/** touched by this diff (the app/(app)/strategies/**
+changes visible in the working tree are a separate, unrelated
+in-flight slice, confirmed by their absence from any of this slice's
+own decision-log entries). fetchEngagementSummaryForUser itself is
+confirmed not yet called from any route (grep, no caller outside its
+own test files). Correct scope per sec1's "the dashboard streak
+display (Module 08 defines the state, this module supplies the
+number)" split.
+
+**5. The two coder judgment calls -- reviewed on their own merits,
+not just for internal consistency.**
+(a) Streak floor at the signup week: sound. Read sec3.2's own
+"traded 0 days -> also intact" literally would let a brand-new,
+never-traded account's walk run back to MAX_WALK_WEEKS (520, ~10
+years) counting every pre-existence week as an intact streak --
+clearly wrong, since there is no product to have "closed the loop"
+with before the account existed. Bounding at
+weekStartForServerDay(profiles.created_at) is the correct fix and is
+independently proven by the tester's live "brand-new signup starts at
+streak_weeks = 0" test, which I agree is the one case that matters
+most here.
+(b) currentServerDayForNow as a plain UTC wall-clock read for the
+per-user "which week is in progress" question: a reasonable v1 call,
+with one genuine edge case worth naming for the record, not a
+blocker. The judgment itself -- that there is no single
+account-agnostic "today" across accounts with different rollovers
+(forex 17:00 NY vs crypto 00:00 UTC, design-decisions.md sec0) -- is
+correct, and the function is used ONLY to decide which week is
+excluded as "in progress," never to bucket any trade's own
+days_traded/days_closed (those stay on each account's own
+already-computed server_day, per Module 02). The edge case: near a
+week boundary, a forex account's own 17:00-NY-rollover server_day can
+already be one calendar day ahead of or behind a plain UTC read,
+meaning the walk's notion of "current week" can be off by up to about
+24 hours from a forex trader's own actual current week for a few
+hours around Sunday/Monday. Because the walk only ever EXCLUDES the
+in-progress week (never credits it) and always starts counting from
+one full week before whatever it thinks is current, the worst case is
+the walk treating a week as "still in progress" slightly later or
+earlier than a given forex account's own true rollover would -- it
+cannot fabricate credit for an incomplete week, only possibly delay
+or advance by a few hours when a fully-complete week starts counting.
+Bounded, self-correcting on the very next recompute, and consistent
+with sec10's "never show a WRONG streak, a slightly stale one is
+fine" posture. Documenting this since the QA brief asked for my own
+view, not just a consistency check -- I would call this acceptable
+for v1, not a defect requiring a fix before commit.
+
+**6. PROGRESS.md decision-log chain -- internally consistent.** Read
+all three entries (coder 2026-09-11 "CODED, not yet tested/reviewed",
+tester 2026-09-11 "TESTER PASS", security-reviewer 2026-09-11
+"SECURITY REVIEW: PASS") in full. Each correctly narrows scope from
+the one before it (coder flags two judgment calls and hands off a
+specific test list; tester builds exactly that list plus RLS coverage
+and reports coverage numbers; security-reviewer re-derives findings
+independently rather than trusting the ledger, as its own text states
+it did). No contradiction found between what each entry claims and
+what the code/tests actually contain, cross-checked directly above
+rather than by re-reading the ledger a fourth time.
+
+**7. Documentation -- PASS on the runbook; no ADR is a defensible
+choice for this slice, with one non-blocking recommendation for a
+future slice.** docs/runbook.md's "Engagement streak recompute
+failing after a confirmation" entry (lines 1859-1926) is accurate: it
+correctly cites sec10's ENGAGEMENT_RECOMPUTE_FAILED/
+ENGAGEMENT_STATE_STALE codes, names the actual log line
+("[engagement] streak recompute failed for user <id>") verified
+present in streak-repository.ts line 436, correctly describes the
+best-effort/post-commit/never-throws posture matching the real
+confirm.ts call sites, and adds a genuinely useful operational note
+(check week_completeness.grace_applied directly, not just
+computed_at staleness, for a reported-wrong streak) that goes beyond
+boilerplate. On the ADR question: 07-engagement.md sec15 names three
+ADRs ("adherence excluded from XP," "streak counts weeks not days,"
+"no notifications"), and none exists yet under docs/adr/. I agree
+this is not a blocker for THIS slice specifically, for two reasons:
+first, AGENTS.md's own Non-negotiables section header states "each
+has an ADR in the design-decisions doc" -- and "streak counts weeks,
+not days" IS a listed non-negotiable, with its rationale already
+written at length in retrospeq-design-decisions.md sec11 ("Streak =
+completeness, not frequency") and 07-engagement.md sec3 itself,
+satisfying that framing; second, two of the three named ADRs
+("adherence excluded from XP," "no notifications") describe
+mechanics this slice deliberately does not build (no XP ledger, no
+notification code at all), so writing them now would document code
+that doesn't exist in this repo yet. Flagging, non-blocking: once the
+XP ledger and Module 07's notification-suppression code actually land
+in a future slice, sec15's three ADRs should be written together as
+one batch under docs/adr/ rather than dropped -- worth a line in that
+future slice's own dispatch so it isn't silently missed a second
+time. No migration constraint in this slice's SQL needed an inline
+comment beyond what's already there (the
+week_completeness_week_start_is_monday and
+engagement_state_longest_ge_current CHECK constraints are both
+commented in place explaining why, not just what -- read directly,
+confirmed accurate).
+
+**8. Standard non-negotiables -- PASS.** No XP/currency granted
+anywhere in this diff (total_xp is written exactly once, in the
+handle_new_user signup default, and is never set to a non-zero value
+by any function in this slice -- confirmed by grep, total_xp appears
+only in the migration's column definition/signup insert and in
+streak-repository.ts's read path, never in an UPDATE/INSERT SET
+list). The no-red/green check is N/A (no UI shipped this slice,
+confirmed under item 4). Import boundary: independently re-grepped
+every "from '@/lib/rules" import across lib/engagement/*.ts myself
+(not just re-read the security-reviewer's claim) -- exactly two hits,
+both week-boundary.ts (streak-repository.ts line 4,
+week-completeness-repository.ts line 4), nothing else from
+lib/rules/**. I agree with the security-reviewer's framing that this
+is correct by manual verification today and would benefit from a
+real CI-enforced dependency-cruiser rule rather than resting on
+review discipline alone -- logging agreement here, not re-deriving a
+new recommendation.
+
+**Performance (sec12's budgets) -- no obvious budget-breaker found.**
+The per-week query (fetchWeekActivityCounts) filters trades/
+day_closeouts by user_id first in both cases -- trades_user_day
+(user_id, server_day desc) and day_closeouts's own PK (user_id,
+account_id, server_day) both lead with user_id, so this is not a
+full-table scan for either source table. The backward walk itself is
+not O(1) per recompute for an old, unbroken-streak account -- it
+batch-reads the ENTIRE [floorWeekStart, lastCompletedWeekStart] range
+in one query (fetchWeekCompletenessRowsInRange) before looping
+in-memory, so a 3-year-old account with a perfect streak costs one
+extra wide-range read, not N+1 -- acceptable against the 200ms
+streak-walk budget. The one real cost concentration: the FIRST-EVER
+recompute for an account with years of pre-existing trade history
+will self-heal every missing week_completeness row one at a time (2
+subqueries plus 1 upsert each, inside the loop) since no week has
+ever been materialised before this slice shipped -- for a
+long-tenured account this could be a one-time multi-second cost on
+its first post-deploy confirmation, not a per-request steady-state
+issue (every subsequent recompute reuses the now-materialised rows).
+Flagging as a known, bounded, one-time cost rather than a blocker --
+not a query-shape problem, just an inherent backfill cost of
+introducing a new materialised cache over old data, the same shape
+adherence_weekly/unlock_state each had when they first shipped.
+
+**Verdict: PASS. Cleared to commit and push to main.** No blocking
+finding across items 1-8 above or the documentation/performance
+checks. One non-blocking recommendation carried forward from the
+security-reviewer (a real dependency-cruiser rule for
+lib/engagement -> lib/rules, scoped with a week-boundary allowlist)
+and one new non-blocking recommendation of my own (batch sec15's
+three named ADRs into the future slice that builds the XP ledger and
+notification-suppression code, rather than writing one now for a
+decision whose full context doesn't exist in this repo yet). Since
+this project's Autonomy policy means no further human review gate
+follows this PASS, the orchestrating session should commit and push
+immediately. Files checked: supabase/migrations/
+20260911030000_engagement_streak_schema.sql,
+lib/engagement/week-completeness-repository.ts,
+lib/engagement/streak-repository.ts, lib/ingestion/confirm.ts (the
+three recomputeEngagementForConfirmations call sites),
+docs/runbook.md (the new entry), lib/engagement/__tests__/
+week-completeness-repository.test.ts, lib/engagement/__tests__/
+streak-repository.test.ts, and a full re-read of all three prior
+decision-log entries for this slice.
 
 ## Autonomous continuation — cost/cadence policy (owner decision 2026-08-20)
 

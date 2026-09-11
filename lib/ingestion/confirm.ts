@@ -10,6 +10,7 @@ import { evaluateAndFreezeTradeRules, type RuleEvaluationAnomaly } from '@/lib/r
 import { freezeTriggerEvaluationsForTrade } from '@/lib/rules/freeze-trigger-evaluations';
 import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-repository';
 import { recomputeUnlockStateForConfirmations } from '@/lib/onboarding/unlock-state-repository';
+import { recomputeEngagementForConfirmations } from '@/lib/engagement/streak-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.6 — "Confirmation and freeze —
@@ -230,6 +231,48 @@ import { recomputeUnlockStateForConfirmations } from '@/lib/onboarding/unlock-st
  * `trades`/`trade_captures` rows, never itself trust-sensitive. Deduped
  * by `userId` alone (no week dimension, unlike adherence's own
  * `(userId, weekStart)` pairs) — see that file's own header.
+ *
+ * ## `engagement_state`/`week_completeness` recompute (Module 07 §5.2/§5.3,
+ * Slice 1) — SAME shape, called alongside the two recomputes above
+ *
+ * Both `confirmDay` and `autoConfirmStaleTrades` also call
+ * `recomputeEngagementForConfirmations` (`lib/engagement/streak-
+ * repository.ts`) AFTER their own transaction has already committed —
+ * identical post-commit, best-effort, never-throws posture to the two
+ * calls directly above, for the identical reason (a materialised cache
+ * over already-committed `trades`/`day_closeouts` rows, never itself
+ * trust-sensitive). Deduped by `userId` (like `unlock_state`'s own call,
+ * not per-week like adherence's) — see that file's own header for why a
+ * streak recompute is always a whole-user re-walk regardless of which
+ * single week triggered it.
+ *
+ * **`confirmDay`'s own trigger condition is intentionally broader than
+ * adherence/unlock_state's `tradesConfirmed.length > 0` gate**: it also
+ * fires when `dayCloseoutInserted` is true with ZERO trades confirmed —
+ * the `kind: 'deliberate_no_trade'` case (header judgment call #4).
+ * Adherence/unlock_state have nothing to recompute from an empty
+ * `tradesConfirmed` (both read `rule_evaluations`/`trades` rows that
+ * simply don't exist for a no-trade day), but Module 07 §3.2's own
+ * "Traded 0 days, marked one deliberate no-trade day -> Intact, and the
+ * no-trade day counts as a logged decision" means a bare `day_closeouts`
+ * insert with no trades is EXACTLY the case the streak exists to credit
+ * — skipping the recompute here would silently leave that day's own week
+ * un-refreshed until some unrelated later confirmation happened to touch
+ * it.
+ *
+ * `autoConfirmStaleTrades` reuses the SAME `confirmedForRecompute` array
+ * the adherence/unlock_state calls already build (only trades this call
+ * ACTUALLY confirmed, never ones it merely intended to but lost a race
+ * on) — see Module 07's own `07-engagement.md` §3.3 for why this is
+ * correct and safe rather than a streak-crediting risk: auto-confirm
+ * never inserts a `day_closeouts` row (this file's own dedicated
+ * paragraph above), so recomputing `week_completeness` after it can only
+ * ever ADD to `days_traded` without adding to `days_closed` — the streak
+ * mechanism's OWN §5.2 formula is what prevents auto-confirmed trades
+ * from ever earning credit, not a special case added here. If anything,
+ * skipping this recompute would be the bug: a returning trader's
+ * genuinely-broken week (§3.3's own stated consequence) would otherwise
+ * never get reflected until their next real confirmation.
  */
 
 // ---------------------------------------------------------------------
@@ -526,6 +569,15 @@ export async function confirmDay(
     // actually confirmed).
     await recomputeUnlockStateForConfirmations([{ userId: confirmedUserId }]);
   }
+  // Post-commit, best-effort engagement_state/week_completeness recompute
+  // -- see this file's header ("engagement_state/week_completeness
+  // recompute"). Deliberately BROADER gate than the two calls above: also
+  // fires on a bare deliberate-no-trade day_closeouts insert with zero
+  // trades confirmed (Module 07 §3.2's own "no-trade day counts as a
+  // logged decision").
+  if (result.confirmed && (result.tradesConfirmed.length > 0 || result.dayCloseoutInserted) && confirmedUserId) {
+    await recomputeEngagementForConfirmations([{ userId: confirmedUserId, serverDay }]);
+  }
 
   return result;
 }
@@ -700,6 +752,13 @@ export async function autoConfirmStaleTrades(options: AutoConfirmOptions = {}): 
     // `{userId, serverDay}` shape `confirmedForRecompute` already carries
     // is fine -- only `userId` is ever read from each entry.
     await recomputeUnlockStateForConfirmations(confirmedForRecompute);
+    // Post-commit, best-effort engagement_state/week_completeness
+    // recompute -- see this file's header ("engagement_state/
+    // week_completeness recompute"). Safe and correct to run here even
+    // though auto-confirm never earns streak credit itself (Module 07
+    // §3.3) -- see that header section for why this can only ever BREAK,
+    // never fabricate, a streak.
+    await recomputeEngagementForConfirmations(confirmedForRecompute);
   }
 
   return result;

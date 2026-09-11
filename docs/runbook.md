@@ -1853,3 +1853,74 @@ ever becomes load-bearing for a real product decision (e.g. driving the
 inspected on ≥ 10" real accounts — off of this table specifically), a
 missing-row gap here would need a real fix (retry, a queue, or a
 periodic reconciliation job) before being trusted for that purpose.
+
+---
+
+## Engagement streak recompute failing after a confirmation
+
+**Source:** Module 07 (Engagement) §10's own error-handling table —
+`ENGAGEMENT_RECOMPUTE_FAILED`: "Job failure → Serve last materialised
+state; alert. **Never show a wrong streak**." Owning code:
+`lib/engagement/streak-repository.ts`'s `recomputeEngagementState`
+(the walk) and `recomputeWeekCompleteness`
+(`lib/engagement/week-completeness-repository.ts`), called from
+`lib/ingestion/confirm.ts`'s `confirmDay`/`autoConfirmStaleTrades` AFTER
+each of their own transactions has already committed — same best-effort,
+post-commit, never-throws posture as the pre-existing `adherence_weekly`/
+`unlock_state` recompute entries in this file, added here for the
+identical reason.
+
+**What this means operationally:** a recompute failure is caught inside
+`recomputeEngagementForConfirmations`'s own per-user loop and logged as
+`[engagement] streak recompute failed for user <id> ...` — it never
+propagates back to the caller's already-committed confirmation, and a
+failure for one user never prevents another user's recompute in the same
+sweep (`autoConfirmStaleTrades` can touch many users in one call).
+`engagement_state`/`week_completeness` are materialised CACHES over
+already-committed `trades`/`day_closeouts` rows — a failed recompute
+leaves both tables reading whatever they last successfully computed
+(possibly several confirmations behind), never corrupted or
+double-counted, since each `(user_id[, week_start])` row is a full
+upsert-in-place, not an incremental delta.
+
+**"Serve stale with no indicator. A slightly old streak is harmless"
+(§10, `ENGAGEMENT_STATE_STALE`) is the correct, intended read path** —
+`fetchEngagementSummaryForUser` (`lib/engagement/streak-repository.ts`)
+deliberately never recomputes at read time, purely reads the last
+materialised `engagement_state`/`week_completeness` rows. Do not treat a
+streak number that lags the trader's most recent confirmation by a few
+minutes as a symptom on its own — only a genuinely stuck row (never
+advancing across many real confirmations) indicates the recompute itself
+is failing.
+
+**Why a wrong streak is the one thing this must never do, concretely:**
+§10's own "never show a wrong streak" is stricter than most of this
+file's other materialised-cache entries — the streak walk's own grace
+mechanism (§3.5) permanently persists `grace_applied = true` onto a
+specific `week_completeness` row the first time it is spent, specifically
+so a later recompute can never cause the streak to DECREASE (re-deriving
+grace eligibility fresh on every walk would risk exactly that). A bug
+that somehow re-evaluated an already-graced week would be a correctness
+regression worth treating as more serious than an ordinary stale-cache
+symptom — check `week_completeness.grace_applied` for the affected user's
+recent weeks directly if a reported streak number looks wrong, not just
+`engagement_state.computed_at`'s own staleness.
+
+**How to check:** grep application logs for `[engagement] streak
+recompute failed for user`. A live cross-check for a specific user:
+compare `engagement_state.computed_at` against that user's most recent
+`day_closeouts.confirmed_at` (or `trades.confirmed_at`, for an
+auto-confirm-driven break) — meaningfully stale relative to a real,
+recent confirmation indicates a genuine recompute failure rather than
+simply "no new confirmation has happened yet" (a week with zero new
+activity legitimately keeps its last-computed numbers, matching
+`adherence_weekly`'s own identical situation).
+
+**No cron/scheduler infra exists in this repo** (already tracked,
+PROGRESS.md "Infra gaps") — same standing gap `adherence_weekly`'s own
+entry in this file already notes: a confirm/auto-confirm call is
+currently the ONLY way a trader's `engagement_state`/`week_completeness`
+rows get refreshed. A trader who never returns to confirm a day again
+simply keeps their last-computed streak forever (correct, not wrong —
+the streak measures review, not mere existence, per §3.3), not a symptom
+to chase.
