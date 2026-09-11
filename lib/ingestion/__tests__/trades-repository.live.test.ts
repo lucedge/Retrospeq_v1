@@ -366,4 +366,82 @@ describe.skipIf(!env)('lib/ingestion/trades-repository.ts (live DB)', () => {
     // RLS cross-user isolation.
     expect(await listJoinableTradeGroups(userB.id)).toEqual([]);
   });
+
+  // ---------------------------------------------------------------------
+  // fetchPeriodOutcome — Module 06 Slice 2, §4.2's "Outcome line" source
+  // (docs/adr/0036 decision #6: reads `trades` live, independent of
+  // Module 07's own cache). Dispatch item 3: cross-user isolation for
+  // this specific new repository function.
+  // ---------------------------------------------------------------------
+
+  it('fetchPeriodOutcome: a genuinely empty user gets honest zeros (tradeCount 0, daysTradedCount 0, totalR "0"), never fabricated', async () => {
+    if (!env) return;
+    const user = await createTestAuthUser(env, 'trades-repo-outcome-empty');
+    cleanupUserIds.push(user.id);
+
+    const { fetchPeriodOutcome } = await import('../trades-repository');
+    const result = await fetchPeriodOutcome(user.id, '2026-07-01', '2026-07-07');
+    expect(result).toEqual({ tradeCount: 0, daysTradedCount: 0, totalR: '0' });
+  });
+
+  it('fetchPeriodOutcome: only CONFIRMED trades within the period count, and totalR/daysTradedCount are genuine aggregates', async () => {
+    if (!env) return;
+    const user = await createTestAuthUser(env, 'trades-repo-outcome-real');
+    cleanupUserIds.push(user.id);
+    const accountId = await seedAccount(user.id);
+
+    // `r_multiple` (and every other derived fact) is FROZEN once
+    // `confirmed_at` is set (Module 02 §4.6/§4.7's immutability trigger —
+    // confirmed live above by this very test run) — so `r_multiple` must
+    // be set in the SAME statement that confirms, not as a later UPDATE
+    // against an already-confirmed row.
+    const closed1 = await seedTradeWithFill(user.id, accountId, 'closed');
+    const closed2 = await seedTradeWithFill(user.id, accountId, 'closed');
+    // Unconfirmed — must be excluded from the outcome line entirely.
+    await seedTradeWithFill(user.id, accountId, 'closed');
+
+    // Two separate updates: the derived fact (`r_multiple`) FIRST, while
+    // still unfrozen, then a second update that ONLY touches
+    // confirmed_at/confirmed_by/status — the one shape the freeze trigger
+    // allows for the confirming update itself (Module 02 §4.6).
+    await db.query(`update retrospeq.trades set r_multiple = '1.5000' where id = $1`, [closed1.tradeId]);
+    await db.query(`update retrospeq.trades set confirmed_at = now(), confirmed_by = 'user' where id = $1`, [
+      closed1.tradeId,
+    ]);
+    await db.query(`update retrospeq.trades set r_multiple = '-0.5000' where id = $1`, [closed2.tradeId]);
+    await db.query(`update retrospeq.trades set confirmed_at = now(), confirmed_by = 'user' where id = $1`, [
+      closed2.tradeId,
+    ]);
+
+    const { fetchPeriodOutcome } = await import('../trades-repository');
+    // seedTradeWithFill's own fixture opens/closes on 2026-07-05 -- a
+    // period window that comfortably contains it.
+    const result = await fetchPeriodOutcome(user.id, '2026-07-01', '2026-07-07');
+
+    expect(result.tradeCount).toBe(2); // only the 2 confirmed trades, not the closed-but-unconfirmed one
+    expect(result.daysTradedCount).toBe(1); // both confirmed trades share one server_day
+    expect(Number(result.totalR)).toBeCloseTo(1.0, 4); // 1.5 + (-0.5), a genuine sum
+  });
+
+  it('fetchPeriodOutcome: cross-user isolation — user B never sees user A\'s trades or totals', async () => {
+    if (!env) return;
+    const userA = await createTestAuthUser(env, 'trades-repo-outcome-a');
+    const userB = await createTestAuthUser(env, 'trades-repo-outcome-b');
+    cleanupUserIds.push(userA.id, userB.id);
+    const accountId = await seedAccount(userA.id);
+
+    const trade = await seedTradeWithFill(userA.id, accountId, 'closed');
+    await db.query(`update retrospeq.trades set r_multiple = '2.0000' where id = $1`, [trade.tradeId]);
+    await db.query(`update retrospeq.trades set confirmed_at = now(), confirmed_by = 'user' where id = $1`, [
+      trade.tradeId,
+    ]);
+
+    const { fetchPeriodOutcome } = await import('../trades-repository');
+    const resultB = await fetchPeriodOutcome(userB.id, '2026-07-01', '2026-07-07');
+    expect(resultB).toEqual({ tradeCount: 0, daysTradedCount: 0, totalR: '0' });
+
+    const resultA = await fetchPeriodOutcome(userA.id, '2026-07-01', '2026-07-07');
+    expect(resultA.tradeCount).toBe(1);
+    expect(Number(resultA.totalR)).toBeCloseTo(2.0, 4);
+  });
 });

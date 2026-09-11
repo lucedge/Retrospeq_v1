@@ -1924,3 +1924,76 @@ rows get refreshed. A trader who never returns to confirm a day again
 simply keeps their last-computed streak forever (correct, not wrong —
 the streak measures review, not mere existence, per §3.3), not a symptom
 to chase.
+
+## Weekly review materialisation has no deployed scheduler yet
+
+**Source:** Module 06 (Review & Graduation) §4.10 — "Reviews are
+materialised on a schedule... weekly job, per user, at period end" — and
+§14's own explicit call for "a runbook entry for review materialisation
+lag." Owning code: `lib/review/weekly-read-payload.ts`'s
+`assembleWeeklyReadPayload` (the read-side composition — Module 02
+outcome, Module 07 consistency, Module 04 adherence, Module 05 findings,
+ranked and capped at `WEEKLY_FINDINGS_CAP`) and
+`lib/review/reviews-repository.ts`'s `upsertWeeklyReview` (the write),
+both built in Slice 2 (2026-09-11).
+
+**What this means operationally, TODAY: this job does not run anywhere,
+for anyone, ever, yet.** Unlike every other entry in this file (which
+describes a real background recompute that already runs after a real
+confirm/sync and could genuinely fail or lag), Slice 2 built the pure
+assembly + materialisation-write functions ONLY — callable directly
+(e.g. by a test, or by a future scheduler) with an explicit
+`periodStart`/`periodEnd`, but wired into no cron, queue, or webhook
+anywhere in this repo. No trader will ever see a materialised
+`reviews` row until a real scheduler exists to call these functions
+periodically. This is a genuine, currently-unresolved infra gap, not an
+oversight — see `NEEDS_YOUR_INPUT.md`'s matching entry: a real "weekly
+job, per user, at period end" needs a deployed scheduler (Vercel Cron or
+equivalent), and AGENTS.md's own "Known infra gaps" already names "No
+Vercel project" as a standing blocker on real deploys, which this is a
+direct instance of.
+
+**Once a real scheduler exists and is wired up, the failure modes to
+actually watch for:**
+
+- **Assembly failure for one user must never block another's** — none of
+  `assembleWeeklyReadPayload`'s four composers (`fetchPeriodOutcome`,
+  `fetchPeriodConsistency`, `fetchPeriodAdherence`,
+  `assembleWeeklyFindings`) currently wrap themselves in a repo-wide
+  "never throw, log and continue" posture the way
+  `recomputeEngagementForConfirmations`/`recomputeAdherenceWeeklyForConfirmations`
+  already do for their own per-user batch loops — `assembleWeeklyFindings`
+  degrades its OWN internal read failures to an empty findings list
+  (fail-closed, §4.8), but a genuine failure in `fetchPeriodOutcome`/
+  `fetchPeriodConsistency`/`fetchPeriodAdherence` (e.g. a dead DB
+  connection) will currently PROPAGATE as a thrown error out of
+  `assembleWeeklyReadPayload` itself. Whichever future slice wires in the
+  real scheduler MUST wrap each user's own `assembleWeeklyReadPayload` +
+  `upsertWeeklyReview` pair in its own try/catch, exactly matching this
+  repo's established per-user-batch pattern — this is flagged here
+  specifically so that slice does not skip it.
+- **§9's `REVIEW_NOT_READY`** ("Engines haven't finished... never a
+  partial review") is NOT enforced anywhere in Slice 2's own code —
+  `assembleWeeklyReadPayload` does not check whether Module 05's edge
+  engine has actually finished running for the period before reading
+  `findings`; it just reads whatever `state = 'active'` rows exist at
+  call time. §4.10 step 1 ("ensure Module 05 engines have run") is
+  therefore the real scheduler's OWN responsibility to sequence
+  correctly (run the edge/detection engines for the period, THEN call
+  `assembleWeeklyReadPayload`, never the reverse) — this file does not
+  and cannot enforce that ordering from inside a single, stateless
+  composition call.
+- **`reviews.opened_at`/`completed_at` are preserved across
+  re-materialisation** (docs/adr/0036 decision #7) — if a review's
+  numbers look like they changed after a trader already opened it, that
+  is expected (a late-arriving confirmation triggering a re-run), not a
+  bug; only `opened_at`/`completed_at` themselves silently resetting
+  would be the real symptom to investigate.
+
+**How to check, once wired up:** grep application logs for whatever
+per-user error prefix the real scheduler slice establishes (matching
+this file's own `[engagement]`/`[adherence]` convention). Until then:
+`select count(*) from retrospeq.reviews` staying at 0 (or not growing
+week over week) against a live project with real trading activity is
+the expected, correct state — not a symptom — for exactly as long as no
+scheduler exists.

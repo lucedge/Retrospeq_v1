@@ -309,3 +309,84 @@ export async function listTradeMembers(userId: string, tradeIds: string[]): Prom
     }));
   });
 }
+
+/**
+ * Module 06 (Review & Graduation) Slice 2, §4.2's Part 1 "Outcome line" —
+ * "14 trades · 5 days · +3.2R. In R, flat, never celebrated" — the ONE
+ * genuinely new Module 02 read this slice needed (no prior caller ever
+ * asked for a date-RANGE trade aggregate — every existing read above is
+ * either status-scoped, unbounded, or a single `(account, server_day)`
+ * pair). Added here rather than in `lib/review/**` per this repo's own
+ * established precedent of Module 06 extending Module 02's OWN repository
+ * file when it needs a new query against Module 02's own tables (see this
+ * file's `listUnresolvedCoverageGapsForAccountDay`, added the same way in
+ * Module 06 Slice 1).
+ *
+ * `confirmed_at is not null` — the SAME freeze point
+ * `week-completeness-repository.ts`'s own `days_traded` formula already
+ * uses (§5.2, Module 07): a trade only counts toward the outcome line once
+ * it has actually been reviewed/frozen, not merely closed. Deliberately
+ * NOT the "5 days" Consistency panel's own `days_closed`/`days_traded`
+ * numbers (Module 07's materialised `week_completeness` cache, read
+ * separately by `lib/review/period-consistency.ts`) — the outcome line
+ * reads Module 02's OWN source tables live, at review-assembly time,
+ * rather than depending on a Module 07 cache that could in principle lag
+ * behind. Both numbers use the identical underlying definition
+ * ("`server_day`s with >= 1 confirmed trade") and will normally agree; this
+ * is a deliberate choice to keep the outcome line's own truth
+ * self-contained rather than an accidental duplication (documented,
+ * per AGENTS.md's own "fix drift deliberately" posture, in
+ * docs/adr/0036-weekly-review-read-payload-assembly.md).
+ *
+ * PER-USER, no `account_id` filter — matching `week_completeness`'s own
+ * per-user (not per-account) scope, since a weekly review is a single
+ * cross-account read (§3's own `reviews.user_id`, no account dimension at
+ * all).
+ *
+ * `total_r` is returned as the raw `numeric(10,4)` string PostgreSQL's
+ * `sum()` produces (via `coalesce(sum(r_multiple), 0)::text`), matching
+ * `cross-trade-operand-values.ts`'s own `fetchOpenRiskSum` precedent for
+ * "return a summed numeric column as a string, let the caller decide how
+ * to format/round it" — never a JS float, per AGENTS.md's R-multiple
+ * numeric-precision convention (`numeric(10,4)`, no `float`, ever). A
+ * trade with a `null` `r_multiple` (open-risk-unknown or otherwise
+ * unresolvable — `trade-facts.ts`'s own documented case) contributes `0`
+ * to the sum via SQL's own null-skipping `sum()`, never breaks it.
+ */
+export interface PeriodOutcome {
+  tradeCount: number;
+  /** Distinct `server_day`s with >= 1 confirmed trade in `[periodStart,
+   *  periodEnd]` — see this function's own header for why this is
+   *  independently derived rather than read off `week_completeness`. */
+  daysTradedCount: number;
+  /** `numeric(10,4)` string, may be negative — deliberately left
+   *  unformatted (no sign, no "R" unit, no rounding): this repo's own
+   *  convention (§10, "this module orchestrates and does not compute") is
+   *  that `lib/review/**` hands back structured numbers, not pre-rendered
+   *  prose, for anything OTHER than a `findings` `statement` (which Module
+   *  05's own spec explicitly frames as pre-rendered copy, docs/adr/0035
+   *  decision #1) — the not-yet-built weekly-review UI slice owns turning
+   *  this into "+3.2R" display text and wrapping each number in its own
+   *  `.rq-num` span (AGENTS.md: "on every number, no exceptions"), which a
+   *  single opaque pre-joined string would make impossible to do cleanly. */
+  totalR: string;
+}
+
+export async function fetchPeriodOutcome(userId: string, periodStart: string, periodEnd: string): Promise<PeriodOutcome> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ trade_count: string; days_traded: string; total_r: string }>(
+      `select count(*)::text as trade_count,
+              count(distinct server_day)::text as days_traded,
+              coalesce(sum(r_multiple), 0)::text as total_r
+         from retrospeq.trades
+        where user_id = $1 and confirmed_at is not null and server_day between $2 and $3`,
+      [userId, periodStart, periodEnd],
+    );
+    const row = res.rows[0]!;
+    return {
+      tradeCount: Number(row.trade_count),
+      daysTradedCount: Number(row.days_traded),
+      totalR: row.total_r,
+    };
+  });
+}

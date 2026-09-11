@@ -31,7 +31,9 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 07 (ENGAGEMENT) SLICE 1 -- STREAK MECHANISM ONLY -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-11 Decision-log entries, search "Module 07"). Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet -- narrowly scoped to JUST the streak mechanism, deliberately NOT the whole module (`engagement_events`, XP accrual, `milestones`, every UI/notification surface all remain unbuilt). New `engagement_state`/`week_completeness` tables (RLS, owner-SELECT-only), the section 5.2 completeness formula and section 5.3 streak walk with grace (once per rolling 91-day window, silent, unpurchasable, applied only to the first broken week), wired post-commit/best-effort into both `confirmDay` and `autoConfirmStaleTrades`. The tester built the permanent test suite the coder's own throwaway checks never left behind (RLS isolation, both judgment-call edge cases, a live adversarial proof that auto-confirm genuinely cannot earn streak credit, a forced-write-failure non-blocking proof) -- all passing. Security-reviewer confirmed the whole mechanism is ungameable: exactly one INSERT into `day_closeouts` exists in the entire codebase, inside `confirmDay`'s own transaction, so a trader has no path to forge streak credit. QA hand-verified section 3.2's four completeness cases against the real formula and confirmed the grace rule's actual behavior matches its intended "silent, no celebration" framing. **This closes Module 07 Slice 1 -- the streak number Module 06 needs now exists and is exposed via `fetchEngagementSummaryForUser`, ready for a future Module 06 slice to wire into the weekly review's Part 1 assembly.** (Superseded CODER-stage note, folded in rather than left stale: "CODED, self-checked, ready for tester -> security-reviewer -> qa.") Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet. Narrowly scoped, per this slice's own dispatch, to JUST the streak mechanism -- `engagement_state` + `week_completeness` schema (RLS + real owner-SELECT-only policy on both, CHECK constraints including a real DB-level ISO-Monday `week_start` guard), the §5.2 week-completeness formula and §5.3 streak walk (grace applied once per rolling 91-day window, permanently persisted once spent, never re-litigated), wired post-commit/best-effort into BOTH `confirmDay` and `autoConfirmStaleTrades` (§3.3's "auto-confirm does not earn streak credit" verified to hold by construction, not by a special case), and a clean read function (`fetchEngagementSummaryForUser`) exposed for a later Module 06 slice to actually call. **Explicitly NOT the whole module** -- `engagement_events`, XP accrual, `milestones`, and every UI/notification surface are out of scope, not built. Verified live against the shared dev Supabase project: migration applied (RLS + all 4 CHECK constraints confirmed rejecting bad values), plus a throwaway live test (deleted after use) proving the actual walk logic (streak=3 across a seeded 2-complete/1-graced/1-stopped 4-week history, idempotent on re-run) and the real `confirmDay` wiring both work end to end. `tsc`/`eslint`/`npm run build` all clean, no new UI so no screenshot self-check applies. Full detail in the matching 2026-09-11 "Module 07 (Engagement) Slice 1 -- CODED" Decision-log entry. **Not marked done -- needs the tester -> security-reviewer -> qa chain** (§8.1/§8.2's own required unit/property tests, plus the 100%-cross-user-isolation RLS assertion, don't exist yet beyond this coder's own throwaway live check) before commit. Not committed, not pushed.
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
+
+**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 07 (ENGAGEMENT) SLICE 1 -- STREAK MECHANISM ONLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the four dated 2026-09-11 Decision-log entries, search "Module 07"). Dispatched because Module 06's weekly review Part 1 ("Consistency | Module 07 | Days closed out, streak") depends on a streak number nothing in the repo computed yet -- narrowly scoped to JUST the streak mechanism, deliberately NOT the whole module (`engagement_events`, XP accrual, `milestones`, every UI/notification surface all remain unbuilt). New `engagement_state`/`week_completeness` tables (RLS, owner-SELECT-only), the section 5.2 completeness formula and section 5.3 streak walk with grace (once per rolling 91-day window, silent, unpurchasable, applied only to the first broken week), wired post-commit/best-effort into both `confirmDay` and `autoConfirmStaleTrades`. The tester built the permanent test suite the coder's own throwaway checks never left behind (RLS isolation, both judgment-call edge cases, a live adversarial proof that auto-confirm genuinely cannot earn streak credit, a forced-write-failure non-blocking proof) -- all passing. Security-reviewer confirmed the whole mechanism is ungameable: exactly one INSERT into `day_closeouts` exists in the entire codebase, inside `confirmDay`'s own transaction, so a trader has no path to forge streak credit. QA hand-verified section 3.2's four completeness cases against the real formula and confirmed the grace rule's actual behavior matches its intended "silent, no celebration" framing. **This closes Module 07 Slice 1 -- the streak number Module 06 needs now exists and is exposed via `fetchEngagementSummaryForUser`, ready for a future Module 06 slice to wire into the weekly review's Part 1 assembly.** (Superseded CODER-stage note, folded in rather than left stale: "CODED, self-checked, ready for tester -> security-reviewer -> qa.")
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 1 -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (found 1 real blocking bug live) -> coder-fix (closed it) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06"). The one real bug -- `fetchCapturesForTrades` never filtered `captured_late`, letting a late-filled value leak into Module 05's segmentation exactly as story 1.3 exists to prevent (proven live: a 20-trade all-loss segment's win rate moved from an honest 0% to a misleading 20% once 5 late-filled wins were injected) -- was fixed with a single `and captured_late = false` clause, confirmed the sole caller of that function so no blast-radius surprise, and independently re-traced by both security-reviewer and qa. Separately, a pre-existing gap unrelated to this slice (the weekday canary's service-role call site missing from the mandatory allowlist test) was found as a side effect of this slice's test runs and fixed/committed on its own (`e6f6af7`), not bundled into this slice. **This closes Module 06 Slice 1: schema for `reviews`/`review_prompts`/`prompt_history` (RLS on all three, `review_prompts`/`prompt_history` deliberately schema-only, zero consumers yet -- confirmed by qa via a repo-wide grep) and real completion of the daily close-out screen against section 2 stories 1.1-1.4, including the first-ever UI caller of the `captured_late` late-fill mechanism that had existed backend-only since Module 02.** Module 06 is a large, multi-slice module (matching Module 04's own 10+-slice precedent) -- remaining scope, none of it started: the weekly review flow, prompt ranking + the 3-per-week cap, graduation/relaxation/promotion/retirement decision UI, deferral/backlog, the monthly trend view. (Superseded note, folded in rather than left stale: "UPDATE (same date, retrospeq-tester): the coder-stage note immediately below this line is otherwise accurate, but is now STALE on its bottom-line status." Independent tester pass (27 new RLS cross-user tests, 7 new coverage-gap-accuracy tests, 19 new validator unit tests, 7 new writeLateCaptureAction live-DB tests, all PASS) additionally found and live-DB-reproduced a real gap the coder's own self-check did not catch: story 1.3's "excluded from judgment findings" acceptance criterion is FALSE today — `lib/analytics/edge-engine/repository.ts`'s `fetchCapturesForTrades` never filters `captured_late`, so a late-filled pre-entry value leaks into Module 05's segment/finding computation (proven live: 5 late-filled wins leaked into a 20-trade loss segment, moving its computed win rate from the honest 0% to a misleading 20%). Two new tests in `lib/analytics/edge-engine/__tests__/captured-late-exclusion.live.test.ts` encode the spec's real requirement and FAIL on purpose until a coder fixes `fetchCapturesForTrades`. **Not ready for security-reviewer.** Full write-up in the matching 2026-09-11 "TESTER PASS" Decision-log entry (search "1 REAL BLOCKING BUG FOUND"). Module 06 is the next module in build order (Module 03's UI and Module 05's backend both fully shipped first). This is Slice 1 of a multi-slice module (same pattern Module 04 used, 10+ slices) — scoped narrowly to (a) schema-only migration for §3's three tables (`reviews`, `review_prompts`, `prompt_history`, RLS on all three, no consumer code) and (b) real completion of the daily close-out screen (`app/(app)/trades/close-out/**`) against §2 stories 1.1-1.4, taking real Module 06 ownership of a screen a prior Module 02 slice had explicitly left as a placeholder for this module to finish. Read the existing screen/backend in full before writing anything, per this slice's own dispatch: confirmed 1.1 (no findings/prompts/decisions leak) already held; 1.2's backend (`deliberate_no_trade` kind, streak-safe `day_closeouts` row) already worked but was framed generically ("Day done" for every case) — fixed to an explicit positive-choice framing ("I didn't trade today" / "Recorded as a deliberate day off — your streak stays intact") for the zero-trade case, copy-only, no new write path; 1.3's backend (`captured_late` marking in `trade-captures.ts`) existed since Module 02 Slice 7b but **no screen anywhere in this repo had ever called it** — confirmed by grep before writing code — so this is the one genuinely new capability this slice adds: a late-fill control for a trade's missing pre-entry fields (`LateCaptureField.tsx` + a new `writeLateCaptureAction`, restricted to the four fast-capture-safe data types `pick_one`/`pick_many`/`bool`/`rating`, dots/pills only, nothing that needs a keyboard); 1.4's refusal path existed reactively (post-submit) since Slice 7b — added a proactive coverage-gap check (`listUnresolvedCoverageGapsForAccountDay`, same overlap query `confirmDay`'s own transaction runs) so the block and a named reason are visible and the submit control is genuinely `disabled` before a wasted tap, not only after. New repo-reuse additions: `fetchStrategyVersionFields` (`lib/fields/strategy-repository.ts`, reads the field list off the exact strategy VERSION a trade was entered against — never the strategy's current version, 00-foundation §2.5) and a new, first-of-its-kind captured-VALUE validator (`lib/fields/captured-value-validation.ts` — distinct from the existing `field-validation.ts`'s proposed-field-CONFIG-shape validator). `npx tsc --noEmit` clean, `npx eslint` clean on every touched/new file (two pre-existing, unrelated warnings only). Screenshot self-check done against a real seeded trade/strategy on the live dev DB via a throwaway Playwright spec (deleted after use, per convention) — four scenarios confirmed correct: missing-pre-entry-fields rendering (dots/pills, no keyboard fields), a successful late-fill submit (locks to a "Saved" tag), the zero-trade-day positive framing, and the coverage-gap day showing the banner with the submit button genuinely `disabled` (not just refused after a tap). No red/green anywhere, one primary `.rq-btn` per view held throughout. Full detail in the matching dated Decision-log entry (search "Module 06 Slice 1"). **Not marked done by this coder dispatch — needs the tester -> security-reviewer -> qa chain** before commit, per this repo's own convention. Not committed or pushed.**
 
@@ -23790,3 +23792,432 @@ simplification in decision #5). Not committed, not pushed.
   dispatch only adds test files and this ledger entry — no production
   code changed).
 
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 2 — SECURITY REVIEW: PASS. Cleared for retrospeq-qa and commit.
+
+Read `retrospeq-design-system/modules/00-foundation.md` §4 and Module 01
+§7.2 (the canonical security bar) in full before starting, plus
+`docs/adr/0036-weekly-review-read-payload-assembly.md` in full (all 7
+decisions). Did not trust the coder/tester ledger entries at face value —
+independently re-read every new/extended repository function's actual SQL
+and connection-role usage below, per this review's own dispatch.
+
+**1. `withServiceRoleConnection` scoping in `reviews-repository.ts` — PASS,
+and allowlist gap closed.** `upsertWeeklyReview` (`lib/review/
+reviews-repository.ts:101-138`) issues exactly one statement, a single
+parameterized `insert ... on conflict (user_id, period_kind, period_start)
+do update`, with `userId` bound as `$1` and also part of the conflict
+target itself — a cross-user overwrite is structurally impossible even
+under `service_role` (the `ON CONFLICT` target itself includes `user_id`,
+so a colliding row can only ever be the SAME user's own prior row). No
+string interpolation of any parameter — `$1`-`$5` placeholders throughout,
+`role` in `withRole()` (`lib/supabase/direct.ts:67`) is the only inlined
+SQL fragment anywhere in the connection-role machinery, and it's one of
+two fixed literals (`'authenticated'|'service_role'`), never
+caller-supplied. `deriveCoversWeeks` (same file, lines 57-68) is pure date
+arithmetic with a named `InvalidReviewPeriodError` thrown on anything
+non-canonical (not a whole number of 7-day weeks) — no injection surface,
+no silent coercion.
+Added
+`lib/review/reviews-repository.ts` to `lib/supabase/__tests__/
+service-role-inventory.test.ts`'s `WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST`
+myself (comment matches the existing entries' style/reasoning: no live
+session at the scheduled-job call site, every query explicitly
+`user_id`-filtered, cites this same review). Re-ran `npx vitest run
+lib/supabase/__tests__/service-role-inventory.test.ts` — **3 passed**
+(was 1 failed / 2 passed before this fix, exactly the gap the tester's
+2026-09-11 entry flagged and deliberately left for this gate to close).
+This closes the one remaining item from that tester entry — the two
+Module 07 engagement files it also flagged were already closed by the two
+separate hotfixes noted in this dispatch (`e6f6af7`, `b3e1c9d`), confirmed
+not part of this diff.
+
+**2. Cross-user isolation on every new/extended repository function —
+PASS, independently confirmed at the query level, not just via the
+tester's passing tests.** `fetchPeriodOutcome` (`lib/ingestion/
+trades-repository.ts:375-392`): `withUserConnection(userId, ...)`, query
+binds `user_id = $1`. `fetchActiveFindingsForUser` (`lib/analytics/
+findings-repository.ts:119-144`): `withUserConnection(userId, ...)`,
+`where user_id = $1`. `fetchPeriodConsistency` (`lib/review/
+period-consistency.ts:64-88`): wraps `fetchWeekCompletenessRowsInRange`
+in its own `withUserConnection(userId, ...)` (that lower-level function
+takes an already-open client and binds `user_id = $1` itself,
+`week-completeness-repository.ts:258-264`) and
+`fetchEngagementSummaryForUser(userId)` (`streak-repository.ts:511-519`,
+`withUserConnection` + `user_id = $1`).
+`fetchPeriodAdherence`
+(`lib/review/period-adherence.ts:117-179`): every `fetchAdherenceWeekly`
+call is `withUserConnection(userId, weekStart)` with `user_id = $1 and
+week_start = $2` (`adherence-repository.ts:472-496`); `fetchRuleRenderedText`
+is `withUserConnection` + `r.id = $1 and r.user_id = $2`
+(`rules-repository.ts:128-139`) — a rule ID from a DIFFERENT user's
+`topBreakRuleId` could never have reached this call in the first place,
+since it only ever came from that same user's own `fetchAdherenceWeekly`
+rows. `assembleWeeklyFindings` (`lib/review/weekly-findings.ts:131-261`):
+every composed read (`fetchStrategiesForUser`, `fetchFieldsForManagement`,
+`fetchActiveFindingsForUser`, `fetchCurrentStrategyForEdit`) is called
+with the same `userId` and each is independently `withUserConnection`-
+scoped (`strategy-repository.ts:433-448, 565-567`; `fields-repository.ts
+:1607-1622`) — confirmed by direct read, not assumed from function names.
+No function anywhere in this slice accepts an ID (`ruleId`, `fieldId`,
+`strategyId`, `analyticId`) without ALSO being scoped by the caller's own
+`userId` in the same query.
+
+**3. Five-module composition (`assembleWeeklyReadPayload`) — traced end to
+end, PASS, no leak path found.** `lib/review/weekly-read-payload.ts:60-73`:
+`assembleWeeklyReadPayload(userId, periodStart, periodEnd)` calls all four
+composers with the SAME `userId` closure variable (`fetchPeriodOutcome`,
+`fetchPeriodConsistency`, `fetchPeriodAdherence`, `assembleWeeklyFindings`)
+via `Promise.all`, then does a flat object literal merge — `{ periodStart,
+periodEnd, outcome, consistency, adherence, findings }`. There is no join,
+no shared cache keyed by anything other than the full result of each
+already-user-scoped call, and no code path where one composer's output
+could be substituted into another's slot.
+Since every one of the four
+sub-fetches independently enforces `user_id = $1`/`withUserConnection`
+scoping (item 2 above), a missing filter on any ONE of them could only
+ever return empty/wrong data for THAT SAME userId's own request (a
+correctness bug), never another user's data spliced in — there is no
+shared unscoped intermediate value for a missing filter to leak through.
+Confirmed no caller anywhere in the app (`app/**`) invokes any of these
+functions yet — this slice is backend-only, matching the coder/tester
+ledger entries and `git status`'s own diff (`lib/review/**` and touched
+repository files only, zero `app/**` changes).
+
+**4. Multi-week (`covers_weeks > 1`) period bounds — PASS, no exploitable
+manipulation path, with one scoped observation.** `periodStart`/
+`periodEnd` are function parameters, not read from any request body,
+header, or client-supplied value anywhere in this slice — there is no
+route yet (confirmed by item 3's grep) that lets a caller supply them at
+all; the only callers today are this slice's own tests and a future
+scheduler (`NEEDS_YOUR_INPUT.md`'s own entry, `docs/adr/0036`'s
+Consequences section). Because EVERY query inside `fetchPeriodConsistency`/
+`fetchPeriodAdherence`/`fetchPeriodOutcome` filters on `user_id = $1` in
+addition to the date range, an arbitrary/wide date range can only ever
+widen or narrow what of the SAME user's own data comes back — there is no
+way for a manipulated `periodStart`/`periodEnd` to reach a different
+user's rows, since the row-scoping predicate and the date-scoping
+predicate are independent `AND`-ed conditions, never one replacing the
+other.
+`period-consistency.ts`/`period-adherence.ts` both require
+`periodStart` to be a canonical ISO Monday (enforced by
+`assertCanonicalWeekStart` inside `fetchWeekCompletenessRowsInRange`/
+`fetchAdherenceWeekly`, thrown before any query runs) but do NOT assert
+`periodStart <= periodEnd` themselves — `reviews-repository.ts`'s
+`deriveCoversWeeks` is the only place that rejects `periodEnd < periodStart`
+(`InvalidReviewPeriodError`), and it runs AFTER `assembleWeeklyReadPayload`
+would already have executed for an inverted range if called directly
+(`upsertWeeklyReview` calls `deriveCoversWeeks` before persisting, but
+`assembleWeeklyReadPayload` itself has no such guard).
+This is a
+correctness/robustness gap, not a cross-user security hole (an inverted
+range against `between $2 and $3` simply returns zero rows for
+`fetchPeriodOutcome`, and `weekStartsInRange`'s `while (cursor <=
+toWeekStart)` loop simply produces an empty array for the other two
+composers) — flagging as a non-blocking hardening recommendation for a
+future slice (assert `periodStart <= periodEnd` once, at the top of
+`assembleWeeklyReadPayload` itself, rather than relying on each composer's
+own independent empty-range behavior to degrade gracefully), not a finding
+that blocks this review.
+
+**5. Injection/parameterization sweep — PASS across every new/modified
+file.** `lib/review/reviews-repository.ts`, `weekly-read-payload.ts`,
+`period-adherence.ts`, `period-consistency.ts`, `weekly-findings.ts`,
+`lib/ingestion/trades-repository.ts`'s `fetchPeriodOutcome`, `lib/analytics/
+findings-repository.ts`'s `fetchActiveFindingsForUser` — every SQL
+statement across all seven uses numbered `$N` placeholders with values
+passed as a separate `pg` params array; zero string interpolation of any
+user-supplied or trade-derived value into query text anywhere in this
+diff. No `eval`/`new Function`/dynamic code construction anywhere under
+`lib/review/` (grepped directly, zero hits). `resolveAnalyticId`
+(`lib/analytics/edge-engine/edge-engine.ts:86-101`, reused by
+`weekly-findings.ts`) is a static `switch` over a closed `FieldDataType`
+enum — a real catalogue, not a dynamic/string-built lookup.
+
+**6. `lib/review` → `lib/rules` import boundary — PASS on cross-user/
+injection grounds, but genuinely BROADER than the established precedent,
+flagged non-blocking.** `npm run check:import-boundaries` (scoped to
+`lib/analytics` only, confirmed by reading `.dependency-cruiser.cjs` and
+`package.json`) passed (103 modules, 264 deps, 0 violations) but asserts
+nothing about `lib/review`. Directly grepped every `from '@/lib/rules`
+import in `lib/review/*.ts`: THREE hits, not one — `period-consistency.ts:5`
+and `period-adherence.ts:4` import `week-boundary.ts` (matches the
+already-reviewed `lib/engagement → lib/rules/week-boundary.ts` precedent
+exactly: pure calendar arithmetic, zero imports of its own, no DB access,
+no rule-evaluation logic) — but `period-adherence.ts:2-3` ALSO imports
+`fetchAdherenceWeekly` (`lib/rules/adherence-repository.ts`) and
+`fetchRuleRenderedText` (`lib/rules/rules-repository.ts`), two real
+data-access repository functions, not pure utilities.
+This
+is a NEW exception, not previously reviewed under that name — the
+dispatch's own framing ("matching the precedent... if `lib/review` reuses
+the SAME utility") only covers `week-boundary.ts`. On the merits: both
+functions are read-only, correctly `withUserConnection`-scoped (confirmed
+directly in item 2 above), return only already-materialised
+integers/rendered text, and contain no rule-evaluation logic, no `eval`,
+no SQL built from rule expressions — this is Module 06 reading Module
+04's already-computed adherence data exactly as §4.2's own table
+specifies ("Adherence | Module 04"), the same shape of legitimate
+cross-module composition `weekly-findings.ts` already does against Module
+05's `findings-repository.ts`/`findings-payload.ts`.
+AGENTS.md's "Analytics
+code cannot import rule code" non-negotiable is specifically about
+`lib/analytics` → `lib/rules` (the rule-evaluation/analytics independence
+guarantee) and is not violated here — `lib/review` is a different module
+composing an already-frozen, already-materialised READ, not analytics
+code depending on live rule-evaluation internals. Not a blocker.
+Recommending, non-blocking, matching the engagement precedent's own
+carried-forward recommendation: extend a real dependency-cruiser rule to
+`lib/review` (and `lib/engagement`) scoped against `lib/rules`, with an
+explicit allowlist for `week-boundary.ts` + the two adherence-read
+functions named above, so this boundary is enforced by CI-runnable
+tooling instead of resting on review discipline alone.
+
+**7. Non-negotiables — PASS, N/A where no UI/surface exists yet.** No
+currency/P&L anywhere in this diff (`PeriodOutcome.totalR` is an
+R-multiple string, never converted to currency). No XP granted
+(`weekly-findings.ts`/`period-adherence.ts`/`period-consistency.ts` never
+touch `total_xp`, confirmed by grep — zero hits for `total_xp`/`xp` in
+`lib/review/**`). No compound rules — this slice reads already-evaluated
+`hard`/`soft` fractions and a single `topBreakRuleId`, it does not
+construct or evaluate any rule expression itself. Red/green: N/A, no UI
+shipped this slice (confirmed by `git status`'s diff scope — `lib/review/**`,
+three touched repository files, one migration, this ledger entry only;
+zero `app/**` files in this dispatch's own diff).
+Credential-material-in-logs: N/A, this module never touches
+`account_credentials` or any broker credential — the five `console.error`
+calls in `weekly-findings.ts` (lines 136, 147, 166, 214, 255) log caught
+DB/read errors only, never credential values. Entitlement/Zod boundary
+validation: N/A for this slice specifically — confirmed by item 3's grep
+that no route/Server Action anywhere in `app/**` calls any function in
+this diff yet, so there is no client-reachable surface to
+entitlement-gate or Zod-validate yet; this is a genuine "not built yet,"
+not a gap being silently accepted (`NEEDS_YOUR_INPUT.md`'s own entry
+already names the scheduler/route wiring as future, out-of-scope work).
+
+**Verdict: PASS. Cleared for retrospeq-qa and commit.** No blocking
+finding across items 1-7. One mechanical fix applied by this review itself
+(item 1's allowlist addition, now green). Two non-blocking hardening
+recommendations carried forward for a future slice: item 4 (assert
+`periodStart <= periodEnd` once in `assembleWeeklyReadPayload` rather than
+relying on each composer's own graceful-empty-range behavior) and item 6
+(a real dependency-cruiser rule for `lib/review`/`lib/engagement` →
+`lib/rules`, allowlisting `week-boundary.ts` and the two adherence-read
+functions named above).
+Files checked: `lib/review/reviews-repository.ts`,
+`lib/review/weekly-read-payload.ts`, `lib/review/period-adherence.ts`,
+`lib/review/period-consistency.ts`, `lib/review/weekly-findings.ts`,
+`lib/ingestion/trades-repository.ts` (`fetchPeriodOutcome`), `lib/analytics/
+findings-repository.ts` (`fetchActiveFindingsForUser`), `lib/supabase/
+direct.ts`, `lib/supabase/__tests__/service-role-inventory.test.ts` (edited
+and re-run), `lib/supabase/__tests__/review-graduation-schema.rls.test.ts`,
+`lib/rules/adherence-repository.ts`, `lib/rules/rules-repository.ts`,
+`lib/engagement/streak-repository.ts`, `lib/engagement/
+week-completeness-repository.ts`, `lib/fields/strategy-repository.ts`,
+`lib/fields/fields-repository.ts`.
+Also: `supabase/migrations/
+20260911020000_review_graduation_schema.sql`, `docs/adr/
+0036-weekly-review-read-payload-assembly.md`, `NEEDS_YOUR_INPUT.md`,
+`.dependency-cruiser.cjs`. Since this project's Autonomy policy means no
+further human review gate follows this PASS, the orchestrating session
+should proceed to `retrospeq-qa` and, once that passes, commit (including
+this `service-role-inventory.test.ts` allowlist fix as part of the same
+commit).
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 2 — QA REVIEW (FINAL GATE): PASS. Cleared to commit and push to main.
+
+Read AGENTS.md's "Non-negotiables"/"Design system" sections and
+retrospeq-design-system/modules/retrospeq-design-decisions.md in full
+before reviewing anything, per this repo's own QA discipline, plus
+06-review-and-graduation.md sec 4.2/4.3/4.8/5.1 and docs/adr/0036 in
+full (all 7 decisions). Did not trust the coder/tester/security-reviewer
+ledger entries at face value -- independently re-read every file in the
+diff and re-ran the relevant test suites myself.
+
+**1. Findings-ranking "actionability" (ADR 0036 decision #2) --
+defensible, not a rubber-stamped reuse.** Read weekly-findings.ts's
+rankCandidates (lines 109-117) and TIER_RANK directly. The ordering
+(confident > provisional > null_result > insufficient, then largest
+n, then a deterministic strategyId:fieldId tie-break) generalises
+correctly from pickRepresentativeFinding's original single-field
+problem to the genuinely different cross-strategy "pick the best 3"
+problem: the underlying claim -- a real, decisive result is more worth a
+trader's attention than "no difference," which is more worth it than
+"nothing to say yet" -- does not depend on which field or strategy
+produced the result, so reusing the tier order is not a category error.
+The n-descending tie-break also does real, non-decorative work within
+the insufficient tier specifically: since remaining = SAMPLE_MIN_
+SEGMENT_N - n, largest n is exactly smallest remaining, i.e. "closest
+to becoming useful soon" -- verified this by reading gates.ts's
+SAMPLE_MIN_SEGMENT_N definition and confirming buildNoDataFindingPayload
+carries remaining computed that way. The ADR's own rejected alternative
+(a bespoke blended "actionability score") is correctly rejected -- it would
+be uncalibrated, spec-unbased complexity for no proven benefit. This is a
+genuine, reasoned judgment call with its trade-off (a zero-data field can
+rank identically to a "no difference" field on a tie) honestly stated in
+the ADR's own Consequences section, not glossed over. **PASS.**
+
+**2. Zero-findings / insufficient-history honesty (sec 4.2) -- confirmed by
+direct code read, not just the existing test.** assembleWeeklyFindings
+(weekly-findings.ts:131-140) returns [] immediately for a user with
+no active strategies, and buildNoDataFindingPayload (reused from Module
+05, already-reviewed under ADR 0035) is the only path that manufactures a
+per-field entry when no real findings row exists -- never a zero or a
+fabricated number. fetchPeriodAdherence returns {status:
+'insufficient_history'} (not a fabricated 0-of-0 fraction) when zero
+weeks have a materialised row (period-adherence.ts:130-133).
+fetchPeriodConsistency/fetchPeriodOutcome return honest all-zero
+structured numbers (never a fabricated non-zero), consistent with
+AGENTS.md's "not enough data yet is a correct, intended state." Re-ran
+the tester's own live-DB "zero-qualifying-findings" and "brand-new user"
+tests myself (see item 9 below) -- both pass. **PASS.**
+
+**3. Multi-week (covers_weeks > 1) period handling (sec 4.8) -- genuine
+sums, cap unchanged.** period-consistency.ts/period-adherence.ts both
+enumerate every canonical Monday in [periodStart, weekStartForServerDay
+(periodEnd)] and SUM already-materialised per-week integers (never
+re-deriving from raw rows) -- confirmed by direct read of
+weekStartsInRange/the summation loops in both files. Findings cap:
+weekly-read-payload.ts:69 calls assembleWeeklyFindings(userId,
+WEEKLY_FINDINGS_CAP) -- WEEKLY_FINDINGS_CAP = 3 is a fixed named
+constant (weekly-findings.ts:62) with no multiplication by
+coversWeeks anywhere in the call chain; deriveCoversWeeks
+(reviews-repository.ts) is purely descriptive metadata written
+alongside the payload, never fed back into the findings composer. A
+2-week period gets the same top-3, never top-6. **PASS**, matching sec
+4.8's "cap still holds at 3" verbatim.
+
+**4. Outcome-line framing (sec 4.2, "In R, flat, never celebrated") --
+confirmed R-multiple only, no currency, no celebratory copy.**
+fetchPeriodOutcome (lib/ingestion/trades-repository.ts:375-392)
+returns tradeCount/daysTradedCount/totalR as raw structured numbers
+(totalR a numeric(10,4) string, explicitly documented as
+deliberately unformatted -- no sign, no "R" unit, no rounding, no prose).
+No currency conversion, no P&L dollar figure, no adjective anywhere in
+this function or its callers. Grepped lib/review/** for
+currency/total_xp/xp/dollar-sign/price patterns (case-insensitive) -- zero
+matches beyond template-literal interpolation of variable
+names/SQL placeholders, none of it currency. **PASS.**
+
+**5. No UI touched -- confirmed via git status and grep.** git status
+--porcelain for this slice's diff: lib/review/** (new), docs/adr/
+0036-*.md (new), docs/runbook.md/NEEDS_YOUR_INPUT.md/PROGRESS.md
+(doc updates), lib/analytics/findings-repository.ts/lib/ingestion/
+trades-repository.ts (backend repository extensions)/their test files,
+lib/supabase/__tests__/service-role-inventory.test.ts (allowlist
+entry). Zero app/** files anywhere in the diff -- confirmed directly,
+matching the coder/tester/security-reviewer's own repeated claims rather
+than just trusting them. No screenshot self-check required, correctly
+skipped by every prior gate for the same reason. **PASS.**
+
+**6. Decision-log chain consistency -- confirmed internally consistent
+and accurate.** Coder entry (2026-09-11, "CODED, not yet tested/
+reviewed") correctly scopes the slice and defers to tester ->
+security-reviewer -> qa. Tester entry correctly reports 43 new tests, all
+passing, and explicitly does NOT self-fix the one real gap it found
+(the missing lib/review/reviews-repository.ts entry in
+WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST) -- correctly deferring that to
+security-reviewer per this repo's own division of labour, and explicitly
+states "not ready for qa until that gate passes." Security-reviewer entry
+confirms it added exactly that allowlist entry, re-ran the inventory test
+(3 passed, was 1 failed/2 passed), and states "Cleared for retrospeq-qa
+and commit" -- consistent with what I independently found (see item 9).
+No gap, no stale claim, no contradiction across the three entries.
+**PASS.**
+
+**7. NEEDS_YOUR_INPUT.md's new scheduler-gap entry -- honest, accurately
+scoped, no over/understatement.** Read the "Module 06's weekly review has
+no deployed scheduler to actually run it periodically" entry in full. It
+correctly states the job "does not run anywhere, for anyone, ever, yet,"
+correctly attributes the blocker to the standing "no Vercel project" gap
+(not inventing a new one), correctly states this does NOT block marking
+the slice done (the functions themselves are real and independently
+verified, not stubs), and correctly avoids inventing a fake trigger --
+matching AGENTS.md's "never fake it, always flag it" rule this entry
+exists to satisfy. Not overstated (doesn't claim the whole module is
+blocked -- Module 06 sec 4.3-4.9/UI are separately scoped out, not
+conflated with this gap) and not understated (doesn't bury the "zero
+reviews rows will ever exist in production until this is wired"
+consequence). **PASS.**
+
+docs/runbook.md's new "Weekly review materialisation has no deployed
+scheduler yet" entry -- read in full. Accurately describes the current
+propagate-on-failure behaviour of the three non-findings composers (a
+real, currently-true gap for a future scheduler slice to address, not
+fixed here and correctly not claimed as fixed), accurately notes sec 9's
+REVIEW_NOT_READY sequencing is NOT enforced by this slice's own code
+(the future scheduler's job to sequence, correctly scoped), and
+accurately describes the opened_at/completed_at preservation
+behaviour matching what reviews-repository.ts's actual ON CONFLICT
+clause does (verified directly, see item 8 below). No ADR
+needed beyond 0036 -- confirmed no other deliberate 00-foundation
+deviation exists in this diff. **PASS.**
+
+**8. Standard non-negotiables -- PASS, N/A where no UI/surface exists.**
+No currency/XP anywhere in lib/review/** (confirmed by direct grep,
+item 4 above). No compound rule logic -- this slice reads already-
+evaluated hard/soft fractions and a single topBreakRuleId; it
+builds no rule expression, evaluates none, and imports no rule-evaluation
+internals (only read-only, already-materialised data via
+fetchAdherenceWeekly/fetchRuleRenderedText, confirmed by the
+security-reviewer's item 6 and independently re-confirmed by my own read
+of both call sites). Red/green: N/A, no UI/marks/charts in this slice's
+diff. upsertWeeklyReview's ON CONFLICT ... DO UPDATE SET (lines
+113-117) omits opened_at/completed_at from the SET list exactly as
+claimed -- verified by direct read, matching ADR 0036 decision #7 and the
+tester's own live two-write idempotency proof.
+
+**9. Independent re-verification of the test suite and the security-
+reviewer's allowlist fix -- both confirmed live, not re-trusted.** Ran
+npx vitest run against lib/review, lib/ingestion/__tests__/
+trades-repository.live.test.ts, and lib/supabase/__tests__/
+service-role-inventory.test.ts myself against the real shared dev
+Supabase project: 59/60 passed on the first pass, one failure (RLS
+cross-user isolation: a second user sees none of the first user's
+trades, a PRE-EXISTING test untouched by this slice's own diff, timed
+out at the default 5s while running concurrently with 40+ other live-DB
+tests contending for connections). Re-ran that one test in isolation:
+passed cleanly in 7.7s -- confirmed this is a resource-contention flake
+under this machine's known constraints (already documented in
+NEEDS_YOUR_INPUT.md), not a regression this slice introduced; none of
+this slice's own new/extended tests were the failing one.
+service-role-inventory.test.ts (3/3) confirmed passing, and
+lib/review/reviews-repository.ts confirmed present at line 375 of
+WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST with a real, reviewed comment
+matching the security-reviewer's own stated reasoning -- the fix is
+genuinely present, not merely claimed.
+
+**Verdict: PASS. Cleared to commit and push to main.** No blocking
+finding across items 1-9. This is a backend-only, well-documented slice:
+7 genuine judgment calls in ADR 0036, all independently re-examined
+against the actual code (not re-derived from the ADR's own framing
+alone) and found defensible; the multi-week findings-cap invariant
+(sec 4.8's most spec-precision-sensitive requirement) holds exactly; the
+"not enough data yet" honesty invariant holds at every layer; no UI to
+regress; the one real process gap the tester found (service-role
+allowlist) was correctly deferred to and closed by the security-reviewer,
+not silently patched around. Two non-blocking hardening recommendations
+carried forward by the security-reviewer (assert periodStart <=
+periodEnd once; a real dependency-cruiser rule for lib/review/
+lib/engagement -> lib/rules) are real but correctly non-blocking --
+tracked, not fixed by this gate, consistent with this repo's own
+"quick fix vs. logged debt" judgment convention. Since this project's
+Autonomy policy means no further human review gate follows this PASS,
+the orchestrating session should commit and push immediately, including
+lib/supabase/__tests__/service-role-inventory.test.ts's allowlist
+addition as part of the same commit (already staged in the working tree
+alongside everything else in this diff).
+
+Files checked: lib/review/weekly-findings.ts, lib/review/weekly-read-
+payload.ts, lib/review/period-adherence.ts, lib/review/period-
+consistency.ts, lib/review/reviews-repository.ts, lib/ingestion/
+trades-repository.ts (fetchPeriodOutcome), lib/analytics/findings-
+repository.ts (fetchActiveFindingsForUser), lib/supabase/__tests__/
+service-role-inventory.test.ts, docs/adr/0036-weekly-review-read-
+payload-assembly.md, docs/runbook.md, NEEDS_YOUR_INPUT.md,
+retrospeq-design-system/modules/06-review-and-graduation.md (sec 4.2/
+4.3/4.8/5.1), retrospeq-design-system/modules/retrospeq-design-
+decisions.md (in full), docs/adr/0015-iso-week-boundary-monday-start.md
+(spot-checked to confirm the "forex week" design-decision note at
+design-decisions.md line 28 was already reconciled by a prior ADR, not
+re-litigated or silently ignored by this slice).

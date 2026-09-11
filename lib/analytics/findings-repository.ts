@@ -75,3 +75,70 @@ export async function fetchActiveFindingsForStrategy(userId: string, strategyId:
     }));
   });
 }
+
+/** `FindingRow` plus the ONE extra column `fetchActiveFindingsForStrategy`
+ *  doesn't need to expose (it's already scoped to a single strategy by its
+ *  own `where` clause) but a CROSS-strategy reader genuinely does —
+ *  `strategyId`, so `lib/review/weekly-findings.ts` (Module 06 Slice 2) can
+ *  group candidates by `(strategyId, fieldId)`, matching how a finding
+ *  is actually computed (per-strategy, per-field — `edge-engine.ts`'s own
+ *  scoping), not just per-field alone (the same field can legitimately
+ *  belong to more than one of a trader's strategies and carry a
+ *  DIFFERENT finding in each). A dedicated interface rather than widening
+ *  `FindingRow` itself — every existing caller of `FindingRow`
+ *  (`findings-service.ts`, `findings-payload.ts`) already has a strategy
+ *  id in scope from its own call site and does not need it repeated on
+ *  every row; adding it there would be an unused, silently-never-set
+ *  field on every other code path. */
+export interface FindingRowWithStrategy extends FindingRow {
+  strategyId: string;
+}
+
+interface FindingDbRowWithStrategy extends FindingDbRow {
+  strategy_id: string;
+}
+
+/**
+ * Module 06 (Review & Graduation) Slice 2, §4.2 Part 1's "What your trades
+ * say" panel — the FIRST cross-strategy `findings` read in this repo
+ * (every prior reader, `fetchActiveFindingsForStrategy`, is scoped to one
+ * strategy at a time, built for the strategy-detail screen). One query
+ * across every one of the user's strategies at once (rather than N calls
+ * to `fetchActiveFindingsForStrategy`, one per strategy) — §11/§4.10's own
+ * "< 2s materialised" budget favours a single round trip over an N+1 read
+ * when a user may have several strategies, each with several fields.
+ *
+ * `strategy_id is not null` (alongside `field_id is not null`, same
+ * reasoning as `fetchActiveFindingsForStrategy`'s own comment) — strategies
+ * are never hard-deleted in this schema (only archived, `strategies.state`),
+ * but the composite FK still allows `on delete set null (strategy_id)`
+ * (`findings` migration's own DDL), so a row with no strategy to attach to
+ * is excluded here defensively, the same posture as the field-id exclusion,
+ * rather than assumed impossible.
+ */
+export async function fetchActiveFindingsForUser(userId: string): Promise<FindingRowWithStrategy[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<FindingDbRowWithStrategy>(
+      `select analytic_id, strategy_id, field_id, segment, n, win_rate, avg_r, baseline_n,
+              baseline_win_rate, baseline_avg_r, delta_win_rate, delta_avg_r, confidence
+         from retrospeq.findings
+        where user_id = $1 and state = 'active' and field_id is not null and strategy_id is not null`,
+      [userId],
+    );
+    return res.rows.map((row) => ({
+      analyticId: row.analytic_id,
+      strategyId: row.strategy_id,
+      fieldId: row.field_id as string,
+      segment: row.segment,
+      n: row.n,
+      winRate: toNumberOrNull(row.win_rate),
+      avgR: toNumberOrNull(row.avg_r),
+      baselineN: row.baseline_n,
+      baselineWinRate: toNumberOrNull(row.baseline_win_rate),
+      baselineAvgR: toNumberOrNull(row.baseline_avg_r),
+      deltaWinRate: toNumberOrNull(row.delta_win_rate),
+      deltaAvgR: toNumberOrNull(row.delta_avg_r),
+      confidence: row.confidence,
+    }));
+  });
+}

@@ -175,6 +175,48 @@ ceiling is raised.
 
 ---
 
+## Module 06's weekly review has no deployed scheduler to actually run it periodically
+
+**What's needed:** A real deployed scheduler (Vercel Cron, or equivalent)
+once a Vercel project exists for this repo (already named as a standing
+infra gap in `AGENTS.md`'s own "Known infra gaps" — this is a direct
+instance of that same blocker, not a new one).
+
+**Why an agent can't fix this:** there is no Vercel project for
+Retrospeq yet (no deploy target at all), so there is nothing to attach a
+Cron trigger to. Inventing a fake trigger (e.g. an in-process `setInterval`,
+or wiring the review job reactively into an unrelated request handler
+"just to make it run somewhere") would violate AGENTS.md's own "never
+fake it, always flag it" rule — a review computed reactively on every
+trade confirm, rather than once genuinely after the period ends, would
+be actively WRONG, not just untested (§4.10: "materialised on a
+schedule, not on open").
+
+**What's stalled:** Module 06's weekly review Part 1 ("the read")
+never actually gets computed for a real trader in production — no
+`reviews` row will ever exist outside a direct test call. This does NOT
+block the underlying work being done, reviewed, and marked complete:
+`lib/review/weekly-read-payload.ts`'s `assembleWeeklyReadPayload` and
+`lib/review/reviews-repository.ts`'s `upsertWeeklyReview` are both real,
+fully working, independently callable functions (live-DB self-checked
+by this slice's own coder — 3/3 scenarios passed against the real shared
+dev Supabase project: an empty user, a fully populated single week, and
+a `covers_weeks = 2` multi-week period), just not wired into anything
+that runs on its own. See `docs/runbook.md`'s "Weekly review
+materialisation has no deployed scheduler yet" entry and
+`docs/adr/0036-weekly-review-read-payload-assembly.md` for the full
+detail.
+
+**What was built in the meantime:** the real assembly + materialisation-
+write pipeline, built against the correct interface (an explicit
+`periodStart`/`periodEnd`, callable by any future scheduler or test) —
+not a stub, not a fake trigger. Module 06 §4.3-4.9's prompt-ranking/cap/
+graduation/relaxation/promotion/retirement logic and any weekly-review UI
+remain entirely out of scope for this same reason (a later slice, once
+this scheduling gap and Module 06's remaining stories are picked up).
+
+---
+
 _(`SUPABASE_DB_URL` was supplied 2026-08-20 and connection/migration verification is done, see PROGRESS.md decision log. The `retrospeq` schema is real.)_
 
 One still-open, non-blocking item whenever convenient: the "Exposed schemas" dashboard toggle (Project Settings → API → add `retrospeq`) — only needed for the app's own client-side/REST access at runtime (e.g. `.from()`/`.rpc()` calls), not for anything happening right now. `lib/rate-limit/limiter.ts` (added 2026-08-20) works around this by using a direct Postgres connection instead, so this is not blocking that either.

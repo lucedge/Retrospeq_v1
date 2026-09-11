@@ -354,6 +354,25 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // this test as part of its own full-suite check.
   'lib/engagement/streak-repository.ts',
   'lib/engagement/week-completeness-repository.ts',
+  // Module 06 (Review & Graduation) Slice 2, §4.10 materialisation
+  // write: `upsertWeeklyReview` (`lib/review/reviews-repository.ts`)
+  // writes the assembled `reviews.read_payload`. `reviews` carries a real
+  // owner "for all" RLS policy (unlike `adherence_weekly`/`unlock_state`'s
+  // owner-SELECT-only shape, since §6.2's state machine needs a genuine
+  // TRADER-initiated write for `opened_at`/`completed_at` later) — but
+  // THIS write is the scheduled-job half of §4.10 ("weekly job, per
+  // user, at period end"), which has no real user session to run
+  // `withUserConnection` against, the identical reason every
+  // background-recompute entry above this one documents. The single
+  // INSERT ... ON CONFLICT is explicitly parameterized on the
+  // caller-supplied `userId` (bound as `$1`, also part of the
+  // `on conflict (user_id, period_kind, period_start)` target itself, so a
+  // cross-user overwrite is structurally impossible even under
+  // service_role) — confirmed by the 2026-09-11 security-reviewer PASS
+  // for this slice. Added to this allowlist by that same review, per this
+  // file's own "added in the same commit/review that introduces the
+  // call" cautionary note.
+  'lib/review/reviews-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
