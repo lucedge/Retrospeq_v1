@@ -27,5 +27,6 @@ assuming the coder followed instructions:
 - [ ] No credential material appears in logs, error messages, or traces — grep actual log output from a connect + failed-sync run for the test secret if a test harness exists.
 - [ ] Every API route/Server Action re-validates entitlement server-side; nothing trusts a client-supplied plan/tier field.
 - [ ] Zod (or equivalent) validates every request body at the boundary and rejects unknown keys.
+- [ ] Any file you clear that calls `withServiceRoleConnection` is added to `lib/supabase/__tests__/service-role-inventory.test.ts`'s `WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST`, with a comment giving the reason (matching every existing entry's own style) — then run that test file yourself and confirm it passes. This is not optional bookkeeping: the allowlist test is the mechanism that makes this review durable, and reviewing a call site without recording it there has already caused the mandatory inventory test to sit broken on `main` twice in one day (2026-09-11) — a real review that happened but never became a real, checkable record. The review isn't done until this step is done.
 
 Report format in PROGRESS.md: list each checklist item as pass/fail with the file/line you checked, not a summary judgement. A single unchecked or unverifiable item means the module stays "not done."
