@@ -9011,6 +9011,39 @@ the owner — never fake it, always flag it."
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
+- 2026-09-11 -- ORCHESTRATOR (hotfix, second occurrence of this exact
+  gap today), `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+  mandatory allowlist, this time for `lib/engagement/streak-
+  repository.ts` and `lib/engagement/week-completeness-repository.ts`
+  (already committed and pushed to `main` in `59114a0`, Module 07 Slice
+  1). Discovered by a Module 06 Slice 2 tester dispatch running this
+  test as part of its own full-suite check and correctly declining to
+  fix it itself ("that allowlist entry represents a real security
+  review... belongs to retrospeq-security-reviewer, not a tester
+  dispatch") -- right call, since a THIRD file the same test flagged
+  (`lib/review/reviews-repository.ts`) is new, uncommitted, and
+  genuinely not yet security-reviewed; only the two already-shipped
+  Module 07 entries are fixed here. Same shape as the earlier
+  2026-09-11 hotfix for `lib/analytics/spec-weekday/repository.ts`
+  (`e6f6af7`): both files were already reviewed and cleared by that
+  slice's own 2026-09-11 security-reviewer PASS entry (confirmed
+  `engagement_state`/`week_completeness` writes are `userId`-
+  parameterized, confirmed `day_closeouts` has exactly one INSERT site
+  in the whole codebase) -- this is a mechanical allowlist omission, not
+  a new finding, not a re-review. **This is now a confirmed RECURRING
+  gap, not a one-off** -- two occurrences in one day, both from slices
+  whose security review genuinely happened and passed but never
+  translated into this specific mechanical step. Worth a real process
+  fix (e.g. the security-reviewer's own dispatch brief explicitly
+  naming this allowlist update as part of its own "done" checklist, the
+  same way ledger-currency itself was promoted from convention to rule
+  after recurring five times) rather than relying on a tester's
+  full-suite run to keep catching it after the fact -- flagged here,
+  not yet acted on as a rule change. `lib/review/reviews-repository.ts`
+  is deliberately NOT added here -- it stays pending for that slice's
+  own upcoming security-reviewer dispatch to add for real, with its own
+  reasoning, once that review actually happens.
+
 - 2026-09-11 -- ORCHESTRATOR (hotfix, out-of-band from the Module 06
   Slice 1 chain currently in review), `lib/supabase/__tests__/service-
   role-inventory.test.ts`'s mandatory allowlist. Discovered as a side
@@ -23427,4 +23460,333 @@ when the owner explicitly says so.** Concretely:
 - This means real progress only happens while the owner is actively
   checking in and re-triggering it, not around the clock. That's the
   accepted tradeoff for not paying for/relying on the cloud routine.
+
+## 2026-09-11 — Module 06 (Review & Graduation) Slice 2 — CODED, not yet tested/reviewed. Weekly review Part 1 "read" payload assembly ONLY.
+
+Dispatched as the second Module 06 slice, built directly on top of Slice
+1's schema (`reviews.read_payload jsonb`, confirmed already present, no
+new migration needed) and Module 07 Slice 1's streak read
+(`fetchEngagementSummaryForUser`) — that slice was built first
+specifically so this one would have a real streak number to compose,
+confirmed by reading `06-review-and-graduation.md` §3/§4.2/§4.10/§5.1 and
+`00-foundation.md` in full before writing any code, per this repo's own
+standing discipline.
+
+**Scope, exactly as dispatched:** a pure, directly-testable
+`assembleWeeklyReadPayload(userId, periodStart, periodEnd)` composing
+§4.2's four Part-1 sources, plus a materialisation write
+(`upsertWeeklyReview`). Explicitly OUT of scope and NOT built: any prompt
+candidate computation (§4.3-4.7, `review_prompts` stays unused), any UI,
+and — the one the dispatch called out as important — any real
+scheduling/trigger mechanism. No fake trigger was invented; see
+`NEEDS_YOUR_INPUT.md`'s new "Module 06's weekly review has no deployed
+scheduler to actually run it periodically" entry.
+
+**New files, `lib/review/` (new module):**
+
+- `lib/ingestion/trades-repository.ts` (EXTENDED, not a new file) —
+  `fetchPeriodOutcome(userId, periodStart, periodEnd)`, the one genuinely
+  new Module 02 read this slice needed (no prior caller ever asked for a
+  date-range trade aggregate). Added to Module 02's own repository file
+  per this repo's established Module-06-extends-Module-02 precedent
+  (Slice 1's `listUnresolvedCoverageGapsForAccountDay`, same file).
+- `lib/analytics/findings-repository.ts` (EXTENDED) —
+  `fetchActiveFindingsForUser(userId)`, the first CROSS-strategy
+  `findings` read in this repo (every prior reader,
+  `fetchActiveFindingsForStrategy`, is scoped to one strategy).
+- `lib/review/period-outcome` — folded into `trades-repository.ts` above
+  rather than a separate file (no independent logic beyond the one SQL
+  read).
+- `lib/review/period-consistency.ts` — `fetchPeriodConsistency`, composing
+  Module 07's `fetchWeekCompletenessRowsInRange` (summed across the
+  period's constituent ISO weeks) + `fetchEngagementSummaryForUser`
+  (streak). No new computation — pure composition of already-materialised
+  reads, per the dispatch's own instruction.
+- `lib/review/period-adherence.ts` — `fetchPeriodAdherence`, composing
+  `fetchAdherenceWeekly`/`fetchRuleRenderedText` (Module 04, already
+  built) for an EXPLICIT period rather than `adherence-display.ts`'s own
+  `now`-anchored "current week" framing — summed across weeks for a
+  multi-week period, with a documented (docs/adr/0036 decision #5)
+  single-attribution-rule-per-period selection.
+- `lib/review/weekly-findings.ts` — `assembleWeeklyFindings`, THE
+  genuinely new piece this slice adds: no cross-strategy findings
+  aggregator existed anywhere before this. Enumerates every active
+  strategy's every segmentable field, builds one candidate per
+  (strategy, field) via the same `pickRepresentativeFinding`/
+  `buildFindingPayloadFromRow`/`buildNoDataFindingPayload`/`canRender`
+  pipeline `getStrategyFieldFindings` already established (but gated with
+  `surface: 'weekly'`, not `'strategy'` — a real, deliberate difference,
+  not a copy-paste), ranks ALL candidates by a documented "actionability"
+  ordering (`rankCandidates` — reuses `pickRepresentativeFinding`'s own
+  tier order: confident > provisional > null_result > insufficient, then
+  largest `n`, then a `strategyId:fieldId` tie-break), and caps at
+  `WEEKLY_FINDINGS_CAP` (3, named per §2.2/§4.2's own "at most three").
+  Render-logging (`analytic_renders`, `surface: 'weekly'`) happens ONLY
+  for the final selected entries, not every candidate evaluated — a
+  genuine, documented difference from `getStrategyFieldFindings`'s own
+  "log every field" posture, since here most evaluated candidates are
+  discarded by the cap and were never actually shown (docs/adr/0036
+  decision #4).
+- `lib/review/weekly-read-payload.ts` — `assembleWeeklyReadPayload`, the
+  pure `Promise.all` composition of the four sources above into one
+  `WeeklyReadPayload` (raw structured numbers for outcome/consistency/
+  adherence, `FindingPayload[]` for findings — deliberately NOT
+  pre-rendered prose the way `findings.statement` is, see docs/adr/0036
+  decision #1 for why that distinction is intentional, not inconsistent).
+- `lib/review/reviews-repository.ts` — `upsertWeeklyReview`, the
+  materialisation write. `service_role` (matches every other
+  materialised-cache writer in this repo — no real user session exists
+  for a scheduled job to run `withUserConnection` against).
+  `deriveCoversWeeks` computes `covers_weeks` mechanically from the two
+  dates (the "was a review missed" business decision itself stays the
+  future scheduler's job, out of scope here). `opened_at`/`completed_at`
+  are deliberately never touched by the upsert (docs/adr/0036 decision
+  #7) — a re-materialisation must never silently reset whether/when a
+  trader already opened their review.
+
+**Documentation, per this slice's own scope:** `docs/adr/0036-weekly-
+review-read-payload-assembly.md` (7 numbered decisions — structured vs.
+pre-rendered payload shape, the actionability ranking, full-roster
+candidate enumeration, surface/render-logging, multi-week summation +
+attribution, the deliberate outcome/consistency day-count duplication,
+and opened_at/completed_at preservation). `docs/runbook.md`'s new
+"Weekly review materialisation has no deployed scheduler yet" entry —
+written honestly as "this job does not run anywhere yet," not as if a
+real background job already exists (unlike every prior runbook entry in
+this file, which describes an already-wired recompute), plus a flagged,
+NOT-yet-fixed gap for whichever slice DOES wire in a real scheduler:
+`assembleWeeklyReadPayload`'s own three non-findings composers
+(`fetchPeriodOutcome`/`fetchPeriodConsistency`/`fetchPeriodAdherence`)
+currently PROPAGATE a thrown error rather than degrading per-user the way
+`recomputeEngagementForConfirmations` does — deliberately correct for
+THIS layer (§9: "a partial review is never shown," so a real read failure
+should fail loudly, not silently write an incomplete payload), but the
+future scheduler slice MUST wrap each user's own call in its own
+try/catch, flagged explicitly so that slice doesn't skip it.
+`NEEDS_YOUR_INPUT.md`'s new scheduler entry (see above).
+
+**Verification run by this coder before handoff:**
+
+- `npx tsc --noEmit` — clean, whole project.
+- `npx eslint` on every new/touched file — 0 errors.
+- `npm run check:import-boundaries` — clean (this slice never imports
+  `lib/rules/**` from inside `lib/analytics/**`; the new `lib/review/**`
+  files import from both `lib/rules/**` and `lib/analytics/**`, which is
+  fine — that boundary rule only restricts Module 05 importing Module 04,
+  and Module 06 legitimately depends on both per its own §10).
+- `npm run build` — clean, Turbopack, 28 routes, no new warnings.
+- **Live-DB self-check, throwaway, deleted after use, never committed**
+  (`lib/review/__tests__/_tmp-selfcheck.live.test.ts`, run once via `npx
+  vitest run`, then `rm`'d): 3/3 PASS against the real shared dev
+  Supabase project (ADR 0002) — (1) a brand-new user with zero data:
+  every composer returns an honest "not enough data yet"/all-zero shape,
+  no crash, `upsertWeeklyReview` writes and is idempotent on a second
+  call for the same period; (2) a fully populated single week (2 real
+  confirmed trades with real `r_multiple`s, a real `day_closeouts` pair,
+  a real `week_completeness` row, a real `adherence_weekly` row, a real
+  strategy/field/finding seeded exactly like
+  `findings-service.live.test.ts`'s own pattern, Pro plan + beta cohort):
+  outcome/consistency/adherence/findings all matched the seeded numbers
+  exactly (`totalR: '1.0000'` from `1.5 + (-0.5)`, the confident finding
+  surfaced with a real `analytic_renders` row logged at `surface:
+  'weekly'`); (3) a `covers_weeks = 2` period spanning two seeded weeks:
+  consistency/adherence sums matched the combined two-week totals, and
+  `upsertWeeklyReview` correctly derived `coversWeeks: 2` from the two
+  dates alone.
+
+**Not marked done. Needs, in order:** `retrospeq-tester` (this slice's
+own live-DB self-check was thrown away, never committed — a real,
+permanent test file covering the same scenarios, plus RLS/property
+coverage on `rankCandidates`/`pickPeriodAttribution`/`deriveCoversWeeks`'s
+own pure logic, is still needed) → `retrospeq-security-reviewer`
+(`upsertWeeklyReview`'s service-role write path, and whether
+`fetchActiveFindingsForUser`'s cross-strategy read could leak another
+user's data under any input, are the two surfaces most worth an
+independent look) → `retrospeq-qa` (no UI this slice, so no screenshot
+check needed — re-check docs/ADR substance and the non-negotiables list
+against this slice's own reasoning, especially the multi-week attribution
+simplification in decision #5). Not committed, not pushed.
+
+- 2026-09-11 -- TESTER (retrospeq-tester), Module 06 Slice 2 (§4.2/§4.8
+  weekly review read-payload assembly, `lib/review/**`) — **PASS**, with
+  one real blocking gap found and flagged (not fixed by this dispatch,
+  see below). Full permanent test suite built from scratch (the coder's
+  own self-check was throwaway, per its own decision-log entry above);
+  read ADR 0036 in full, 06-review-and-graduation.md §4.2/§4.8/§5.1, and
+  00-foundation §9 before writing anything.
+
+  **Files added** (all committed-ready, none thrown away):
+  `lib/review/__tests__/weekly-findings.rank.test.ts` (8 tests, pure,
+  no DB — every tier/tie-break of `rankCandidates` in isolation),
+  `lib/review/__tests__/weekly-findings.defense-in-depth.test.ts` (2
+  tests, mocked — the two `canRender`/`recordAnalyticRender` catch
+  blocks a live DB can't be made to hit on demand),
+  `lib/review/__tests__/weekly-findings.live.test.ts` (7 tests, live DB),
+  `lib/review/__tests__/period-consistency.live.test.ts` (5 tests, live
+  DB), `lib/review/__tests__/period-adherence.live.test.ts` (7 tests,
+  live DB), `lib/review/__tests__/weekly-read-payload.live.test.ts` (3
+  tests, live DB), `lib/review/__tests__/reviews-repository.live.test.ts`
+  (4 tests, live DB), `lib/review/__tests__/reviews-repository.derive-
+  covers-weeks.test.ts` (7 tests, pure). Also extended the pre-existing
+  `lib/ingestion/__tests__/trades-repository.live.test.ts` with 3 new
+  `fetchPeriodOutcome` tests (live DB) — that new repository function had
+  zero coverage anywhere before this. **43 tests total, all live-DB
+  suites run against the real shared dev/test Supabase project (ADR
+  0002), none mocked/skipped** — `readRlsTestEnv()` found real
+  `SUPABASE_URL`/`SUPABASE_DB_URL`/`SUPABASE_SERVICE_ROLE_KEY` in
+  `.env.local`, so every "live DB" claim below is a real Postgres round
+  trip, not a stand-in. All 43 pass (plus the 3 pre-existing
+  `fetchPeriodOutcome`-adjacent trades-repository tests, 14/14 total in
+  that file).
+
+  **Item 1 (findings-ranking, adversarially):** built a real fixture with
+  5 qualifying candidates across 3 strategies and all 4 confidence tiers
+  (confident/provisional/null_result/2×insufficient) — the actual top-3
+  `assembleWeeklyFindings` returns matches the documented tier-then-n-
+  then-key ranking rule exactly, and the 2 excluded insufficient
+  candidates are confirmed evaluated (canRender-gated) but correctly NOT
+  logged to `analytic_renders` (decision #4's "shown, not merely
+  computed"). A separate all-insufficient fixture (4 candidates, only 3
+  qualify) confirms the within-tier "largest n / smallest remaining"
+  tie-break for real. A zero-qualifying-findings user (no strategies;
+  separately, a strategy with only a note field; separately, an archived
+  strategy with a real confident finding) gets `[]` in every case — never
+  a fabricated entry. The pure `rankCandidates` unit tests separately
+  prove the `strategyId:fieldId` final tie-break deterministically, and
+  that the function never mutates its input or fabricates a result for
+  an empty candidate list.
+
+  **Item 2 (`covers_weeks > 1` multi-week summation, adversarially):**
+  built real 2-week fixtures for both `period-consistency.ts` and
+  `period-adherence.ts` with DELIBERATELY DIFFERENT numbers in each
+  constituent week (e.g. week 1 `daysTraded=3`, week 2 `daysTraded=2`,
+  asserting the result is `5`, and explicitly asserting the result is
+  NOT week 2's own number relabeled). Confirmed a week with no
+  materialised row inside a multi-week range contributes a genuine `0`,
+  not an error. For adherence attribution specifically: confirmed the
+  aggregate hard-outranks-soft rule for real (one week has the only hard
+  break, the other week's larger soft-break count does not override it),
+  and confirmed the within-pool "largest topBreakCount, tie-broken by
+  earliest week" pick with a real 2-week fixture where the two weeks
+  point at two different rules. `priorSoft` confirmed to compare against
+  a real, equally-sized (2-week) prior block, and confirmed `null`
+  (never a fabricated 0-of-0) when the prior block has zero materialised
+  rows. No off-by-one or double-counting found — every sum in every test
+  matched hand-computed expected totals exactly.
+
+  **Item 3 (cross-user isolation):** every one of the 4 new/extended
+  repository-layer functions (`fetchPeriodOutcome`, `fetchPeriodConsistency`,
+  `fetchPeriodAdherence`, `assembleWeeklyFindings`) and `upsertWeeklyReview`
+  has a real two-user live-DB test confirming user B gets zero rows /
+  honest defaults for user A's data, never a leak. `reviews-repository
+  .live.test.ts` additionally re-confirms `reviews_owner`'s RLS policy
+  directly (via `asRole`) against a row `upsertWeeklyReview`'s own
+  service-role write produced, closing the loop between the write path
+  and the pre-existing `review-graduation-schema.rls.test.ts` schema-level
+  proof (Slice 1, still passing, 27/27, re-run clean this session).
+
+  **Item 4 (`upsertWeeklyReview` idempotency):** a real two-write
+  sequence — write once, directly UPDATE `opened_at`/`completed_at` to
+  simulate a trader having opened/completed the review, wait, write again
+  with DIFFERENT payload numbers (simulating a late-arriving
+  re-materialisation) — confirms `opened_at`/`completed_at` are
+  byte-identical before and after the second write, while `read_payload`
+  (new trade count/totalR) and `computed_at` (new timestamp) both
+  genuinely refresh. The coder's claim holds under a real test, not just
+  by reading the SQL.
+
+  **Item 5 ("not enough data yet" honesty):** a genuinely brand-new
+  user's FULL assembled `WeeklyReadPayload` (all four elements, via
+  `assembleWeeklyReadPayload` itself, not the composers individually)
+  degrades to `{tradeCount:0, daysTradedCount:0, totalR:'0'}` /
+  `{daysTraded:0, daysClosed:0, streakWeeks:0}` /
+  `{status:'insufficient_history'}` / `[]` — asserted as one exact-equality
+  check against the whole payload, not a loose "truthy" check, so nothing
+  partial or fabricated could slip through unnoticed.
+
+  **Item 6 (propagate vs. swallow, formed independently):** confirmed
+  live, not just read in the source, that an invalid (non-canonical,
+  non-Monday) `periodStart` makes `assembleWeeklyReadPayload` REJECT
+  (via `fetchPeriodConsistency`/`fetchPeriodAdherence`'s own
+  `assertCanonicalWeekStart` guards), not silently degrade. **Independent
+  view, agreeing with the coder's own framing**: propagation is correct
+  for THIS pure-composition function (§9's own "a partial review is never
+  shown" plus AGENTS.md's "never fake it" both argue against a
+  half-written payload being handed back as if complete) — but I'd add
+  one thing the coder's note doesn't spell out: the eventual scheduler
+  wiring will need to catch this rejection PER USER and log/retry, not
+  let one user's bad period crash a whole batch run. That's already
+  flagged in the coder's own decision-log entry and `docs/runbook.md`'s
+  new "no deployed scheduler yet" section, so no new gap here, just
+  independent confirmation the concern is real and correctly scoped to a
+  future slice rather than this one.
+
+  **Item 7 (tsc/eslint/import-boundaries/build, coverage):**
+  `npx tsc --noEmit` clean. `npx eslint` on every new/touched file (all
+  of `lib/review/`, plus the modified `trades-repository.live.test.ts`)
+  — 0 errors, 0 new warnings; a full-repo `npx eslint .` shows only
+  pre-existing warnings/errors in unrelated files (`tmp/*.cjs`,
+  `_formData` unused-arg warnings elsewhere), none touched by this
+  dispatch. `npm run check:import-boundaries` clean (103 modules, 264
+  deps, 0 violations). `npm run build` clean — Turbopack, all 28 routes,
+  no new warnings. **Coverage, `lib/review/` (`vitest run --coverage`)**:
+  97.09% lines / 91.42% branches / 100% functions — well above the 90%
+  bar for statistics-adjacent code. Per-file: `period-adherence.ts` 100%
+  lines, `period-consistency.ts` 100% lines, `reviews-repository.ts`
+  100% lines, `weekly-read-payload.ts` 100% lines, `weekly-findings.ts`
+  93.18% lines (the only remaining gap: two outer try/catch blocks around
+  whole-batch reads failing entirely, e.g.
+  `fetchFieldsForManagement`/`fetchActiveFindingsForUser` both failing —
+  a genuinely rare compound-failure path, judged not worth chasing to
+  100% given the 90% bar is already cleared with margin).
+
+  **Real blocking gap found, NOT fixed by this dispatch (deliberately —
+  this is a security-reviewer decision, not a tester one):**
+  `lib/supabase/__tests__/service-role-inventory.test.ts` (Module 01
+  §7.2's mandatory "enumerates service-role call sites and fails on an
+  unreviewed addition" test) **currently FAILS** on this working tree.
+  Three new `withServiceRoleConnection(` call sites from this slice and
+  the companion, also-uncommitted Module 07 Slice 1
+  (`lib/engagement/streak-repository.ts`,
+  `lib/engagement/week-completeness-repository.ts` — Module 07's own
+  materialised-cache writers) plus this slice's own
+  `lib/review/reviews-repository.ts` are not in
+  `WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST`. Confirmed by running that
+  test file in isolation: `1 failed | 2 passed`, the failure listing
+  exactly those 3 files as the diff. This is precisely the recurring gap
+  that test file's own comments already warn about repeatedly ("added to
+  this allowlist in the same commit that introduces the call, not left
+  for a future slice to discover missing") — I did NOT add the 3 entries
+  myself, since a real allowlist addition needs the actual security
+  review of each call site (scoping, parameterization) that entry is
+  supposed to represent, not a mechanical unblock from a tester dispatch.
+  `reviews-repository.ts`'s own header comment already documents why
+  service-role is needed (no live session at the scheduled-job call site,
+  every query explicitly `user_id`-filtered) and every query in it was
+  read line-by-line as part of this dispatch — I did not find a scoping
+  problem — but the formal allowlist entry (with its own reviewed
+  comment, per this file's established convention) should be
+  security-reviewer's to write, not mine. **Flagging this explicitly so
+  the next gate doesn't miss it**: `retrospeq-security-reviewer` must
+  either add all 3 entries (with real review) or find a real problem with
+  one of the 3 call sites before this combined tree can be called clean.
+
+  **Infra note, not a gap**: attempted one full repo-wide `npx vitest run`
+  (no path filter) to sanity-check for cross-slice regressions beyond
+  what I touched; it ran out of JS heap memory on this machine partway
+  through (a `FATAL ERROR: Committing semi space failed... JavaScript
+  heap out of memory` mid-run, unrelated to any specific test's
+  assertions) — a known local-machine resource constraint running the
+  full live-DB suite in one process, not a test failure. Mitigated by
+  running every touched/adjacent suite individually instead (all listed
+  above, all passing) rather than claiming a full-suite green I never
+  actually observed.
+
+  **Ready for security-reviewer next, WITH the service-role-inventory gap
+  above as its first, concrete checklist item** (in addition to this
+  slice's own stated review targets — `upsertWeeklyReview`'s write path
+  and `fetchActiveFindingsForUser`'s cross-strategy read). Not ready for
+  qa until that gate passes. Not committed, not pushed (this tester
+  dispatch only adds test files and this ledger entry — no production
+  code changed).
 

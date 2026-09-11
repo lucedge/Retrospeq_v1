@@ -338,6 +338,22 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // 2026-09-11 by `service-role-inventory.test.ts`'s own mandatory
   // failure mode doing exactly its job.
   'lib/analytics/spec-weekday/repository.ts',
+  // Module 07 (Engagement) Slice 1, the streak mechanism: both files'
+  // post-commit recompute (`recomputeEngagementForConfirmations`,
+  // triggered from `lib/ingestion/confirm.ts`) runs as a trusted
+  // background process, no authenticated session at the call site — the
+  // identical reason every entry above this one documents. The
+  // 2026-09-11 security-reviewer PASS for that slice already reviewed
+  // and cleared both files (confirmed `engagement_state`/
+  // `week_completeness` writes are parameterized on the caller-supplied
+  // `userId`, confirmed `day_closeouts` has exactly one INSERT site in
+  // the whole codebase so streak credit can't be forged) — that review
+  // already happened; these two allowlist entries close a mechanical
+  // omission from it, not a re-review. Missed at commit time (`59114a0`),
+  // caught 2026-09-11 by a Module 06 Slice 2 tester dispatch running
+  // this test as part of its own full-suite check.
+  'lib/engagement/streak-repository.ts',
+  'lib/engagement/week-completeness-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
