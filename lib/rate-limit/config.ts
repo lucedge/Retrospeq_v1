@@ -574,6 +574,19 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+  /**
+   * Module 06 (Review & Graduation) Slice 1, story 1.3 —
+   * `app/(app)/trades/actions.ts`'s `writeLateCaptureAction`, the
+   * close-out screen's late-fill path for a missed pre-entry field. Same
+   * shape and reasoning as `writeTradeCapture` above (one tap, fixed
+   * options per field, a trader plausibly fills several missed fields
+   * across several trades in one close-out sitting) — reuses that exact
+   * budget rather than inventing a new number.
+   */
+  writeLateCapture: {
+    ip: { limit: 60, windowSeconds: 3600 },
+    email: { limit: 40, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

@@ -188,6 +188,30 @@ export async function fetchEligibleTradesForStrategy(userId: string, strategyId:
  * ids, in one query — `field-values.ts`'s `extractFieldValue` is the pure
  * function that turns this (plus each trade's own columns) into the
  * actual value used for segmentation.
+ *
+ * EXCLUDES `captured_late = true` rows (fixed 2026-09-11, tester-found —
+ * see `__tests__/captured-late-exclusion.live.test.ts` and the matching
+ * 2026-09-11 PROGRESS.md decision-log entry). Module 06 §2 story 1.3's
+ * own acceptance criterion, and Module 02 §4.5 in identical words: "Late
+ * fill allowed, marked `captured_late`, excluded from judgment findings
+ * by default." This function's own header already scopes it as THE ONE
+ * query that feeds Module 05's segmentation/finding computation — no
+ * other real caller exists in this repo (confirmed by grep: the only
+ * product call site is `computeEdgeFindingsForStrategyId` below), so
+ * filtering the late-captured row out here, at the source, is strictly
+ * narrower and safer than threading a flag through `field-values.ts` and
+ * relying on every future caller to remember to check it. A row this
+ * query never returns is indistinguishable, to
+ * `computeEdgeFindingsForStrategyId`'s `captures.get(...).get(trade.id)`
+ * lookup, from a trade that was never captured at all — `extractFieldValue`
+ * already treats a missing map entry as `null` (§4.2's own "no value"
+ * contract), so a late-filled value now resolves to exactly the same
+ * "not enough data" treatment as a genuinely-uncaptured field, with no
+ * further change needed downstream. Module 04's own
+ * `distributions-repository.ts` reads the SAME `captured_late` column for
+ * a genuinely different question (adherence fact: "did the trader ever
+ * late-fill," `bool_or(captured_late)`) and is intentionally untouched —
+ * that pipeline never went through this function.
  */
 export async function fetchCapturesForTrades(
   userId: string,
@@ -200,7 +224,8 @@ export async function fetchCapturesForTrades(
     const res = await client.query<{ trade_id: string; field_id: string; value: unknown }>(
       `select trade_id, field_id, value
          from retrospeq.trade_captures
-        where user_id = $1 and trade_id = any($2::uuid[]) and field_id = any($3::text[])`,
+        where user_id = $1 and trade_id = any($2::uuid[]) and field_id = any($3::text[])
+          and captured_late = false`,
       [userId, tradeIds, fieldIds],
     );
     for (const row of res.rows) {

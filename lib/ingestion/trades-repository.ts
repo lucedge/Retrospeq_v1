@@ -1,6 +1,7 @@
 import 'server-only';
 import { withUserConnection } from '@/lib/supabase/direct';
 import { TRADE_COLUMNS, type TradeRow } from './corrections';
+import { computeServerDayRange } from './server-day';
 
 export type { TradeRow };
 
@@ -106,6 +107,50 @@ export async function listTradesForAccountDay(
       [userId, accountId, serverDay],
     );
     return res.rows;
+  });
+}
+
+/**
+ * Module 06 (Review & Graduation) Slice 1, story 1.4 — the close-out
+ * screen's proactive coverage-gap check. `lib/ingestion/confirm.ts`'s own
+ * `confirmDay` already refuses a day whose `server_day` window overlaps an
+ * unresolved `coverage_gaps` row (Module 02 §4.6 assertion 1) — but until
+ * this slice, that refusal only ever surfaced AFTER a wasted submit
+ * round-trip (`ConfirmDayForm`'s error state, rendered only once
+ * `confirmDayAction` had already run and failed). §2 story 1.4's own
+ * acceptance text is "Coverage gap blocks confirm... confirm disabled" —
+ * read literally, that means the trader should see the block BEFORE
+ * tapping, not only after. This function runs the exact same overlap
+ * query `confirmDay` itself runs (same half-open-interval test, same
+ * `computeServerDayRange` inverse), so the screen and the transaction it
+ * submits to can never disagree about whether a gap exists — RLS-scoped
+ * via `withUserConnection`, matching every other read in this file
+ * (`confirmDay`'s own equivalent query runs under the service role inside
+ * its own transaction, which is correct for a trusted-backend-process
+ * write path; this is the read-only, client-facing counterpart).
+ */
+export interface CoverageGapRow {
+  id: string;
+  gapFrom: string;
+  gapTo: string;
+}
+
+export async function listUnresolvedCoverageGapsForAccountDay(
+  userId: string,
+  accountId: string,
+  serverDay: string,
+  dayRollover: string,
+): Promise<CoverageGapRow[]> {
+  const { start, end } = computeServerDayRange(serverDay, dayRollover);
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string; gap_from: string; gap_to: string }>(
+      `select id, gap_from, gap_to
+         from retrospeq.coverage_gaps
+        where account_id = $1 and user_id = $2 and resolved_at is null
+          and gap_from < $4 and gap_to > $3`,
+      [accountId, userId, start.toISOString(), end.toISOString()],
+    );
+    return res.rows.map((r) => ({ id: r.id, gapFrom: r.gap_from, gapTo: r.gap_to }));
   });
 }
 

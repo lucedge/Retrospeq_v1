@@ -457,6 +457,44 @@ export async function fetchCurrentStrategyForEdit(
   });
 }
 
+/**
+ * Module 06 (Review & Graduation) Slice 1 — the close-out screen's
+ * late-fill path (§2 story 1.3) needs the field list off the strategy
+ * VERSION a trade was actually entered against (`trades.strategy_id` +
+ * `trades.strategy_version`, 00-foundation §2.5's "Trades hold a pointer
+ * to the version live at entry — load-bearing for adherence honesty"),
+ * never the strategy's CURRENT version, which may have added/retired
+ * fields since. `fetchCurrentStrategyForEdit` above is deliberately not
+ * reused here for that reason — it always joins `strategy_versions` on
+ * `s.current_version`, which is the wrong version for a trade entered
+ * against an older one. This is a direct `(strategy_id, version)` point
+ * lookup on `strategy_versions`'s own primary key (see that table's DDL,
+ * `20260902010000_field_registry_schema.sql`) scoped by `user_id` — same
+ * RLS-enforced `withUserConnection` posture as every other read in this
+ * file. Returns `null` when no such (strategy_id, version, user_id) row
+ * exists (a trade whose `strategy_id`/`strategy_version` is null — no
+ * strategy bound at entry — or, defensively, a row that somehow doesn't
+ * resolve) rather than throwing; the caller (the close-out screen) treats
+ * that identically to "nothing to late-fill for this trade."
+ */
+export async function fetchStrategyVersionFields(
+  userId: string,
+  strategyId: string,
+  version: number,
+): Promise<ProposedStrategyField[] | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ fields: SerializedFieldEntry[] }>(
+      `select fields
+         from retrospeq.strategy_versions
+        where strategy_id = $1 and version = $2 and user_id = $3`,
+      [strategyId, version, userId],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return deserializeFields(row.fields);
+  });
+}
+
 // ---------------------------------------------------------------------
 // Strategy-builder UI slice (2026-09-09) — the strategy LIST read. Nothing
 // before this slice needed one: every prior Module 03 slice was

@@ -45,6 +45,8 @@ import {
 import { isAccountOwnedByUser } from '@/lib/broker/accounts-repository';
 import { withUserConnection } from '@/lib/supabase/direct';
 import { writeTradeCapture, TRIM_REASONS, TRIM_REASON_FIELD_ID, type TrimReason } from '@/lib/ingestion/trade-captures';
+import { fetchFieldDefinitionsByIds, fetchStrategyVersionFields } from '@/lib/fields/strategy-repository';
+import { validateCapturedValue, CapturedValueInvalidError } from '@/lib/fields/captured-value-validation';
 
 /**
  * Module 02 Slice 7a — the Server Actions layer wiring every Module 02
@@ -694,5 +696,153 @@ export async function writeTradeCaptureAction(
     return { success: true, value: parsedValue.data };
   } catch (err) {
     return internalErrorState('WRITE_TRADE_CAPTURE', err);
+  }
+}
+
+// ---------------------------------------------------------------------
+// writeLateCaptureAction — Module 06 (Review & Graduation) Slice 1,
+// story 1.3: "to fill a missed pre-entry capture... Late fill allowed,
+// marked captured_late, excluded from judgment findings." The close-out
+// screen's own late-fill control (`LateCaptureField.tsx`) is the FIRST
+// real caller anywhere in this repo of `writeTradeCapture` with
+// `capturedLate: true` for a real, registry-defined field — every prior
+// call either sets it `false` (`lockPreEntryCaptures`, a fresh on-time
+// match) or writes the literal built-in trim-reason field, never a real
+// `fields` row. See `lib/fields/captured-value-validation.ts`'s own
+// header for why a NEW validator was needed (no existing code validates
+// a captured VALUE against a field's own data_type/config — only a
+// proposed field's own config SHAPE, a different question).
+// ---------------------------------------------------------------------
+
+export interface WriteLateCaptureActionState {
+  error?: { code: string; user_message: string };
+  success?: boolean;
+}
+
+/**
+ * `value` arrives as a JSON string (`LateCaptureField.tsx` serialises
+ * whatever local value it built — a string for `pick_one`, `string[]`
+ * for `pick_many`, `boolean` for `bool`, a whole number for `rating` —
+ * via `JSON.stringify` before submitting) since `FormData` itself has no
+ * native way to carry a typed non-string value; `z.unknown()` here
+ * defers real shape-checking to `validateCapturedValue` below, which
+ * knows the field's own `data_type` and is the one place in this repo
+ * that already owns that responsibility.
+ */
+const lateCaptureValueSchema = z.unknown();
+
+/**
+ * Bound to a specific `(tradeId, fieldId)` pair at the call site
+ * (`writeLateCaptureAction.bind(null, tradeId, fieldId)`), same
+ * convention as `toggleNotADecisionAction`/`writeTradeCaptureAction`.
+ *
+ * **Why this opens its own ownership + strategy-membership check rather
+ * than trusting `fieldId` from the client, even though the client only
+ * ever renders fields this SAME server-rendered close-out screen already
+ * determined were missing:** a Server Action is a public HTTP endpoint —
+ * nothing stops a request being crafted directly with an arbitrary
+ * `tradeId`/`fieldId` pair, e.g. a field from a DIFFERENT strategy, or a
+ * field never assigned `capture_moment: 'pre_entry'` at all. Re-deriving
+ * "is `fieldId` actually a `pre_entry` field on THIS trade's own bound
+ * strategy VERSION" server-side (never re-checked against the strategy's
+ * CURRENT version — `fetchStrategyVersionFields` reads the exact version
+ * pointer `trades.strategy_version` carries, 00-foundation §2.5) is the
+ * real security boundary here, matching this file's own established
+ * "never trust a client-supplied id without an explicit ownership/
+ * membership check" posture (`confirmDayAction`'s `isAccountOwnedByUser`,
+ * `writeTradeCaptureAction`'s own inline trade-ownership check).
+ */
+export async function writeLateCaptureAction(
+  tradeId: string,
+  fieldId: string,
+  _prevState: WriteLateCaptureActionState | undefined,
+  formData: FormData,
+): Promise<WriteLateCaptureActionState> {
+  const user = await requireSessionAndRateLimit('writeLateCapture');
+  if (isErrorState(user)) return user;
+
+  const parsedTradeId = uuidSchema.safeParse(tradeId);
+  const parsedValueJson = lateCaptureValueSchema.safeParse(formData.get('valueJson'));
+  if (!parsedTradeId.success || !parsedValueJson.success || typeof parsedValueJson.data !== 'string') {
+    return { error: { code: 'TRADE_LATE_CAPTURE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.' } };
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(parsedValueJson.data);
+  } catch {
+    return { error: { code: 'TRADE_LATE_CAPTURE_INVALID_INPUT', user_message: 'Something went wrong. Please try again.' } };
+  }
+
+  try {
+    // Ownership + the trade's own bound strategy version pointer — see
+    // this action's own header for why this is fetched fresh here rather
+    // than trusted from the client.
+    const tradeRow = await withUserConnection(user.id, async (client) => {
+      const res = await client.query<{ strategy_id: string | null; strategy_version: number | null }>(
+        `select strategy_id, strategy_version from retrospeq.trades where id = $1 and user_id = $2`,
+        [parsedTradeId.data, user.id],
+      );
+      return res.rows[0] ?? null;
+    });
+    if (!tradeRow) {
+      return { error: { code: 'TRADE_NOT_FOUND', user_message: "We couldn't find that trade." } };
+    }
+    if (!tradeRow.strategy_id || tradeRow.strategy_version === null) {
+      return {
+        error: {
+          code: 'TRADE_LATE_CAPTURE_NO_STRATEGY',
+          user_message: 'This trade has no strategy bound, so there is nothing to fill in.',
+        },
+      };
+    }
+
+    const versionFields = await fetchStrategyVersionFields(user.id, tradeRow.strategy_id, tradeRow.strategy_version);
+    const isPreEntryFieldOnThisVersion = versionFields?.some((f) => f.fieldId === fieldId && f.captureMoment === 'pre_entry') ?? false;
+    if (!isPreEntryFieldOnThisVersion) {
+      return {
+        error: {
+          code: 'TRADE_LATE_CAPTURE_NOT_PRE_ENTRY_FIELD',
+          user_message: "That field isn't part of this trade's own pre-entry checklist.",
+        },
+      };
+    }
+
+    const fieldDefs = await fetchFieldDefinitionsByIds(user.id, [fieldId]);
+    const fieldDef = fieldDefs.get(fieldId);
+    if (!fieldDef) {
+      return { error: { code: 'TRADE_LATE_CAPTURE_FIELD_NOT_FOUND', user_message: "We couldn't find that field." } };
+    }
+
+    try {
+      validateCapturedValue(fieldDef.dataType, fieldDef.config, value);
+    } catch (err) {
+      if (err instanceof CapturedValueInvalidError) {
+        return { error: { code: 'TRADE_LATE_CAPTURE_VALUE_INVALID', user_message: 'That value is not valid for this field.' } };
+      }
+      throw err;
+    }
+
+    const result = await withUserConnection(user.id, (client) =>
+      writeTradeCapture(client, {
+        tradeId: parsedTradeId.data,
+        userId: user.id,
+        fieldId,
+        value,
+        moment: 'pre_entry',
+        capturedLate: true,
+      }),
+    );
+    if (!result.applied) {
+      // "Never after lock" (§4.5) -- a second late-fill attempt on a
+      // field this same call (or a concurrent one) already filled.
+      return { error: { code: 'TRADE_CAPTURE_LOCKED', user_message: 'This value has already been filled in.' } };
+    }
+
+    revalidatePath('/trades');
+    revalidatePath('/trades/close-out');
+    return { success: true };
+  } catch (err) {
+    return internalErrorState('WRITE_LATE_CAPTURE', err);
   }
 }
