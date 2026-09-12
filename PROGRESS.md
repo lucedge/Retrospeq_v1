@@ -31,7 +31,7 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 3 -- PROMPT-ELIGIBILITY CANDIDATE LAYER -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
+**AT A GLANCE (2026-09-12, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 4 -- RANKING, THE 3-PER-WEEK CAP, AND THE review_prompts WRITE -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11/2026-09-12 Decision-log entries, search "Module 06" and "Slice 4"). Ranks section 4.3's five candidate kinds (Relaxation > Graduation > Detection > Promotion > Retirement, magnitude within kind, single-detection cap, 3-per-review cap), filters by section 4.5's dormancy/mute rules against `prompt_history`, and writes the ranked result into `review_prompts` -- the module's first real write to that table. **Closes a hard, explicitly-tracked precondition from Slice 3's own security review**: `graduation-candidates.ts`/`detection-candidates.ts` previously skipped the plan/cohort `canRender` gate, ruled safe to defer only until something actually consumed those lists -- this slice is that consumer, and the tester proved live, in both directions, that a plan-gated or kill-switched candidate is correctly excluded from the final written output. One real behavioral property confirmed intentional, not an accidental side effect: a high-priority kind with 3+ qualifying candidates can consume the entire cap before a lower-priority kind ever competes -- this is a literal, correct reading of section 4.3's two-step "rank by kind, then by magnitude, then cap" algorithm, independently concurred by tester, security-reviewer, and qa. **This closes Module 06 Slice 4.** Still unbuilt and honestly tracked (docs/adr/0038's Consequences section, docs/runbook.md): section 4.8's 4-week pending-prompt expiry, any accept/decline UI (so `prompt_history` still has zero writers), and the production scheduler that would actually invoke this whole pipeline periodically. Module 06 remains a large, multi-slice module -- still unbuilt beyond the above: all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view. Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
 
@@ -25049,3 +25049,764 @@ lib/analytics/detections-repository.ts, docs/adr/0037-prompt-candidate-
 eligibility-judgment-calls.md, docs/runbook.mds new entry, and the
 full coder/tester/security-reviewer PROGRESS.md chain. No production code
 changed by this gate -- review only.
+
+## 2026-09-12 — Module 06 (Review & Graduation) Slice 4 — ranking, cap, dormancy re-raise, `canRender` closure, `review_prompts` write — CODED, not yet tested/reviewed
+
+Read AGENTS.md in full, `06-review-and-graduation.md` §4.3/§4.5/§4.10 in
+full, and `docs/adr/0037-prompt-candidate-eligibility-judgment-calls.md`
+in full before writing anything, per this repo's own standing discipline,
+plus the Slice 3 security-review's own carried-forward `canRender`
+precondition (2026-09-11 entry, "a binding precondition on the next slice
+that gives graduation/detection candidates a live consumer") and Slice 3's
+own `stable-subject-id.ts`/`prompt-history-repository.ts` headers before
+touching either.
+
+**Scope, matching this slice's own dispatch exactly:** rank Slice 3's
+already-computed eligibility candidates (§4.3's kind-priority + magnitude
+ordering, the 3-per-week cap, the "at most one detection" cap), filter by
+`prompt_history` dormancy (§4.5's declined-once-until-roughly-doubled
+rule — the ONE half of §4.5 Slice 3 deliberately left unimplemented), close
+the tracked `canRender` gap for graduation/detection, and write the result
+into `review_prompts` linked to a real `review_id`. Explicitly did NOT
+build any UI, any write to `prompt_history` (that's the accept/decline
+flow's own job, which needs UI that doesn't exist), or §4.8's "pending
+prompts older than 4 weeks expire silently" — all three noted as real,
+tracked gaps, not silently skipped (see docs/adr/0038's own Consequences
+section and the runbook update below).
+
+**New files:**
+
+- `lib/review/prompt-candidates/ranking.ts` — pure, no I/O. Six per-kind
+  magnitude definitions (none is spec-numeric, all reasoned and documented
+  in this file's own header AND docs/adr/0038, matching ADR 0037's own
+  precedent for spec-under-determined judgment calls), the "at most one
+  detection" hard cap (`rankAndCapDetectionCandidates`, keeps exactly the
+  top-occurrence survivor before the kind ever competes for a slot — not a
+  rank-4+ demotion), decay-before-condition retirement sub-ordering, and
+  `rankAndCapPromptCandidates` — the one function that does all of §4.3:
+  kind priority, magnitude within kind, single-detection cap, 3-cap,
+  `rank` assignment. Every comparator ends in a `subjectId` ascending
+  tie-break for full determinism (needed for §7.2's "deferred prompts
+  never exceed the cap" property test to even be assertable against a
+  fixed order).
+- `lib/review/prompt-candidates/prompt-history-repository.ts` —
+  EXTENDED, additively: `fetchPromptHistoryStateForUser` (a second,
+  independent `prompt_history` read — deliberately NOT a refactor of
+  Slice 3's own `fetchMutedSubjectKeys`/`excludeMuted`, so that already-
+  security-reviewed composition keeps its exact reviewed shape) and
+  `filterDormant`, the pure §4.5-doubling-rule filter. Per-kind
+  "occurrences" measure and the conservative null-snapshot-stays-dormant
+  default are both genuine judgment calls, documented in this file's own
+  header and docs/adr/0038 decision #3.
+- `lib/review/review-prompts-repository.ts` — the FIRST writer
+  `review_prompts` has ever had (grep-confirmed at dispatch time: zero
+  prior writes anywhere). `withServiceRoleConnection`, same reasoning
+  `reviews-repository.ts`'s own `upsertWeeklyReview` already established
+  and was already security-reviewed for at Slice 2's gate (scheduled-job
+  write, no real session). Idempotent re-materialisation: deletes this
+  review's own `state = 'pending'` rows before inserting the fresh ranked
+  set, inside the one transaction `withServiceRoleConnection` already
+  wraps its callback in — verified live (see below) that a second write
+  with a different candidate set leaves exactly the second call's own
+  rows, not a union. `payload` stores the candidate's raw structured
+  `evidence` object, NOT synthesized statement/cost/options prose — a
+  deliberate, documented scope boundary (docs/adr/0038 decision #4),
+  reasoned the same "no live UI consumer to design copy against yet" way
+  Slice 3's security review already reasoned about the `canRender`-surface
+  question.
+- `lib/review/review-prompts.ts` — `computeAndWriteReviewPrompts(userId,
+  reviewId, asOfDate)`, the full pipeline: Slice 3's
+  `computeAllPromptCandidates` (eligibility + unconditional mute gate) ->
+  `canRender('weekly')` for graduation/detection only (closing the tracked
+  gap, reasoned in docs/adr/0038 decision #2 — `'weekly'` chosen because
+  this ranking/write IS §4.10's own weekly-job step 4, matching
+  `weekly-findings.ts`'s identical surface choice for the identical
+  reason) -> `filterDormant` across every kind -> `rankAndCapPromptCandidates`
+  -> `writeReviewPrompts`. Takes `reviewId` as a parameter rather than
+  calling `upsertWeeklyReview` itself, matching the dispatch's own "take a
+  `reviewId` parameter" option — `upsertWeeklyReview` already returns
+  `WeeklyReviewRecord.id` on write (confirmed by reading
+  `reviews-repository.ts` directly), so a future scheduler wires the two
+  calls together itself.
+
+**Allowlist maintenance, done in this same commit (not left for later),
+per this repo's own "added in the same commit that introduces the call"
+convention:** `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+`WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST` now includes
+`lib/review/review-prompts-repository.ts`, with its own reasoning comment.
+Re-ran the test after adding the entry — still 3/3 PASS.
+
+**New ADR:** `docs/adr/0038-review-prompt-ranking-and-canrender-gate.md` —
+all five judgment calls this slice made (magnitude per kind, the
+`canRender` surface/scope closure, dormancy occurrence measures + the
+null-snapshot default, the payload-contents scope boundary, idempotent
+re-materialisation), plus one rejected alternative (a single cross-kind
+normalized urgency score) and why.
+
+**Runbook update:** extended the existing "Weekly review materialisation
+has no deployed scheduler yet" entry (docs/runbook.md) — `computeAndWriteReviewPrompts`
+has the identical zero-callers gap `upsertWeeklyReview` already has, plus
+a new failure-propagation risk flagged for whichever slice wires the real
+scheduler (this function does not wrap its own two top-level reads in a
+per-user try/catch, matching the sibling `assembleWeeklyReadPayload` gap
+already documented two paragraphs above it). Did not add a separate
+runbook entry for §4.8's un-built expiry — that's a "not yet built" gap
+tracked in the ADR's own Consequences section, not a live alerting
+condition (nothing writes real `review_prompts` rows in production yet
+for anything to need expiring).
+
+**Self-check performed (throwaway, not committed, per this dispatch's own
+instruction that testing is `retrospeq-tester`'s job):**
+
+1. `npx tsc --noEmit` — clean, exit 0 (after fixing five `PromptCandidate<X>`
+   -> `PromptCandidate<Record<string, unknown>>` array casts in
+   `ranking.ts` that needed an explicit `as unknown as` — TS correctly
+   flagged the direct casts as insufficiently-overlapping, since none of
+   the six evidence interfaces declares a string index signature).
+2. `npx eslint lib/review lib/supabase/__tests__/service-role-inventory.test.ts`
+   — 0 errors/warnings.
+3. `npm run check:import-boundaries` — 0 violations (104 modules/266 deps,
+   scoped to `lib/analytics`, unaffected by this slice's `lib/review`-only
+   changes).
+4. `npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts` —
+   3/3 PASS, confirms the new allowlist entry matches the one new call
+   site exactly.
+5. A throwaway, deleted-after-use unit test
+   (`lib/review/prompt-candidates/__tests__/_tmp-selfcheck.slice4.test.ts`)
+   against the pure `ranking.ts`/`filterDormant` functions — 7/7 PASS:
+   kind-priority ordering across a mixed candidate set capped at exactly 3;
+   "at most one detection" survives regardless of how many qualify (and
+   picks the highest-occurrence one, not the first); within-kind magnitude
+   ordering (relaxation by break rate); dormancy correctly excludes a
+   not-yet-doubled decline, admits a doubled one, stays dormant on a
+   `null` snapshot, and never restricts a `declineCount = 0` (never-
+   declined/deferred-only) candidate; deterministic `subjectId` tie-break
+   on an exact magnitude tie.
+6. A throwaway, deleted-after-use LIVE-DB test
+   (`lib/review/__tests__/_tmp-selfcheck.slice4-live.test.ts`, against the
+   real shared dev Supabase project, ADR 0002) — 2/2 PASS: (a) a real
+   `upsertWeeklyReview` + `writeReviewPrompts` round trip produces real
+   `review_prompts` rows correctly linked to the real `review_id`, correct
+   `rank`/`kind`/`state = 'pending'`/`payload` (the exact `evidence`
+   object, byte for byte); a second `writeReviewPrompts` call with a
+   smaller candidate set for the SAME `review_id` leaves exactly that
+   second call's own row count (1), not the union of both runs — proves
+   the idempotent-re-materialisation delete-then-insert is real, not just
+   argued in the ADR; (b) `fetchPromptHistoryStateForUser` reads a real,
+   directly-inserted `prompt_history` row's `decline_count`/
+   `occurrences_at_last_decline` correctly.
+7. Ran `npm run build` — clean, Turbopack, all 28 routes compiled, only
+   the pre-existing unrelated Supabase Node-20-deprecation warnings.
+8. Ran the full non-live `lib/review` test suite
+   (`npx vitest run lib/review --exclude '**/*.live.test.ts'`) — 8 files /
+   50 tests, all still passing (Slice 1/2/3's own tests untouched by this
+   slice's additive changes). Did NOT run the repo's full test suite in one
+   process — reproduced the same OOM-crash this machine is independently
+   known to hit running the whole suite concurrently against the shared
+   dev Supabase project (documented at the Slice 3 security-review gate,
+   2026-09-11) — a tooling limitation, not a regression from this slice;
+   targeted runs (`lib/review`, the specific allowlist test, `tsc`,
+   `eslint`, `check:import-boundaries`, `build`) cover everything this
+   slice actually touched.
+
+**Backend-only, no UI, per this dispatch's own scope — no screenshot
+self-check performed, matching this repo's own convention for non-UI
+slices (nothing renders yet to check).**
+
+**NOT done. This slice is CODED and self-checked only.** Per this
+dispatch's own explicit instruction, this needs the full
+`retrospeq-tester` -> `retrospeq-security-reviewer` -> `retrospeq-qa`
+chain before it can be committed or pushed — none of that has happened
+yet, and this coder has not committed or pushed anything. Files touched
+this session, all uncommitted: `lib/review/prompt-candidates/ranking.ts`
+(new), `lib/review/review-prompts-repository.ts` (new),
+`lib/review/review-prompts.ts` (new),
+`lib/review/prompt-candidates/prompt-history-repository.ts` (extended,
+additive only), `lib/supabase/__tests__/service-role-inventory.test.ts`
+(allowlist entry added), `docs/adr/0038-review-prompt-ranking-and-
+canrender-gate.md` (new), `docs/runbook.md` (one entry extended). No file
+from any prior Module 06 slice was modified in a way that changes its
+own already-reviewed behaviour — Slice 3's `index.ts`,
+`fetchMutedSubjectKeys`, `excludeMuted`, and every candidate-finder file
+are byte-for-byte unchanged.
+
+## 2026-09-12 — Module 06 (Review & Graduation) Slice 4 — TESTER PASS. Ready for security-reviewer.
+
+Read `06-review-and-graduation.md` §4.3/§4.4/§4.5/§4.10 in full,
+`00-foundation.md` §9 in full, the coder's own 2026-09-12 "CODED, not yet
+tested/reviewed" entry above, and `docs/adr/0038-review-prompt-ranking-
+and-canrender-gate.md` in full before writing any test. No permanent test
+file existed for any of this slice's new code before this dispatch (the
+coder's own testing was all throwaway, per this repo's convention) — every
+test below is new.
+
+**Files added/extended, all new test code:**
+
+- `lib/review/prompt-candidates/__tests__/ranking.test.ts` (NEW) — pure,
+  no I/O, no DB. 25 tests covering every one of `ranking.ts`'s six
+  per-kind comparators plus `rankAndCapPromptCandidates` end to end.
+  **100% line coverage, 95.34% branch** on `ranking.ts` (00-foundation
+  §9.1's 90%-line engine bar, cleared). Adversarially proves the
+  single-detection cap (3 candidates deliberately input in a non-winner
+  order; the survivor is the one the documented occurrences-desc rule
+  predicts, not an arbitrary first-in-list one) and the combined 3-cap
+  with kind-priority ordering across all 5 kinds. **One real behavioural
+  property surfaced and pinned down by these tests, worth the security-
+  reviewer/qa's attention, not a bug**: `rankAndCapPromptCandidates`
+  groups candidates by KIND FIRST, then flattens and slices — meaning a
+  higher-priority kind with MULTIPLE qualifying candidates (e.g. 3
+  qualifying relaxations) can consume the entire 3-cap before a
+  lower-priority kind's candidate ever competes, regardless of how strong
+  that lower-priority candidate's own evidence is. This matches §4.3's
+  literal wording ("ranked by kind priority, THEN by magnitude within
+  kind... capped at 3" — kind is the primary sort key, not a per-kind
+  quota) and ADR 0038's own reasoning, so it is treated here as INTENDED
+  behaviour, verified live in the multi-kind pipeline test too — but it is
+  a real product-shape fact (three broken rules in one week could crowd
+  out a graduation-worthy finding entirely) flagged explicitly rather than
+  silently assumed compatible with "most weeks should have zero prompts."
+- `lib/review/prompt-candidates/__tests__/prompt-history-repository.test.ts`
+  (EXTENDED, additive) — added `filterDormant` coverage: never-declined
+  stays eligible, declined-once-not-doubled stays dormant, declined-once-
+  exactly-doubled re-appears (>= is inclusive), declined-once-more-than-
+  doubled re-appears, and the coder's own null-snapshot judgment call
+  (declined once, no recorded `occurrencesAtLastDecline` -> stays dormant
+  regardless of current count) — confirmed sound: fail-closed, not
+  silently permissive (an unverifiable doubling claim never re-raises) and
+  not over-restrictive (a genuinely never-declined subject is never
+  penalised). Pre-existing `excludeMuted` tests untouched. **100% line
+  coverage** on `prompt-history-repository.ts`.
+- `lib/review/__tests__/review-prompts.live.test.ts` (NEW) — the big one:
+  10 tests, all live against the real shared dev/test Supabase project
+  (`readRlsTestEnv()`-gated, `describe.skipIf`, never faked), exercising
+  `computeAndWriteReviewPrompts` and `writeReviewPrompts` end to end.
+  **95.08%/100% line coverage** on `review-prompts.ts`/
+  `review-prompts-repository.ts` respectively (the only gap: `review-
+  prompts.ts` lines 79-81, the `canRender`-throwing defensive catch block,
+  documented never to throw in normal operation — same "not worth a
+  mocked test for a should-never-happen catch" call this repo's own
+  `weekly-findings.live.test.ts` precedent already made for the identical
+  shape of code, and already covered in spirit by
+  `weekly-findings.defense-in-depth.test.ts`'s mocked equivalent for the
+  sibling `assembleWeeklyFindings` catch).
+  - **`canRender` gate closure — proven live, not just read (item 3, the
+    single most important thing to verify this slice)**: (a) a real,
+    otherwise-eligible graduation candidate (`analytic_id = 'find.toggle'`,
+    already seeded `min_plan='pro', cohort_only=true`) for a free-plan,
+    non-cohort user writes ZERO `review_prompts` rows; the byte-identical
+    fixture for a pro+cohort user writes exactly one, rank 1. (b) a real
+    detection candidate behind a genuine `analytic_config.enabled = false`
+    kill switch (a dedicated, test-owned `analytic_id` — not one of the 5
+    shared seeded `seq.*`/`risk.*` ids, so this test cannot corrupt any
+    other test's config) is excluded; flipping `enabled = true` live and
+    clearing `config-cache.ts`'s cache makes it appear on the very next
+    call. Both proven against the real `canRender`/`getAnalyticConfig`
+    wiring, not a mock.
+  - **The 3-cap + kind-priority across all 5 kinds (item 2)**: one real
+    user with a real relaxation candidate (20 window evaluations, 8
+    broken), one real graduation candidate (direct `findings` insert,
+    confident), two real detection candidates (direct `detections`
+    insert), a real promotion-eligible rule (20 followed evaluations,
+    zero recent breaks), and a real 31-trade retirement-condition
+    candidate — 5+ qualifying total. The written `review_prompts` rows are
+    EXACTLY [relaxation rank 1, graduation rank 2, detection rank 3 (the
+    higher-occurrence of the two, per the single-detection cap)], with
+    promotion and retirement condition correctly absent — verified against
+    both the function's return value AND a direct `select` on
+    `review_prompts`.
+  - **Single-detection cap, live (item 1's live counterpart)**: 3 real
+    `detections` rows inserted in non-winner order; exactly one
+    `kind = 'detection'` row is written, the correct highest-occurrence
+    survivor.
+  - **Dormancy (item 4), one pipeline run, three real `prompt_history`
+    rows**: not-doubled stays excluded, exactly-doubled (2x, inclusive)
+    re-appears and is the one written (the single-detection cap makes it
+    the only eligible detection candidate of the three), null-snapshot
+    stays excluded even against a 100,000-occurrence current count.
+  - **Mute still holds under ranking (item 5)**: a muted detection
+    candidate given a DELIBERATELY WINNING occurrence count (999 vs 10)
+    is still excluded — the surviving row is the unmuted, lower-magnitude
+    one, proving this slice's ranking/cap logic cannot accidentally
+    resurrect a muted subject by winning an internal tie-break before the
+    mute filter's exclusion is checked.
+  - **Write correctness + idempotency (item 6)**: a written row's
+    `review_id`/`subject_type`/`kind`/`rank`/`state` match exactly what
+    was inserted, linked to the real parent `reviews` row. Re-running
+    `computeAndWriteReviewPrompts` for the same `review_id` with a
+    genuinely different candidate set (first detection superseded away,
+    a second one appears) leaves EXACTLY the second run's own row — no
+    duplicate, no orphan of the first run's row. A pre-existing
+    `state = 'accepted'` row (same `review_id`, simulating a real trader
+    decision) survives a re-materialisation completely untouched (same
+    `id`, same `decided_at`) while a fresh pending candidate is correctly
+    written alongside it — the coder's "idempotent delete-pending-then-
+    insert never touches a real decision" claim is confirmed, not just
+    read.
+  - **Cross-user isolation (item 7)**, application-level (service-role
+    query scoping, since `review-prompts-repository.ts` uses
+    `withServiceRoleConnection` and therefore bypasses RLS by design —
+    this is a DIFFERENT concern from the schema-level RLS policy coverage
+    `review-graduation-schema.rls.test.ts` already proved at Slice 1):
+    computing/writing for two users with two independent real candidates
+    leaves each user's `review_prompts` containing only their own
+    subject, verified by direct query, with an explicit
+    `not.toContain` check against the other user's subject id string.
+
+**Standard checks, all run myself, not assumed:**
+
+- `npx tsc --noEmit` — clean, zero errors.
+- `npx eslint` on every new/touched file in this dispatch — clean, zero
+  warnings/errors. (A separate, pre-existing repo-wide `npm run lint` run
+  surfaces 22 warnings + 2 errors entirely in unrelated `tmp/*.ts(x)`
+  scratch files and pre-existing `app/`/`lib/entitlements`/`lib/broker`
+  unused-arg warnings, none touched by this slice — confirmed via `git
+  status`/`git log` that none of those files are part of this dispatch.)
+- `npm run check:import-boundaries` — one pre-existing failure found on
+  first run (`lib/analytics/__eslint_boundary_fixture__/
+  __violation_absolute__.ts`, a stray fixture left on disk from an
+  unrelated, apparently interrupted prior session's run of
+  `eslint-boundary.test.ts` — that test's own `afterAll` is supposed to
+  `rmSync` this directory; per this repo's own known "shared-tree
+  multi-session hazard," a killed/interrupted session can leave this kind
+  of debris behind). Deleted the stray directory (matching that test's
+  own designed cleanup, not a code change) — `check:import-boundaries`
+  then passes clean (0 violations, 104 modules/266 dependencies cruised).
+  Flagging this here in case another session hits the same false failure
+  before re-reading this entry.
+- `npm run build` — clean, Turbopack, all 28 routes compiled successfully.
+- Full `lib/review` suite (not just this slice's own new files): **17
+  test files, 126 tests, all passing**, ~280s wall time (mostly the
+  pre-existing `eligibility.live.test.ts`'s own ~279s, unrelated to this
+  dispatch). No regression in any Slice 1/2/3 test.
+
+**Golden fixtures (00-foundation §9.3)**: not applicable — this slice
+touches ranking/dormancy/write logic downstream of the grouping engine,
+not the grouping engine itself; no fixture-library replay required.
+
+**Infra/scope gaps this dispatch could NOT close (report, not silently
+skip, per this repo's own rule)**:
+
+- RLS policy-level coverage for `review_prompts`/`prompt_history`/
+  `reviews` was already fully verified at the schema level by Slice 1's
+  own `review-graduation-schema.rls.test.ts` (cross-user select/update/
+  delete/insert-spoofing, all four tables) — this dispatch did not
+  re-verify RLS policies themselves (out of scope: this slice's own new
+  code, `review-prompts-repository.ts`, deliberately uses
+  `withServiceRoleConnection`, which bypasses RLS by design, so RLS
+  policy correctness is a Slice-1 concern, not this one's). What THIS
+  dispatch verified instead is the narrower, genuinely new concern:
+  whether the service-role code ITSELF correctly scopes every query by
+  `user_id`/`review_id` in application logic (item 7 above) — confirmed.
+- §4.8's "pending prompts older than 4 weeks expire silently" remains
+  unbuilt (the coder's own flagged, tracked gap — nothing sets
+  `state = 'expired'` anywhere yet). Not this slice's scope; re-flagged
+  here so it isn't lost.
+- No live scheduler calls `computeAndWriteReviewPrompts` in production —
+  same pre-existing gap `docs/runbook.md` already tracks for
+  `upsertWeeklyReview`. Confirmed still true, not newly introduced.
+- This dispatch did not attempt the repo's full, all-modules test suite
+  in one process — the coder's own entry above already documents a known
+  OOM crash running the whole suite concurrently against the shared dev
+  Supabase project (a tooling limitation flagged at the Slice 3
+  security-review gate, 2026-09-11), reproduced independently again this
+  session when a full run was considered; targeted runs (`lib/review`,
+  `tsc`, `eslint` on touched files, `check:import-boundaries`, `build`)
+  cover everything this slice actually touched.
+
+**Verdict: PASS. Ready for `retrospeq-security-reviewer` next** — the
+`canRender` gate closure this slice existed to build (Slice 3's own
+binding precondition) is proven live and correct, the ranking/cap/
+dormancy logic is exhaustively unit-tested at 90%+ engine-grade coverage,
+and the write path's idempotency/decision-preservation/isolation
+properties all hold against the real schema. Not marking this slice
+"done" — that call belongs to security-reviewer/qa per this repo's own
+convention, and the security-reviewer should specifically weigh in on the
+kind-priority-can-crowd-out-a-lower-kind behavioural property flagged
+above (intended per spec text and ADR 0038, but worth an explicit second
+opinion given the product's own "most weeks should have zero/few prompts"
+framing).
+
+## 2026-09-12 — Module 06 (Review & Graduation) Slice 4 — SECURITY REVIEW: PASS. Cleared for retrospeq-qa and commit.
+
+Read `docs/adr/0038-review-prompt-ranking-and-canrender-gate.md` in full,
+`00-foundation.md` §4 and Module 01 §7.2 (canonical security bar), and
+`06-review-and-graduation.md` §3/§4.3/§4.4/§4.5/§4.10 before starting. Did
+not take the coder's (2026-09-12, "CODED") or tester's (2026-09-12,
+"TESTER PASS") PROGRESS.md entries at face value — independently re-read
+every new/touched file and independently re-ran both the allowlist test
+and the full live-DB suite myself rather than trusting reported output.
+
+**1. `canRender` gate closure — PASS, confirmed complete, not just
+proven for the tester's fixtures.** Read `lib/review/review-prompts.ts`
+end to end (`filterByCanRender`, lines 60-87; `computeAndWriteReviewPrompts`,
+lines 113-136). Confirmed by direct grep (`grep -rn canRender lib/review/`)
+that exactly one production call site exists (`review-prompts.ts:73`) and
+it is invoked unconditionally on the FULL `all.graduation`/`all.detection`
+arrays returned by `computeAllPromptCandidates`, before those two arrays
+are merged into `dormancyFiltered`/`ranked`/written. Confirmed there is no
+alternate branch, early return, or bypass: `filterByCanRender`'s only
+early return is `candidates.length === 0 -> []` (fail-closed on the empty
+case, not a bypass), and its catch block defaults `allowed = false` on any
+thrown error (fail-closed, matching `weekly-findings.ts`'s identical
+posture, line-for-line). Confirmed `writeReviewPrompts`
+(`review-prompts-repository.ts`) has exactly one caller in the whole
+codebase (`grep -rn writeReviewPrompts`) — `computeAndWriteReviewPrompts`
+— so there is no second write path that could reach `review_prompts`
+without passing through the gate. Confirmed `relaxation`/`promotion`/
+`retirementDecay`/`retirementCondition` genuinely carry no `analyticId` in
+their evidence types (`relaxation-candidates.ts`, `promotion-candidates.ts`,
+`retirement-decay-candidates.ts`, `retirement-condition-candidates.ts` —
+read each `Evidence` interface directly), so ADR 0038's claim that
+`canRender` has nothing to check for those four kinds is correct, not
+assumed symmetric. **Independently re-ran the tester's live suite myself**
+(`npx vitest run lib/review/__tests__/review-prompts.live.test.ts`, live
+against the real shared dev/test Supabase project, not trusted from the
+report): 10/10 passed, 155s, including both `canRender` directions
+(plan+cohort gate, and a real `analytic_config.enabled=false` kill switch
+toggled live) — output matches the tester's claims exactly, re-derived,
+not re-quoted.
+
+**2. `review_prompts` write path / `withServiceRoleConnection` — PASS.**
+`review-prompts-repository.ts:77-113` — both the `DELETE ... where
+user_id = $1 and review_id = $2 and state = 'pending'` and every `INSERT`
+are parameterized on the caller-supplied `userId`/`reviewId` only, no
+value read from anywhere else, no string interpolation anywhere in the
+file. Allowlist entry (`lib/supabase/__tests__/service-role-inventory.test.ts`,
+lines 376-390) read directly against the actual code: its reasoning
+("`review_prompts` carries a real owner RLS policy but this write is the
+scheduled-job half of §4.10, no authenticated session at the call site,
+both the DELETE and every INSERT are explicitly parameterized on
+`userId`/`reviewId`") is accurate to what the file actually does, not a
+generic template — matches the file's own established per-entry style
+(compared directly against the `reviews-repository.ts` entry immediately
+above it). Re-ran the allowlist test myself:
+`npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts` —
+3/3 passed. Confirmed via `grep -rn withServiceRoleConnection lib/review/`
+that this slice introduces exactly one new service-role call site
+(`review-prompts-repository.ts`) and it is the one allowlisted — no
+omission.
+
+**3. Idempotent delete-pending-then-insert — PASS, no clobber/linkage-
+manipulation path found.** Read the DELETE/INSERT transaction directly:
+scoped to `state = 'pending'` only, matching ADR 0038 decision #5's claim
+exactly (never touches `accepted`/`declined`/`deferred`/`expired`). No
+code path in this slice ever sets `review_id` from anything other than
+the function's own `reviewId` parameter, and that parameter is only ever
+supplied by a caller that also supplies the matching `userId` — today the
+only caller is test code that derives both from the same
+`insertReview(user.id, ...)` call, matching the real (not-yet-built)
+scheduler's own per-user, per-iteration shape Sec 4.10 describes ("weekly
+job, PER USER, at period end"). No production code path exists today
+where an attacker- or client-supplied `reviewId` could reach this
+function — `computeAndWriteReviewPrompts` is not wired to any route,
+Server Action, or scheduler (confirmed: `grep -rn
+computeAndWriteReviewPrompts app/` returns nothing, consistent with
+Slice 3's own security review finding that the whole module is still
+pre-UI/pre-scheduler). One non-blocking observation for the future
+scheduler-wiring slice, not a gap in this slice: `writeReviewPrompts`
+does not itself verify `reviews.user_id = userId` for the given
+`review_id` before writing — it trusts the caller to pass a matched pair.
+This is safe today (no untrusted caller exists) and does not create a
+cross-user RLS bypass even if a mismatched pair were ever passed (RLS on
+`review_prompts`, when read by a real authenticated session, still scopes
+strictly by `review_prompts.user_id`, not by the linked review), but it
+would produce a data-integrity oddity (a `review_prompts` row whose
+`review_id` points to a different user's `reviews` row) if a future
+caller ever passed mismatched values. Flagging explicitly, per this
+repo's "don't let a gap go unrecorded" convention, as a defense-in-depth
+item for whoever wires the real scheduler: derive `reviewId` from the
+SAME `upsertWeeklyReview(userId, ...)` return value used for that
+iteration's `userId` (the natural, and only sane, implementation), or add
+an explicit `reviews.user_id = $userId` check inside the same transaction
+if that slice's author wants a second line of defense. Re-ran the
+tester's own idempotency and never-clobbers-a-decision live tests myself
+as part of the same suite run in item 1 above — both passed, confirmed
+against real inserted rows, not mocked.
+
+**4. Cross-user isolation on `review-prompts-repository.ts` and
+`review-prompts.ts` — PASS, SQL itself genuinely parameterized, not just
+a passing test.** `review-prompts-repository.ts`: both queries use `$1`/
+`$2`/positional placeholders exclusively, `JSON.stringify(candidate.evidence)`
+is passed as a bound parameter (`$7::jsonb`), never concatenated into the
+query string. `prompt-history-repository.ts`
+(`fetchPromptHistoryStateForUser`, `fetchMutedSubjectKeys`) —
+`withUserConnection(userId, ...)` (a genuine Postgres role/claims switch,
+per this repo's own established `lib/supabase/direct.ts` mechanism, not
+an application-layer trust assumption) plus an explicit `where user_id =
+$1` on both queries — real defense-in-depth on top of RLS, matching this
+repo's established pattern exactly. Independently re-ran the live
+cross-user-isolation test in item 1's suite run: two real users, two
+independent candidate sets, each user's written rows verified to contain
+only their own subject id, with an explicit `not.toContain` assertion
+against the other user's subject id string — passed.
+
+**5. Kind-priority-consumes-the-cap — assessed, not a security issue.**
+Confirmed the behavior directly in `ranking.ts:199-212`
+(`rankAndCapPromptCandidates` concatenates per-kind-ranked arrays in
+priority order, then slices the combined list) and re-ran
+`ranking.test.ts`'s adversarial coverage of it myself (25/25 passed,
+including the two tests the tester named at lines 336-381). This matches
+Sec 4.3's literal text ("ranked by kind priority, THEN by magnitude...
+capped at 3") and is not a fairness/starvation vulnerability in the
+security sense: there is no cross-user exploitation surface (a trader can
+only ever affect ranking within their OWN candidate set, never another
+trader's), and manufacturing enough relaxation-eligible noise to crowd
+out, say, a detection prompt would require genuinely breaking one's own
+real rules on 20+ real evaluations at a 40%+ rate for 6 real weeks
+(Sec 4.4's own eligibility gate) — that is not a cheap or free action to
+fake, it is the exact real behavior the relaxation prompt exists to
+surface, and doing it to suppress a detection costs the trader more real
+rule-breaking than any plausible benefit from suppressing one prompt kind
+for one week (prompts recur weekly; nothing is permanently suppressed by
+this mechanism — only `muted` status, driven by two real declines, does
+that, and mute is per-subject, not per-kind, so a trader cannot use
+ranking crowd-out to achieve a mute-equivalent effect for a specific
+detection). Product-fairness flag (not urgent), already correctly
+surfaced by the tester and the coder's own ADR — no additional security
+action needed.
+
+**6. Injection/parameterization sweep — PASS.** `ranking.ts` is pure,
+no I/O, no `client.query` calls at all — confirmed by direct read of all
+214 lines, nothing to inject. `review-prompts-repository.ts` and
+`prompt-history-repository.ts` (the two new/extended repository files):
+every `client.query` call uses `$n` placeholders exclusively; grepped both
+files for template-literal interpolation inside a query string — none
+found. No `eval`/`new Function`/dynamic SQL string construction anywhere
+in this slice's files.
+
+**7. `lib/review/**` importing `lib/rules/**` — PASS, no new import.**
+`git status`/`git log` confirm this slice's actual new/touched files are:
+`lib/review/review-prompts.ts` (new), `lib/review/review-prompts-repository.ts`
+(new), `lib/review/prompt-candidates/ranking.ts` (new),
+`lib/review/prompt-candidates/prompt-history-repository.ts` (modified,
+additive only), plus new test files and this ADR. Grepped all four for
+`lib/rules` imports — zero hits. Pre-existing `lib/rules` imports do exist
+elsewhere in `lib/review/**` (`period-adherence.ts`, `period-consistency.ts`,
+`promotion-candidates.ts`, `relaxation-candidates.ts`) but `git log
+--oneline -- <those files>` confirms none of them were touched by this
+slice (last touched by the Slice 2/3 commits, already reviewed at those
+gates) — this slice introduces no NEW `lib/rules` import.
+
+**8. Service-role allowlist entry plus test — PASS, independently
+verified, not trusted.** Covered fully in item 2 above: entry present,
+accurate, matches established per-entry style,
+`npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts`
+re-run by me, 3/3 passed.
+
+**RLS on the three tables this slice's write path touches — PASS,
+re-confirmed, not re-assumed.** `review_prompts`/`prompt_history`/`reviews`
+all have `enable row level security` plus one real owner `for all` policy
+each (`20260911020000_review_graduation_schema.sql` lines 80-95, 125-134,
+172-182 — read directly), and the dedicated cross-user-isolation test
+(`lib/supabase/__tests__/review-graduation-schema.rls.test.ts`, built at
+Slice 1, already gated then) covers all three at the schema level. This
+slice's own new code (`review-prompts-repository.ts`) uses
+`withServiceRoleConnection`, which bypasses RLS by design — the relevant
+new concern for THIS slice is application-level query scoping, covered in
+items 2-4 above, not RLS policy correctness itself (unchanged since
+Slice 1).
+
+**Full suite re-run, myself, live:** `npx vitest run
+lib/review/__tests__/review-prompts.live.test.ts` — 10/10 passed, 155s.
+`npx vitest run lib/review/prompt-candidates/__tests__/ranking.test.ts
+lib/review/prompt-candidates/__tests__/prompt-history-repository.test.ts`
+— 38/38 passed. `npx vitest run
+lib/supabase/__tests__/service-role-inventory.test.ts` — 3/3 passed. No
+regression found anywhere. Did not re-run the full repo-wide suite in one
+process (this session's own already-documented shared-host OOM risk
+running the full live suite concurrently) — targeted runs cover
+everything this slice's diff actually touches, consistent with the
+tester's own equivalent scoping decision.
+
+**Verdict: PASS, no blocking finding. Cleared for `retrospeq-qa` and
+commit.** The `canRender` gate closure Slice 3's own security review made
+a binding precondition on this slice is real, complete (every graduation/
+detection candidate passes through it, no bypass), and live-proven in
+both directions by my own independent re-run, not just read. The
+`review_prompts` write path is correctly service-role-scoped, allowlisted
+accurately, and the allowlist test passes. The idempotent delete-then-
+insert never touches a decided row and has no live cross-user-linkage
+exploitation path today (one non-blocking defense-in-depth note left for
+whoever wires the real scheduler, item 3 above). Cross-user isolation is
+genuinely enforced in the SQL itself, not just by a passing test. The
+kind-priority-consumes-the-cap behavior is a real, already-flagged
+product-fairness property, not a security vulnerability. No injection
+surface, no new `lib/rules` import, no credential handling in this
+module at all (out of scope for Module 06). qa should still weigh in on
+the kind-priority-crowd-out behavior from a product-non-negotiables angle
+(the tester's own explicit ask), separate from this security clearance.
+
+## 2026-09-12 -- Module 06 (Review & Graduation) Slice 4 -- QA REVIEW (FINAL GATE): PASS. Cleared to commit and push to main.
+
+Read docs/adr/0038-review-prompt-ranking-and-canrender-gate.md in full,
+06-review-and-graduation.md sections 4.3/4.5 myself, and independently re-read
+every new/touched file rather than trusting the coder/tester/security-
+reviewer chain's own summaries. Did not re-run the live suite myself
+(security-reviewer already independently re-ran it, 10/10 + 38/38 + 3/3,
+2026-09-12) -- read the code directly against the claims instead.
+
+1. Section 4.3 kind-priority table -- PASS, matches exactly. ranking.ts
+lines 199-206 (rankAndCapPromptCandidates) concatenate in the order
+relaxation -> graduation -> detection (already single-capped) -> promotion ->
+retirement (decay-before-condition), then slice to 3. This is a
+byte-for-byte match to section 4.3's table (Relaxation 1, Graduation 2, Detection
+3, Promotion 4, Retirement 5). On the flagged behavioral property (a
+high-priority kind with 3+ candidates can consume the whole cap before a
+lower kind competes): formed my own view independently -- section 4.3's own
+algorithm block is written as two sequential steps ("ranked by kind
+priority, THEN by magnitude within kind... capped at 3"), not "one slot
+reserved per kind" or "top-N per kind, then merge" -- the spec's own prose
+names kind as the primary sort key over the combined list, not a quota
+mechanism. Section 4.3's "why here" column also reads as a strict precedence
+ordering by urgency-class ("most urgent" / "can wait" / "housekeeping"),
+consistent with a stack-rank, not a round-robin. I agree with the tester
+and security-reviewer: this is what the spec specifies, not an accidental
+side effect. It is a real product-shape fact worth product attention
+someday (three legitimate relaxation candidates in one week -- itself
+requiring 6 real weeks of 40%+ drift on 3 separate rules simultaneously,
+a genuinely rare and already-costly-to-manufacture condition per the
+security reviewer's own analysis -- could crowd out a graduation) but not
+a defect in this slice, and already correctly flagged three times over
+(coder's ADR, tester, security-reviewer) rather than silently shipped.
+No action needed beyond what is already recorded.
+
+2. Section 4.5 decline handling -- PASS on both sub-questions.
+filterDormant (prompt-history-repository.ts lines 140-151):
+`occurrenceCount(c.evidence) >= entry.occurrencesAtLastDecline * 2` -- a
+literal ">= 2x" reading. Checked this is neither too strict (does not
+require exactly 2.0; anything at or above double clears it, so a
+2.3x or 5x increase also correctly re-raises, not just an exact double)
+nor too loose (a 1.9x increase does NOT clear it -- genuinely requires the
+count to have doubled, not just trended up). This is a reasonable,
+literal, defensible reading of "roughly double" -- it does not manufacture
+false precision (no attempt to fuzz the threshold down to, say, 1.8x to
+be "rough") and does not gut the rule into meaninglessness (no ">1x" or
+similar). Null-snapshot default -- confirmed fail-safe, not fail-open:
+line 148, `if (entry.occurrencesAtLastDecline === null) return false` --
+an unverifiable-doubling candidate is EXCLUDED (stays dormant), matching
+the same "cannot verify -> do not show" posture canRender itself uses
+elsewhere in this codebase. Read the reasoning in ADR 0038 decision 3
+and the file's own header -- both correctly frame this as "respecting a
+decline costs nothing; re-raising on unverifiable data is the real
+failure mode" rather than an unexamined default. Per-kind occurrence
+measures (the ADR's table) each map to the evidence field the ADR's own
+per-kind reasoning claims -- spot-checked against applyDormancy
+(review-prompts.ts lines 89-98): brokenEvaluations (relaxation), n
+(graduation), followedEvaluations (promotion), consecutiveDecayChecks
+(retirementDecay), recordedEvaluations (retirementCondition),
+occurrences (detection) -- all six match the ADR's table exactly, no
+drift between the documented decision and the shipped code.
+
+3. canRender gate closure -- independently confirmed, not trusted from
+either prior PASS. Read review-prompts.ts lines 60-136 directly.
+filterByCanRender<GraduationEvidence>/filterByCanRender<DetectionEvidence>
+are called on all.graduation/all.detection (the full Slice-3 output,
+before dormancy or ranking) at lines 123-126, with surface: 'weekly'
+passed to canRender at line 73. Grepped lib/review for canRender --
+exactly one call site, exactly this one. Grepped for writeReviewPrompts
+-- exactly one caller, computeAndWriteReviewPrompts itself, so there is
+no second path into review_prompts that could skip the gate. Confirmed
+'weekly' is the correct surface by reading weekly-findings.ts line
+208 -- identical literal string, identical reasoning (this ranking/write
+IS section 4.10 step 4 of the same weekly job). This genuinely closes the
+precondition Slice 3's security review left open (2026-09-11 entry) -- a
+suppressed, wrong-plan, or wrong-cohort analytic can no longer reach a
+review_prompts row via graduation or detection. Confirmed (by reading
+each evidence interface directly, not assuming symmetry) that
+relaxation/promotion/retirementDecay/retirementCondition evidence
+types carry no analyticId field at all, so ADR 0038's claim that
+canRender has nothing to check for those four kinds is correct.
+
+4. No UI, no prompt_history writes -- PASS, matches declared scope
+exactly. git status --porcelain confirms the actual diff: new files
+docs/adr/0038-*.md, lib/review/__tests__/review-prompts.live.test.ts,
+lib/review/prompt-candidates/__tests__/ranking.test.ts,
+lib/review/prompt-candidates/ranking.ts,
+lib/review/review-prompts-repository.ts, lib/review/review-prompts.ts;
+modified PROGRESS.md, docs/runbook.md,
+lib/review/prompt-candidates/__tests__/prompt-history-repository.test.ts,
+lib/review/prompt-candidates/prompt-history-repository.ts,
+lib/supabase/__tests__/service-role-inventory.test.ts. Grepped for
+"insert into.*prompt_history|update.*prompt_history" across lib/ --
+the only matches are inside review-prompts.live.test.ts (test-fixture
+setup/cleanup: a delete from ... prompt_history before each test and a
+direct insert to seed a fixture's decline state), never in production
+code. Grepped app/ for review_prompts -- zero hits, confirming no
+consuming UI exists anywhere in this repo, matching ADR 0038 decision 4's
+own stated scope boundary.
+
+5. Section 4.8 expiry gap -- PASS, honestly tracked, not silently dropped.
+ADR 0038's Consequences section states explicitly: "Section 4.8's... expire
+silently is explicitly NOT built this slice -- no code anywhere sets
+review_prompts.state = 'expired'... a real requirement for whichever
+slice first gives this table a production write path via a real
+scheduler." Grepped for 'expired' across lib/review -- no write path
+sets it, confirming the claim. Correctly NOT given its own separate
+runbook entry (the coder's own reasoning -- moot today since nothing
+writes real rows yet -- is sound; a runbook alerting entry for a
+condition that cannot yet occur would be premature noise, not diligence).
+Tracked in the right place (ADR Consequences), which is where a
+not-yet-applicable future requirement belongs.
+
+6. PROGRESS.md decision-log chain -- PASS, internally consistent.
+Read all three entries (coder "CODED", tester "TESTER PASS", security-
+reviewer "SECURITY REVIEW: PASS") end to end. Each accurately describes
+what the next reader found: the coder's self-check claims match the
+tester's independent re-verification (7/7 throwaway unit + 2/2 throwaway
+live, later superseded by the tester's own 25+38+10 permanent tests); the
+tester's flagged kind-priority-crowd-out property is picked up and given
+its own independent security assessment (item 5 in that entry) rather
+than being dropped; the security-reviewer's one non-blocking scheduler-
+wiring note (writeReviewPrompts trusts the caller's userId/reviewId
+pairing) is recorded as a note for a future slice, not misrepresented as
+resolved now. No entry overstates what was actually done (all three are
+explicit about what was NOT re-run or NOT in scope). File list in each
+entry matches git status as of this review.
+
+7. Documentation -- PASS. docs/adr/0038 is complete, not a
+placeholder: five numbered decisions, each with its own reasoning, a
+rejected alternative, and a Consequences section that honestly names both
+the still-open scheduler gap and the un-built section 4.8 expiry. docs/runbook.md's
+extended entry (lines 2001-2018) is accurate to the shipped code -- it
+correctly generalizes the existing "no deployed scheduler" entry rather
+than duplicating it, and adds a genuinely new, correctly-described risk
+(no per-user try/catch around computeAllPromptCandidates/
+fetchPromptHistoryStateForUser) that I confirmed by reading
+review-prompts.ts lines 118-121 directly -- Promise.all with no
+surrounding try/catch, so the described propagation risk is real, not
+overstated.
+
+8. Standard non-negotiables -- PASS, all N/A or clean. No currency/XP
+anywhere in this slice (grepped ranking.ts, review-prompts.ts,
+review-prompts-repository.ts, prompt-history-repository.ts -- none).
+No compound (AND/OR) rule logic -- this slice's sort comparators rank
+candidates by evidence fields, they do not evaluate or compose rule
+expressions; the {operand_id, op, value} rule schema itself is
+untouched by this diff. No red/green or hardcoded color -- backend-only,
+no UI, correctly N/A (confirmed via git status: zero .css/.tsx
+files touched). .rq-num/design-system rules -- correctly N/A, nothing
+renders in this diff.
+
+9. Performance -- PASS, no obvious budget-breaker. filterByCanRender
+caches by analyticId (a Map, populated once per unique id) rather
+than calling canRender once per candidate, avoiding an N+1-per-candidate
+pattern when multiple candidates share an analytic. fetchPromptHistoryStateForUser
+and fetchMutedSubjectKeys are each one query for the whole user, not
+per-candidate. ranking.ts is pure in-memory sorting over small arrays
+(at most a handful of candidates per kind) -- no realistic budget concern
+against the weekly-review-open <2s target, and this function isn't
+even in that request path yet (no scheduler wired).
+
+Verdict: PASS. Cleared to commit and push to main. All three prior
+gates' findings are accurate and independently re-confirmed here, not
+just trusted. The canRender closure is real and complete. The dormancy
+doubling rule and its null-default are reasonable, fail-safe judgment
+calls, correctly documented. The kind-priority-crowd-out behavior is
+genuinely spec-intended, not a bug, and has now been independently
+assessed three times (tester, security-reviewer, qa) with the same
+conclusion. Scope boundaries (no UI, no prompt_history write, no section 4.8
+expiry) are honestly tracked, not silently skipped. Documentation
+(ADR 0038, runbook) is complete and accurate to what shipped. No
+non-negotiable violation. This slice is cleared for the orchestrating
+session to commit and push to main immediately, per this project's
+Autonomy policy -- no further human review gate applies.

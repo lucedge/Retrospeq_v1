@@ -1998,6 +1998,25 @@ week over week) against a live project with real trading activity is
 the expected, correct state — not a symptom — for exactly as long as no
 scheduler exists.
 
+**UPDATE (Module 06 Slice 4, 2026-09-12):** the same "no deployed
+scheduler" gap now also covers `lib/review/review-prompts.ts`'s
+`computeAndWriteReviewPrompts` — §4.10 step 4/5 ("compute prompt
+candidates, rank, cap at 3... write reviews + review_prompts"), built this
+slice, is likewise callable directly but wired into no cron/queue anywhere.
+`select count(*) from retrospeq.review_prompts` staying at 0 is the same
+kind of expected-not-symptomatic state this entry already describes for
+`reviews`. One additional failure-propagation risk for whichever slice
+wires the real scheduler: `computeAndWriteReviewPrompts` does NOT wrap its
+own `computeAllPromptCandidates`/`fetchPromptHistoryStateForUser` calls in
+a per-user try/catch — a genuine failure in either (e.g. a dead DB
+connection) propagates as a thrown rejection out of the whole function,
+identical to `assembleWeeklyReadPayload`'s own already-documented gap two
+paragraphs above. The real scheduler MUST wrap each user's own
+`upsertWeeklyReview` + `computeAndWriteReviewPrompts` pair in its own
+try/catch so one user's failure can never block another's weekly batch —
+flagged here so that slice does not skip it, matching this entry's own
+existing convention for the sibling function.
+
 ---
 
 ## Promotion-candidate check failed for an individual rule during prompt-candidate computation

@@ -373,6 +373,21 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // file's own "added in the same commit/review that introduces the
   // call" cautionary note.
   'lib/review/reviews-repository.ts',
+  // Module 06 (Review & Graduation) Slice 4, §3/§4.3/§4.10 write:
+  // `writeReviewPrompts` (`lib/review/review-prompts-repository.ts`)
+  // persists the ranked/capped prompt set into `review_prompts`.
+  // `review_prompts` carries the same owner "for all" RLS shape as
+  // `reviews` (a trader can later accept/decline/defer their own prompts),
+  // but THIS write is the identical scheduled-job half of §4.10 that
+  // `reviews-repository.ts`'s own allowlist entry above already documents
+  // -- no authenticated session exists at the call site. Both the DELETE
+  // (clearing this review's own stale pending rows) and every INSERT are
+  // explicitly parameterized on the caller-supplied `userId`/`reviewId`
+  // (`$1`/`$2`), never a value read from anywhere else. Added to this
+  // allowlist in the same commit that introduces the call, per this file's
+  // own "added in the same commit/review that introduces the call"
+  // cautionary note -- pending this slice's own security-reviewer gate.
+  'lib/review/review-prompts-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {
