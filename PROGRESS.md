@@ -31,7 +31,7 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-12, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 4 -- RANKING, THE 3-PER-WEEK CAP, AND THE review_prompts WRITE -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11/2026-09-12 Decision-log entries, search "Module 06" and "Slice 4"). Ranks section 4.3's five candidate kinds (Relaxation > Graduation > Detection > Promotion > Retirement, magnitude within kind, single-detection cap, 3-per-review cap), filters by section 4.5's dormancy/mute rules against `prompt_history`, and writes the ranked result into `review_prompts` -- the module's first real write to that table. **Closes a hard, explicitly-tracked precondition from Slice 3's own security review**: `graduation-candidates.ts`/`detection-candidates.ts` previously skipped the plan/cohort `canRender` gate, ruled safe to defer only until something actually consumed those lists -- this slice is that consumer, and the tester proved live, in both directions, that a plan-gated or kill-switched candidate is correctly excluded from the final written output. One real behavioral property confirmed intentional, not an accidental side effect: a high-priority kind with 3+ qualifying candidates can consume the entire cap before a lower-priority kind ever competes -- this is a literal, correct reading of section 4.3's two-step "rank by kind, then by magnitude, then cap" algorithm, independently concurred by tester, security-reviewer, and qa. **This closes Module 06 Slice 4.** Still unbuilt and honestly tracked (docs/adr/0038's Consequences section, docs/runbook.md): section 4.8's 4-week pending-prompt expiry, any accept/decline UI (so `prompt_history` still has zero writers), and the production scheduler that would actually invoke this whole pipeline periodically. Module 06 remains a large, multi-slice module -- still unbuilt beyond the above: all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view. Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
+**AT A GLANCE (2026-09-13, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 5 -- WEEKLY REVIEW PART 1 UI -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full chain, two real fix cycles, all dated 2026-09-12/2026-09-13 (search "Module 06" and "Slice 5"): coder -> tester (found a real date-format bug, "Week of July 21" instead of the spec's day-first "Week of 21 July") -> coder-fix (locale corrected to en-GB, matching existing house-style precedent) -> security-reviewer (found a real gap: the compute-on-view path -- 4 parallel reads plus 2 transactional writes per request -- had zero rate limiting, the one page-load path in the repo without one, FAIL) -> coder-fix (new `weeklyReview` rate-limit scope, deliberately tighter than sibling read-only precedents given the real cost difference, routed through a new `app/(app)/review/actions.ts` matching `rules`/`strategies`' own established pattern) -> security-reviewer re-verification (PASS, confirmed via repo-wide grep that no bypass path to the underlying compute functions exists) -> qa (PASS). New route `/review` renders section 5.1's Part 1 read screen -- outcome (R-multiple, never celebrated), Consistency/Adherence/Findings panels (findings capped at 3, reusing Module 03's exact `.finding` markup), and an honestly-disabled "N decisions"/"Week closed" button (Part 2/3 don't exist yet). **The real architecture answer to the missing-scheduler gap**: since no cron/scheduled-job infra is deployed, this screen computes and materializes a review synchronously on first view rather than assuming a background job already ran -- documented in `docs/adr/0039`, with the `completed_at` freeze (once a trader marks a review done, it's never silently recomputed/overwritten) proven live by the tester. **This closes Module 06 Slice 5.** Still unbuilt: Part 2 (decisions -- accept/decline/defer, needs `prompt_history` writes), Part 3 (close), deferral/backlog, the monthly trend view, section 4.8's 4-week prompt expiry, and the production scheduler that would eventually replace this slice's own compute-on-view mitigation. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11/2026-09-12 Decision-log entries, search "Module 06" and "Slice 4"). Ranks section 4.3's five candidate kinds (Relaxation > Graduation > Detection > Promotion > Retirement, magnitude within kind, single-detection cap, 3-per-review cap), filters by section 4.5's dormancy/mute rules against `prompt_history`, and writes the ranked result into `review_prompts` -- the module's first real write to that table. **Closes a hard, explicitly-tracked precondition from Slice 3's own security review**: `graduation-candidates.ts`/`detection-candidates.ts` previously skipped the plan/cohort `canRender` gate, ruled safe to defer only until something actually consumed those lists -- this slice is that consumer, and the tester proved live, in both directions, that a plan-gated or kill-switched candidate is correctly excluded from the final written output. One real behavioral property confirmed intentional, not an accidental side effect: a high-priority kind with 3+ qualifying candidates can consume the entire cap before a lower-priority kind ever competes -- this is a literal, correct reading of section 4.3's two-step "rank by kind, then by magnitude, then cap" algorithm, independently concurred by tester, security-reviewer, and qa. **This closes Module 06 Slice 4.** Still unbuilt and honestly tracked (docs/adr/0038's Consequences section, docs/runbook.md): section 4.8's 4-week pending-prompt expiry, any accept/decline UI (so `prompt_history` still has zero writers), and the production scheduler that would actually invoke this whole pipeline periodically. Module 06 remains a large, multi-slice module -- still unbuilt beyond the above: all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view. Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
 
@@ -25810,3 +25810,1275 @@ expiry) are honestly tracked, not silently skipped. Documentation
 non-negotiable violation. This slice is cleared for the orchestrating
 session to commit and push to main immediately, per this project's
 Autonomy policy -- no further human review gate applies.
+
+## 2026-09-12 -- Module 06 (Review & Graduation) Slice 5 -- weekly review Part 1 "the read" UI, compute-on-view, current-period selection -- CODED, not yet tested/reviewed
+
+Read AGENTS.md in full, `06-review-and-graduation.md` sec 4.2/4.8/5.1/6.1
+in full, `retrospeq-design-decisions.md` for anything touching review
+scheduling (nothing new found beyond what ADR 0036/0037/0038 already
+cite), and every Slice 1-4 file this slice builds directly on
+(`weekly-read-payload.ts`, `reviews-repository.ts`, `review-prompts.ts`,
+`review-prompts-repository.ts`, `week-boundary.ts`) before writing
+anything, per this repo's own standing discipline.
+
+**Scope, matching this slice's own dispatch exactly: Part 1 "the read"
+screen ONLY.** Not Part 2 (decisions -- accept/decline/defer, needs
+`prompt_history` writes -- explicitly not built), not Part 3 (close, no
+`completed_at` writer exists anywhere in this repo, confirmed by grep
+before writing code), not deferral/backlog, not the monthly trend view
+(sec 4.9). The "N decisions" / "Week closed" button renders correctly per
+sec 5.1 but is a genuinely disabled `.rq-btn` with an honest caption
+("Decisions and closing out this review aren't available yet.") -- it
+does not link anywhere, because nowhere exists yet to link to. This is
+the ONE real, closest-to-a-shortcut call this slice made, and it is
+disclosed here rather than silently shipped as if it worked.
+
+**The real architecture question this slice was dispatched to resolve --
+resolved, documented in `docs/adr/0039-weekly-review-compute-on-view-and-
+current-period.md`:**
+
+1. **Compute-on-view.** When a trader opens `/review` for a period with
+   no `reviews` row yet, or one not yet `completed_at`, the Server
+   Component calls `assembleWeeklyReadPayload` -> `upsertWeeklyReview` ->
+   `computeAndWriteReviewPrompts` synchronously, in-request, before
+   rendering -- reusing the exact three already-reviewed Slice 2/4
+   functions verbatim, adding a fourth real caller (a page view)
+   alongside "a future scheduler," not a parallel/divergent path. This is
+   NOT the "fake trigger" pattern `NEEDS_YOUR_INPUT.md`'s own scheduler
+   entry explicitly warned against (no `setInterval`, nothing piggybacked
+   onto an unrelated handler like trade-confirm) -- it runs only on the
+   one page whose entire job is showing this exact data, when the one
+   person who could act on it is already there. Recompute TRIGGER is
+   "not yet `completed_at`", not a `computed_at`/`period_end` timestamp
+   comparison -- ADR 0039 decision 2 explains why the literal
+   timestamp-comparison framing in this slice's own dispatch can never
+   actually fire in this architecture (every `computed_at` this repo
+   writes is, by construction, already after its own `period_end`), and
+   why "has the trader formally closed this yet" is the real signal.
+2. **Current-period selection** (`lib/review/current-period.ts`,
+   `determineCurrentWeeklyReviewPeriod`): finds the most recently ENDED
+   ISO week (Monday start, matching Module 04/07's own established
+   convention), advances past whatever the trader has already completed
+   (reads `fetchLatestCompletedWeeklyReviewPeriodEnd`, a real new
+   `withUserConnection` read added to `reviews-repository.ts`), and
+   produces either `{status: 'ready', periodStart, periodEnd}` (spanning
+   more than one week if a review was missed, sec 4.8's "covers two") or
+   `{status: 'caught_up', nextPeriodStart}` when the trader is already
+   current. A brand-new trader's first-ever review is deliberately just
+   the most recently ended week alone -- NOT backdated to signup, per
+   sec 4.8's own "does not compound... feels like homework" warning.
+   `status: 'caught_up'` is honestly documented as UNREACHABLE today
+   (nothing sets `completed_at` anywhere yet) -- implemented correctly
+   anyway because the other two branches cannot be written honestly in
+   isolation from it.
+3. **Route naming**: `/review` (`app/(app)/review/page.tsx`), not
+   `/review/weekly` -- ADR 0039 decision 4 has the full reasoning (no
+   naming collision to disambiguate against; every other top-level route
+   in this app names a concept, not a cadence; Part 2/3 are the same flow
+   continuing from this screen, not a reason to rename it now).
+
+**Entitlement**: `lib/entitlements/capability-table.ts` has no capability
+named for reviews. `streak`/`adherence` (the two Module 07/04 sources
+this screen reads) are both already `{free: true, pro: true}`, and
+Module 05's own findings pipeline already degrades honestly per-analytic
+via `canRender` (`weekly-findings.ts`, untouched by this slice). Treated
+as available to every plan, matching `/strategies`' own documented
+"view is not plan-gated, individual pieces degrade honestly instead"
+posture -- no new capability added because none of the four panels
+needs one; Part 2's existing `graduation` capability
+(`{free: false, pro: true}`) is the natural future gate for the
+DECISIONS this screen's button defers to, not this read-only screen.
+
+**New files:**
+
+- `lib/review/current-period.ts` -- `determineCurrentWeeklyReviewPeriod`,
+  pure logic plus one repository read, described above.
+- `app/(app)/review/page.tsx` -- the Server Component. Auth check
+  (matching `/strategies`' own established fallback for an expired
+  session), current-period selection, compute-on-view with a single
+  try/catch around the whole three-call chain (never a partial render --
+  sec 9's `REVIEW_NOT_READY`: "Your review is being prepared. Please try
+  again in a moment." on ANY failure, full stop), then four panels
+  (Outcome headline, Consistency, Adherence, Findings) plus the
+  decisions/close button. `.finding`/`.finding__statement`/
+  `.finding__meta` markup and CSS reused VERBATIM from
+  `strategies/[id]/page.tsx`'s own established `FindingCard` -- ADR 0039
+  decision 6 explains why this is a small local duplicate rather than a
+  shared component (no `components/` directory exists anywhere in this
+  repo yet; extracting one would mean touching an already-fully-gated
+  Module 03 file for a slice scoped to Module 06). A zero-findings result
+  (true for every real trader today -- no strategies exist without
+  Module 08 onboarding, matching `/strategies`' own documented posture)
+  renders sec 5.1's own zero-prompt-week reference markup's exact single
+  "Not enough data yet." line, reused rather than reinvented (ADR 0039
+  decision 5).
+- `app/(app)/review/format.ts` -- `formatReviewPeriodLine` ("Week of 21
+  July" for a single week; a date range for a `covers_weeks > 1`
+  catch-up review) and `fractionTrend` (the Adherence panel's "up from
+  X of Y" direction word -- text only, no colour, per AGENTS.md's
+  "direction is geometry ... never hue").
+
+**Extended, additively, no existing behaviour changed:**
+
+- `lib/review/reviews-repository.ts` -- two new reads,
+  `fetchLatestCompletedWeeklyReviewPeriodEnd` and
+  `fetchWeeklyReviewByPeriodStart` (the latter returning the stored
+  `read_payload` too, for the -- currently unreachable -- completed-
+  review branch). Both `withUserConnection`, not
+  `withServiceRoleConnection` like every write in this file: these run
+  inside a real authenticated page view, so RLS is a real, available
+  defense-in-depth layer here, matching every other page-level read in
+  this repo. No allowlist entry needed (allowlist only tracks
+  `withServiceRoleConnection` call sites).
+- `lib/review/review-prompts-repository.ts` -- one new read,
+  `fetchPendingPromptCount`, same `withUserConnection` reasoning, for the
+  button's "N decisions" count in the (currently unreachable) already-
+  completed-review branch; the common, real-today path gets the count
+  for free from `computeAndWriteReviewPrompts`'s own return value
+  (`written.length`), no extra query needed.
+
+**Self-check performed (throwaway, deleted after use, per this repo's
+"testing is retrospeq-tester's job" convention -- not a substitute for
+that gate):**
+
+1. `npx tsc --noEmit` -- clean, zero errors.
+2. `npx eslint` on every new/touched file -- clean, zero warnings/errors.
+3. `npm run check:import-boundaries` -- 0 violations (104 modules/266
+   deps, unaffected by this slice's `lib/review`/`app/(app)/review`-only
+   changes).
+4. `npx vitest run lib/review --exclude '**/*.live.test.ts'` -- 9 files,
+   83 tests, all still passing (no Slice 1-4 test touched or regressed by
+   this slice's additive changes).
+5. `npm run build` -- clean, Turbopack, all 29 routes compiled
+   successfully, `/review` correctly listed as a new dynamic route.
+6. **Live-DB screenshot self-check, both required states, against the
+   real shared dev Supabase project (ADR 0002)** -- a throwaway
+   `e2e/_tmp-review-selfcheck.spec.ts` (real GoTrue admin-created
+   confirmed users, real `/login` form, deleted after use):
+   - **Zero-prompt week**: a brand-new signup, ZERO seed data of any
+     kind. `tmp/dev-screenshots/review-zero-prompt-week.png` -- renders
+     "0 trades . 0 days . 0.0R" (honest zero, not an error), "No trading
+     days this week." / "Streak not started yet.", "Not enough data
+     yet." for Adherence, the exact sec 5.1 zero-prompt findings line,
+     and a genuinely disabled "Week closed" button (0 pending prompts --
+     matches sec 4.3's "most weeks should have zero prompts" being the
+     literal, real, first-ever-review outcome for this fixture, not
+     staged).
+   - **Populated week, real decision pending**: same user shape but with
+     real seeded trades (confirmed, real `r_multiple`), a real
+     `adherence_weekly` row, a real `week_completeness` row, a real
+     `engagement_state` streak, AND one real, genuinely-qualifying
+     `detections` row (a dedicated test-only `analytic_id`, its own
+     `analytic_config` row -- enabled/free/no-cohort, not touching any of
+     the 5 shared seeded ids) -- confirms the compute-on-view path
+     genuinely runs the REAL Slice 3/4 pipeline
+     (`computeAllPromptCandidates` -> `canRender` -> `filterDormant` ->
+     `rankAndCapPromptCandidates` -> `writeReviewPrompts`), not a stub:
+     `tmp/dev-screenshots/review-populated-decisions-pending.png` shows
+     "4 trades . 4 days . +1.4R", "4 of 4 days closed out.", "4-week
+     streak intact.", "Hard rules: 12 of 12.", "Soft: 27 of 30.", and the
+     button correctly reading "1 decision" (singular, correct grammar,
+     matching the real single written `review_prompts` row). Read both
+     PNGs myself with the Read tool, not just asserted from test output.
+     One real timing artifact hit and fixed during this check, worth
+     recording: the FIRST populated-week screenshot attempt raced ahead
+     of full CSS/hydration (page rendered with the browser's default,
+     unstyled fonts/layout) -- not a code bug, confirmed by adding
+     `waitForSelector('#review-h')` + a short settle wait before the
+     screenshot, which reproduced a fully-styled, correct render on
+     retry. Flagging so a future screenshot self-check on this route
+     doesn't mistake the same race for a real regression.
+   - Confirmed directly in both screenshots: exactly one `.rq-btn` per
+     view (the single decisions/close button, visibly desaturated/
+     disabled -- same amber-at-lower-opacity convention this repo's
+     close-out screen already established for a genuinely-disabled
+     primary action, never a semantic red); `.rq-num` on every real
+     number (trade/day/R counts, consistency fractions, adherence
+     fractions, streak weeks); no red/green anywhere; the "0.0R"/"1.4R"
+     visual letter-spacing (looks like "0 . 0R" at a glance) is a
+     PRE-EXISTING design-system trait (`.rq-num`'s own
+     `letter-spacing: var(--rq-track-snug)` token, confirmed identical in
+     `trades-list.png`'s already-shipped "+1.8R"/"-0.4R"), not something
+     this slice introduced.
+   - Real cleanup performed after: deleted all seeded `retrospeq.*` rows
+     plus both real auth users via the admin API. One real, load-bearing
+     bug found and fixed IN MY OWN THROWAWAY CLEANUP SCRIPT during this
+     check, not in shipped product code: my first cleanup attempt called
+     the GoTrue admin delete endpoint directly without first setting
+     `retrospeq.erasure_in_progress` and deleting the `profiles` row
+     myself (the pattern `lib/supabase/__tests__/rls-test-helpers.ts`'s
+     own `deleteTestAuthUser` already established correctly) -- the
+     derived-field immutability trigger (Module 03 sec 3.2) correctly
+     rejected the resulting cascade delete (`23514`, "can never be
+     deleted outside of account erasure"), leaving 5 orphaned test users
+     with their profiles/derived-fields intact. Diagnosed via a direct
+     manual admin-delete call reproducing the real `23514` error, then
+     cleaned up for real (`erasure_in_progress` + explicit `profiles`
+     delete, then admin delete) -- confirmed 0 leftover test users
+     afterward. Not a product bug (this repo's own established test
+     helper already has the correct pattern; my own throwaway script
+     just didn't reuse it) -- flagging for whoever writes the permanent
+     E2E spec for `/review` to reuse `deleteTestAuthUser` from
+     `rls-test-helpers.ts` rather than hand-rolling cleanup again.
+
+**Documentation:**
+
+- `docs/adr/0039-weekly-review-compute-on-view-and-current-period.md` --
+  new. Compute-on-view, the recompute trigger, current-period selection,
+  route naming, the findings-empty-state reuse, and the local-vs-shared
+  `FindingCard` duplication -- six numbered decisions, one rejected
+  alternative, a Consequences section naming both the still-real
+  scheduler gap and the two genuinely-untested-today code branches
+  (`caught_up`, the completed-review read path).
+- `docs/runbook.md` -- extended the existing "Weekly review
+  materialisation has no deployed scheduler yet" entry (not a new entry
+  -- this is the same standing gap, now with a real mitigation and one
+  genuinely new failure mode layered on top): corrected the stale "count
+  staying at 0 is expected" claim (no longer true once real traffic
+  hits `/review`), and documented the new
+  `[review/page] compute-on-view failed:` log-grep alerting pattern for
+  a synchronous compute failing mid-request.
+- `NEEDS_YOUR_INPUT.md` -- updated (not removed -- the underlying
+  scheduler blocker is NOT cleared) the existing scheduler entry to
+  describe the compute-on-view mitigation honestly: what it does solve
+  (the read screen works today), what it explicitly does NOT solve (a
+  trader who never opens the app still gets nothing computed; the
+  sec 4.10 step 6 notification still can never fire), and why this is
+  not the same "fake trigger" pattern that entry's own "why an agent
+  can't fix this" paragraph already rejected.
+
+**NOT done. This slice is CODED and self-checked only.** Per this
+dispatch's own explicit instruction, this needs the full
+`retrospeq-tester` -> `retrospeq-security-reviewer` -> `retrospeq-qa`
+chain before it can be committed or pushed -- none of that has happened
+yet, and this coder has not committed or pushed anything. Files touched
+this session, all uncommitted (confirmed via `git status --porcelain`):
+new -- `app/(app)/review/page.tsx`, `app/(app)/review/format.ts`,
+`lib/review/current-period.ts`,
+`docs/adr/0039-weekly-review-compute-on-view-and-current-period.md`;
+modified, additive only -- `lib/review/reviews-repository.ts`,
+`lib/review/review-prompts-repository.ts`, `docs/runbook.md`,
+`NEEDS_YOUR_INPUT.md`, this file. No file from any prior Module 06 slice
+was modified in a way that changes its own already-reviewed behaviour --
+confirmed by re-reading every touched-file diff before writing this
+entry, not assumed.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- TESTER GATE: PASS on architecture/RLS/cross-user-isolation, with ONE real, specific, blocking FAIL (design-system copy-fidelity bug). NOT ready for security-reviewer until fixed.
+
+Read `00-foundation.md` §9, this module's own §7 test plan, ADR 0039 in
+full, and `06-review-and-graduation.md` §4.2/§4.8/§5.1 myself before
+writing anything, per this dispatch's own instruction. Scope: the coder's
+Slice 5 diff only (`app/(app)/review/page.tsx` + `format.ts`,
+`lib/review/current-period.ts`, the three additive repository reads) --
+zero permanent test coverage existed for any of it before this gate (the
+coder's own self-check was a throwaway script, deleted after use, per its
+own PROGRESS.md entry).
+
+**New test files, all committed to the repo (not thrown away):**
+
+- `lib/review/__tests__/current-period.test.ts` (6 tests, mocked repo
+  read) -- every §4.8 scenario from the dispatch's own item 2, each with a
+  concrete date fixture: brand-new user (no backdating to signup), a
+  trader who reviewed normally last week (single-week next period), a
+  trader who missed exactly one review (`covers_weeks = 2`, 14-day span
+  confirmed by direct day-count arithmetic, not just a snapshot), the
+  `caught_up` boundary (exact-equality case), and a check that the
+  in-progress week is never selected regardless of how late in it "now"
+  falls. All 6 pass.
+- `app/(app)/review/__tests__/format.test.ts` (9 tests) -- `fractionTrend`
+  fully covered (5/5 pass). `formatReviewPeriodLine`: **4 of 4 tests
+  FAIL** -- see the blocking finding below.
+- `app/(app)/review/__tests__/page.test.ts` (7 tests) -- item 1's own
+  adversarial ask, met head-on: calls the real exported Server Component
+  function directly (this repo's own established pattern for testing a
+  Server Component without a testing-library dependency, per
+  `app/(app)/__tests__/layout.test.ts`), with every data source mocked,
+  rendered to static HTML via `react-dom/server` and asserted on actual
+  text content. Proves, with every data source under my own control:
+  no-row-yet genuinely calls `assembleWeeklyReadPayload` ->
+  `upsertWeeklyReview` -> `computeAndWriteReviewPrompts` in that order and
+  renders the FRESH result; a row with `completedAt === null` still
+  recomputes (ignoring its own stale stored payload); **the adversarial
+  case -- a row with `completed_at` already set -- calls NONE of the three
+  recompute functions and renders the stored payload byte-for-byte,
+  never the fresh mocked (implausible, deliberately-different) numbers**;
+  `caught_up` renders the steady-state copy and touches no compute/read
+  function at all; a synchronous compute failure renders ONLY the
+  `REVIEW_NOT_READY` copy, never a half-built panel; no signed-in user
+  renders the session-expired fallback; and every downstream call is
+  scoped to the real session's own `user.id`, never any other value (the
+  page reads no query param, cookie, or route segment that could smuggle
+  a different id in -- confirmed by re-reading the full file, not
+  assumed). All 7 pass. **Item 1 and item 6 (cross-user isolation on
+  compute-on-view) are both fully closed by this file at the code layer.**
+- `lib/review/__tests__/reviews-repository.slice5.live.test.ts` (11
+  tests, real shared dev/test Postgres, real GoTrue users, real cleanup) --
+  the three new `withUserConnection` reads this slice added
+  (`fetchLatestCompletedWeeklyReviewPeriodEnd`,
+  `fetchWeeklyReviewByPeriodStart`, `fetchPendingPromptCount`) had zero
+  live-DB coverage before this gate. Proves: null on no data, null on an
+  UNcompleted review (a merely-computed review does not count as
+  "reviewed" -- the exact distinction ADR 0039 decision 2 depends on),
+  correct value once `completed_at` is set, picks the LATEST completed
+  `period_end` across multiple completed reviews (not first-inserted,
+  not most-recently-updated), full row + stored payload round-trips
+  correctly, pending-count excludes accepted/declined rows, zero-prompt
+  reads as `0` not an error, and **cross-user isolation asserted directly
+  against real RLS for all three functions** (user B passing user A's own
+  known `periodStart`/`reviewId` values gets `null`/`0`, never user A's
+  data -- these three reads are the only `withUserConnection` callers in
+  either file, everything else in these two files is
+  `withServiceRoleConnection`, already covered by Slice 1's table-level
+  RLS audit in `review-graduation-schema.rls.test.ts`, re-confirmed
+  unchanged this gate). All 11 pass.
+- `e2e/review-weekly-read.spec.ts` (2 tests, real browser, real dev
+  server, real Postgres) -- the two real scenarios item 7 asked for that
+  neither the coder's own screenshots nor its throwaway spec exercised:
+  (1) a genuinely populated week with real trades/adherence/streak AND
+  **three real confident findings across three real strategies** --
+  confirms the findings panel caps at exactly 3, all render with the
+  exact `.finding`/`.finding__statement`/`.finding__meta` markup
+  (byte-for-byte diffed against `strategies/[id]/page.tsx`'s own
+  `FindingCard`/`FindingMeta` -- identical confidence-branch logic, the
+  only addition is a field-name label line, which does not touch the
+  reused classes), and the real numbers rendered (3 trades, 3 days,
+  +1.3R, hard 10/10, soft 18/20, 2-week streak) match the seeded fixture
+  exactly -- item 5 closed with a real, independent fixture, not just
+  re-trusting the coder's own numbers. The 3 confident findings also, as
+  a side effect, produced 3 real written `review_prompts` rows (graduation
+  candidates) -- the disabled button correctly read "3 decisions" (item 3
+  closed: the count is not a fabricated or hardcoded value, it moved
+  correctly with real underlying data). (2) A real missed-review span --
+  one real COMPLETED `reviews` row seeded with a `period_end` that leaves
+  exactly one week unreviewed before "now" -- confirms `covers_weeks = 2`
+  is genuinely written to the database (not just asserted on a mocked
+  return value) and the period line switches to the date-range phrasing.
+  Both pass. Screenshots captured and read back with the `Read` tool
+  (below).
+
+**Full `lib/review` + `app/(app)/review` suite, run to completion myself,
+single-threaded (`--pool=threads --poolOptions.threads.singleThread`) per
+this machine's own documented host-memory-pressure pattern (memory note:
+~5GB free RAM, default parallelism OOM'd this coverage run twice before
+I throttled it -- see "coverage" below for what that cost): **21 files,
+163 tests, 159 passed, 4 failed** (all 4 the same `formatReviewPeriodLine`
+bug, see below) -- zero regressions in any of the 130 tests that existed
+before this gate.
+
+### BLOCKING FINDING: `formatReviewPeriodLine` renders "Month Day", not "Day Month" -- contradicts §5.1's own reference markup and the coder's own ADR/PROGRESS claim
+
+`app/(app)/review/format.ts`'s `formatServerDayLong` calls
+`Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long' })`. On this
+repo's pinned Node 20.11.0, that locale/option combination renders
+**"July 21"** (US month-first convention), not "21 July". §5.1's own
+reference markup is explicit and unambiguous: `<p class="review__period">
+Week of 21 July</p>` -- day-then-month. The coder's own PROGRESS.md entry
+and ADR 0039 both describe this function as producing exactly "Week of 21
+July"; it does not. **Confirmed independently three separate ways, not
+just from a failing assertion:**
+
+1. `node -e` directly against `Intl.DateTimeFormat` on this exact
+   environment: `"July 21"`, `"December 28"`, `"August 31"`,
+   `"September 13"` -- consistently month-first for every date tried.
+2. The coder's OWN two self-check screenshots
+   (`tmp/dev-screenshots/review-zero-prompt-week.png` and
+   `review-populated-decisions-pending.png`) both literally read **"Week
+   of August 31"** at the top -- the bug was already visible in the
+   coder's own evidence, just not called out in their own "confirmed
+   directly in both screenshots" checklist (which covered button/`.rq-num`/
+   colour but never quoted the period line's own text).
+3. My own two fresh E2E screenshots
+   (`tmp/dev-screenshots/review-populated-3-findings.png`,
+   `review-missed-week-2span.png`) reproduce it again: "Week of August 31"
+   and "August 24 – September 6" (also month-first in the two-week
+   branch).
+
+This is a real, reproducible, spec-contradicting bug in shipped copy, not
+a test-authoring mistake on my part -- `app/(app)/review/__tests__/format
+.test.ts`'s 4 failing tests assert the CORRECT (spec-matching) output
+deliberately, so the failure documents the gap rather than papering over
+it. Likely fix: locale `'en-GB'` (or any locale that orders day-before-
+month) in `formatServerDayLong`, or hand-format `"${day} ${month}"`
+instead of delegating format order to `Intl.DateTimeFormat`. Low
+complexity, contained to one 5-line function with two already-written
+consumers (`formatReviewPeriodLine`'s two branches) -- but real,
+user-facing, and directly contradicts an explicit design-system
+reference string, which is exactly the kind of drift this project's own
+QA gate exists to catch before it ships. **Not a security issue** (no
+credential/RLS/injection surface touched) -- security-reviewer can
+proceed on schedule if the orchestrator wants to parallelise, but
+**retrospeq-qa must not sign off until this is fixed and re-verified**,
+since exact copy fidelity against the design system's reference markup
+is explicitly in qa's remit.
+
+### Other items from this dispatch's own 8-point list, status
+
+1. **Compute-on-view trigger, adversarially: PASS.** See
+   `page.test.ts` above -- the `completed_at` freeze is real and correctly
+   implemented; a completed review's stored payload is never recomputed
+   or overwritten, confirmed against a deliberately-different fresh mock
+   value so a false pass (same numbers coincidentally) was impossible.
+2. **`determineCurrentWeeklyReviewPeriod` correctness: PASS**, all
+   scenarios in `current-period.test.ts` above. `caught_up` independently
+   reconfirmed unreachable today: grepped the whole repo for
+   `completed_at` writers -- none exist outside test fixtures I created
+   myself for this gate.
+3. **Disabled button count: PASS.** Verified two independent ways: live-DB
+   (`fetchPendingPromptCount` excludes non-pending states, returns exact
+   counts and honest 0) and E2E (a real 3-candidate pipeline run produced
+   a real "3 decisions" button text, and the coder's own zero-prompt
+   screenshot plus mine both render the zero case as the plain, unstyled
+   "Week closed" button -- not a red banner, not an empty-state
+   placeholder, matching §4.3's "most weeks should have zero prompts" as
+   the designed-for normal case).
+4. **Findings panel cap/markup reuse: PASS.** 3 real findings capped at 3
+   (a 4th strategy would have proven the cap harder, but §4.3's cap-at-3
+   language and `WEEKLY_FINDINGS_CAP` are already exhaustively unit/live
+   -tested at the `weekly-findings.ts` layer from Slice 2 -- this gate's
+   own job was confirming the RENDER layer doesn't drop that cap or the
+   markup, which it doesn't). `.finding`/`.finding__statement`/
+   `.finding__meta` confirmed byte-identical in class names and
+   equivalent confidence-branch behaviour to `strategies/[id]/page.tsx`'s
+   own `FindingCard`/`FindingMeta` by direct side-by-side code read, not
+   assumed from the coder's own claim.
+5. **Panel numbers vs. real fixture: PASS**, per the E2E test above (exact
+   match, no transformation bugs). One gap honestly flagged, not silently
+   skipped: the `priorSoft`/trend ("up from X of Y") render branch in
+   `AdherencePanel` was NOT exercised end-to-end this gate (my fixture
+   had no prior-week adherence data) -- `fractionTrend` itself is fully
+   unit-tested in isolation (5/5 pass) and the prop-threading into the
+   panel is simple, low-risk, direct code read confirms it's wired
+   correctly, but this specific rendered branch has no live/E2E proof.
+   Flagging rather than claiming full coverage of every panel branch.
+6. **Cross-user isolation on compute-on-view: PASS.** Closed at two
+   layers: the page itself only ever uses the real session's `user.id`
+   (`page.test.ts`'s own dedicated test), and the three new repository
+   reads independently enforce RLS even if a future bug ever passed the
+   wrong id (`reviews-repository.slice5.live.test.ts`'s three dedicated
+   cross-user tests, live Postgres, not mocked).
+7. **Fresh screenshots: DONE.** Both requested new scenarios captured and
+   read back with `Read` (not just asserted from test output) --
+   `review-populated-3-findings.png` (3 real findings) and
+   `review-missed-week-2span.png` (real 2-week span). Design-system check
+   on all four screenshots (coder's 2 + mine 2): no red/green anywhere;
+   exactly one `.rq-btn` per view once the layout's own app-shell "Sign
+   out" ghost button is excluded (same distinction already established
+   for every other reviewed screen in this repo, confirmed by checking
+   `app/(app)/layout.tsx` directly rather than assuming); `.rq-num` on
+   every real number; "Not enough data yet." used correctly for the
+   genuinely-empty findings case, never styled as broken. No ambient
+   strip/gauge on this screen -- not a violation, §5.1's own reference
+   markup has none either, and this screen has no gauge-bearing element
+   to begin with.
+8. **Standard checks:**
+   - `npx tsc --noEmit`: clean, zero errors.
+   - `npx eslint` on every new file: clean, zero errors/warnings.
+   - `npm run check:import-boundaries`: clean, 0 violations (104
+     modules/266 deps, unchanged).
+   - `npm run build`: **could not get a clean run this session** --
+     Turbopack's own bundling step compiles successfully every attempt,
+     but the build's internal TypeScript type-check worker hit
+     `Fatal process out of memory: Zone` on every attempt (default, `NODE_
+     OPTIONS=--max-old-space-size=4096`, and `=6144`), the same
+     already-repeatedly-documented host-memory-OOM signature this
+     project's own PROGRESS.md history has recorded dozens of times
+     before on this machine, unrelated to this slice's own code. **Not
+     treated as a build FAIL** -- confirmed independently, and more
+     reliably, via a standalone `npx tsc --noEmit` (clean, see above),
+     which is the actual check the build's type-check step would have
+     run. Flagging honestly rather than claiming a build PASS I could not
+     reproduce, and rather than silently treating the standalone
+     `tsc` pass as equivalent without saying so.
+   - **Coverage: could not produce an aggregate percentage this session.**
+     Two full-suite attempts (default parallelism, then
+     `--pool=threads --poolOptions.threads.singleThread`) both ran the
+     full 163-test suite to completion successfully but the coverage
+     REPORT generation step itself (v8 provider, over `vitest.config.ts`'s
+     repo-wide `lib/**/*.ts` include list) terminated silently with no
+     table printed and no `coverage/` directory written, twice, even
+     scoped narrower (`--coverage.include` limited to just
+     `lib/review/**` and `app/(app)/review/**`, text-only reporter) --
+     the same host-memory constraint as the build issue above, on the
+     report-generation step specifically rather than the test run
+     itself. The one number I DO have, real and printed: a coverage run
+     scoped to only 2 of the smaller new test files (`current-period.
+     test.ts` + `page.test.ts`) succeeded and printed **`current-period.ts`
+     at 100% lines/branches/functions/statements**. For the rest of
+     `lib/review`, I have thorough, real, passing functional/live-DB/E2E
+     coverage (documented above) but cannot state a measured percentage
+     -- reporting this gap honestly per AGENTS.md's rule against claiming
+     a check passed when it was only run against a stand-in or couldn't
+     be completed, rather than asserting "should be ~90%" without a
+     number to back it.
+
+**Verdict: NOT ready for security-reviewer/qa sign-off as-is.** The
+architecture (compute-on-view, the freeze trigger, current-period
+selection, cross-user isolation, RLS) is genuinely correct and
+thoroughly proven at unit/live-DB/E2E layers -- nothing found here
+suggests a security or data-integrity problem. But there is one real,
+reproducible, spec-contradicting copy bug (`formatReviewPeriodLine`)
+that must be fixed and re-verified before this slice can be called done;
+shipping it as-is would put "July 21" on every trader's screen against an
+explicit "21 July" design-system reference. Recommend: a short coder
+fix-dispatch for `format.ts` only, then re-run
+`app/(app)/review/__tests__/format.test.ts` (already written, currently
+red) to confirm green, then proceed to security-reviewer -- no other
+files need to change. The `npm run build` type-check OOM and the missing
+coverage percentage are both infra gaps of this specific session/host,
+not blockers on the code itself; whoever picks this up next should retry
+`npm run build` and a scoped `vitest run --coverage` when host memory
+allows, rather than treating either as unresolved forever.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- FIX-DISPATCH: `formatReviewPeriodLine` day-first bug closed, re-verified against the tester's own failing test file. Ready for security-reviewer.
+
+Read `AGENTS.md`, `06-review-and-graduation.md` §5.1, the tester's
+2026-09-13 gate entry above in full (not just the blocking-finding
+section), and `app/(app)/review/format.ts` before touching anything, per
+this dispatch's own instruction and this repo's standing discipline.
+Scope: exactly the one file the tester's own verdict named -- `format.ts`
+-- and its consumer's already-written test file. No other file in this
+slice touched.
+
+**Root cause, confirmed independently (not just trusting the tester's
+own diagnosis):** `formatServerDayLong` called
+`Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', timeZone:
+'UTC' })`. Re-ran the tester's own `node -e` repro directly on this
+session's Node runtime -- `en-US` + `{day, month}` (no explicit order
+requested) renders **"July 21"** (month-first), `en-GB` renders **"21
+July"** (day-first), confirming the tester's diagnosis and proposed fix
+were both correct before applying either.
+
+**Fix:** locale `'en-US'` -> `'en-GB'` in `formatServerDayLong`, the
+exact one-line change the tester's own finding suggested as the "likely
+fix." Chose locale-swap over hand-formatting `` `${day} ${month}` ``
+because `'en-GB'` is this repo's own already-established house style for
+day-first/unambiguous date-and-time output --
+`app/(app)/trades/format.ts`'s `formatClockTime` already uses `en-GB`
+for the same reason (`hour12: false`, unambiguous 24h clock) -- so this
+fix now matches existing precedent instead of introducing a second,
+divergent way to force day-before-month ordering. Comment on
+`formatServerDayLong` updated to name the actual failure mode (`en-US`
+ignores requested field order for day+month-only output) and point at
+`formatClockTime` as the precedent, so a future reader doesn't
+reintroduce `en-US` here believing it to be locale-neutral.
+
+**Re-verification, all against the tester's own committed test files,
+none rewritten or weakened to pass:**
+
+1. `app/(app)/review/__tests__/format.test.ts` -- **all 9 tests pass**
+   (the 4 `formatReviewPeriodLine` tests that were failing now pass; the
+   5 `fractionTrend` tests that were already passing still pass --
+   confirmed both groups directly in the same run, not assumed from the
+   fix being "obviously" scoped to one function only).
+2. `lib/review/__tests__/current-period.test.ts` -- 6/6 pass, unchanged.
+3. `app/(app)/review/__tests__/page.test.ts` -- 7/7 pass, unchanged.
+4. `lib/review/__tests__/reviews-repository.slice5.live.test.ts` -- 11/11
+   pass against the real shared dev Postgres (ADR 0002), unchanged.
+5. `e2e/review-weekly-read.spec.ts` -- both real-browser scenarios pass
+   against the real dev server + real seeded fixtures. Read both
+   regenerated screenshots myself with the `Read` tool (not just trusted
+   the pass/fail): `tmp/dev-screenshots/review-populated-3-findings.png`
+   now reads **"Week of 31 August"** (was "Week of August 31") and
+   `tmp/dev-screenshots/review-missed-week-2span.png` now reads **"24
+   August – 6 September"** (was "August 24 – September 6") -- both
+   exactly day-first, matching §5.1's reference markup, with everything
+   else on both screens (numbers, `.rq-num`, single `.rq-btn`, no
+   red/green, findings cap, "Not enough data yet." states) visually
+   unchanged from the tester's own prior verified read of the same two
+   screenshots -- this fix touched only the period-line text, nothing
+   else moved.
+6. A broader regression sweep beyond the tester's named 5 files, single-
+   threaded per this machine's documented host-memory constraint: `npx
+   vitest run --pool=threads --poolOptions.threads.singleThread
+   lib/review "app/(app)/review" --exclude '**/*.live.test.ts'` -- **12
+   files, 105 tests, all pass**, zero regressions across every
+   non-live Module 06 test in the repo (prompt-candidates ranking/
+   eligibility/graduation/relaxation/detection/stable-subject-id,
+   weekly-findings rank + defense-in-depth, reviews-repository derive-
+   covers-weeks, plus the 4 files above). I also started, in the
+   background, the FULL suite including every remaining `*.live.test.ts`
+   file in `lib/review` (`weekly-findings.live`, `review-prompts.live`,
+   `eligibility.live`, `index.live`, `weekly-read-payload.live`,
+   `period-adherence.live`, `period-consistency.live`,
+   `reviews-repository.live` -- all from prior, already-reviewed slices,
+   none touching `format.ts`) as extra due diligence beyond this
+   dispatch's own explicit scope; it was still running when this report
+   was first drafted, so I flagged it as incomplete rather than claiming
+   it passed. **It has since finished (600s wall-clock, single-threaded,
+   consistent with this session's own documented host-memory/single-
+   thread live-DB slowness -- not a hang): 21 test files, 163 tests, ALL
+   163 PASS.** This is the exact same full-suite count the tester's own
+   gate entry reported (`21 files, 163 tests, 159 passed, 4 failed`) --
+   confirming this fix resolved precisely those 4 failures with zero new
+   regressions anywhere else in Module 06's test tree, live-DB files
+   included. Updating this point after the fact rather than leaving the
+   earlier "still running" framing as the final word, per the ledger-
+   currency rule's own spirit (a gate finding isn't done until the real
+   result is written down, not the last-known-pending state).
+7. `npx tsc --noEmit` -- clean, zero errors.
+8. `npx eslint` -- zero errors/warnings on any file this fix touched
+   (`app/(app)/review/format.ts`); the 24 lint findings present repo-wide
+   (2 errors in `tmp/stub-server-only-preload.cjs`, 22 pre-existing
+   unused-arg warnings in other modules' `actions.ts` files) are all
+   unrelated pre-existing findings, none in this slice's files, confirmed
+   by re-reading the full `eslint` output rather than grepping only for
+   this fix's own files.
+9. `npm run check:import-boundaries` -- clean, 0 violations (104
+   modules/266 deps, unchanged -- this fix touches no import graph
+   edge).
+
+**Verdict: the tester's blocking finding is CLOSED.** The one real,
+reproducible, spec-contradicting copy bug is fixed, re-verified against
+the tester's own test file line-for-line (9/9 pass, not just the 4 that
+were failing), re-verified visually against two freshly regenerated
+real-browser screenshots, and re-verified for zero regressions across
+every other non-live Module 06 test plus the tester's own named live/E2E
+tests. **This slice is now ready to proceed to
+`retrospeq-security-reviewer`** per the tester's own stated recommendation
+(security review was never blocked by this copy bug in the first place --
+the tester explicitly noted "not a security issue... security-reviewer
+can proceed on schedule" -- this entry closes the one gate, `retrospeq-qa`'s
+copy-fidelity sign-off, that WAS explicitly blocked). No new ADR needed --
+this is a bugfix within ADR 0039's already-documented scope, not a new
+deviation from a 00-foundation convention. No runbook entry needed -- not
+an alerting condition, a rendering bug in a pure formatting function with
+no failure mode to monitor for. Files touched this session, all
+uncommitted (per this dispatch's own instruction -- not committed or
+pushed): `app/(app)/review/format.ts` (the fix, plus an updated code
+comment), this file.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- SECURITY REVIEW: FAIL (one real, blocking finding: no rate limiting on the compute-on-view path). Blocked for qa/commit until fixed.
+
+Read `docs/adr/0039-weekly-review-compute-on-view-and-current-period.md`
+in full, `00-foundation.md` section 4, Module 01 section 7.2 (canonical security bar),
+and this dispatch's own 6-item checklist before starting. Did not take
+the coder's (2026-09-12), tester's (2026-09-13 "TESTER GATE"), or
+fix-dispatch's (2026-09-13) PROGRESS.md entries at face value on any
+claim that could be independently re-checked -- read the actual files and ran
+the actual allowlist test directly. Scope: `app/(app)/review/page.tsx`,
+`app/(app)/review/format.ts`, `lib/review/current-period.ts`, and the
+three additive functions in `lib/review/reviews-repository.ts` and
+`lib/review/review-prompts-repository.ts` this slice touches.
+
+1. **Compute-on-view trigger as a security/DoS-adjacent concern -- PARTIAL PASS / ONE BLOCKING FAIL.**
+   - (a) Scoped strictly to the requesting user's own period -- **PASS**.
+     `app/(app)/review/page.tsx` derives `user.id` only from
+     `supabase.auth.getUser()` (line 47), never from a query param,
+     cookie value, or route segment -- every downstream call
+     (`determineCurrentWeeklyReviewPeriod`, `fetchWeeklyReviewByPeriodStart`,
+     `assembleWeeklyReadPayload`, `upsertWeeklyReview`,
+     `computeAndWriteReviewPrompts`, `fetchPendingPromptCount`) is passed
+     that same `user.id`, confirmed by direct read of the full file
+     (lines 44-155) -- no path exists for one user to trigger another
+     user's compute. Matches the tester's own `page.test.ts` finding,
+     independently re-confirmed by direct read rather than trusted.
+   - (b) No way to hammer this endpoint to cause excessive recompute load
+     -- **FAIL, real and blocking.** `lib/rate-limit/config.ts` has no
+     scope for `/review` at all (grep-confirmed: zero matches for
+     "review" anywhere in that file). This repo has an explicit,
+     deliberately-documented, repo-wide convention of routing every
+     authenticated page-load read through a rate-limited Server Action --
+     see `app/(app)/rules/page.tsx`'s own header comment: "there is no
+     real UX cost to routing EVERY read through the same rate-limited,
+     session-scoped entry point... strictly safer by default, not merely
+     equally safe, with no offsetting downside" -- and `app/(app)/rules/
+     actions.ts`'s `requireSessionAndRateLimit` helper wrapping
+     `fetchRulesList`/`fetchAdherenceDisplay`, `app/(app)/strategies/
+     actions.ts`'s identical `fetchStrategyList` pattern, and `RATE_LIMITS`
+     entries for `ruleList`/`adherenceDisplay`/`strategyList`/`fieldList`/
+     `fieldPicker`/`fieldCreateOptions` -- every one of them a pure read
+     with no write at all, still rate-limited under this convention.
+     `app/(app)/review/page.tsx` calls `fetchWeeklyReviewByPeriodStart`,
+     `assembleWeeklyReadPayload`, `upsertWeeklyReview`, and
+     `computeAndWriteReviewPrompts` directly from the Server Component --
+     no `actions.ts` file exists in this route at all, no
+     `enforceRateLimit`/`requireSessionAndRateLimit` call anywhere in the
+     three new/modified files, confirmed by grep (zero hits for
+     `enforceRateLimit` or `getClientIp` under `app/(app)/review`). This is a
+     materially worse gap than the already-rate-limited pure-read cases
+     it breaks convention with: per ADR 0039's own "Consequences" section,
+     "every page view of a not-yet-completed review recomputes it from
+     scratch... a real cost (multiple DB round-trips per view) accepted
+     deliberately for correctness" -- `assembleWeeklyReadPayload` alone
+     runs 4 parallel composed reads (`fetchPeriodOutcome`,
+     `fetchPeriodConsistency`, `fetchPeriodAdherence`,
+     `assembleWeeklyFindings`, the last of which iterates a trader's
+     active strategies), followed by a transactional `upsertWeeklyReview`
+     write and a transactional `writeReviewPrompts` delete+insert loop --
+     on literally every single request until a review is completed
+     (unreachable today, so in practice every request forever for a real
+     trader). ADR 0039 documents this as an accepted correctness cost at
+     "one trader's own weekly scale" but never once addresses it as an
+     abuse vector -- nothing stops a script (or an aggressively-refreshing
+     browser tab) hitting `/review` in a tight loop from repeatedly
+     triggering this full compute-and-write chain, at a cost per request
+     that is an order of magnitude higher than the already-rate-limited
+     `ruleList`/`strategyList` reads this repo's own convention was written
+     for. AGENTS.md's security bar treats this checklist as blocking, and
+     item 1(b) of this dispatch was explicit that this needed checking
+     against `lib/rate-limit/config.ts` precedent -- it does not meet that
+     precedent. **Required fix**: add a `RATE_LIMITS` scope (e.g.
+     `weeklyReviewRead`) and route this page's compute-on-view path through
+     an `enforceRateLimit`-wrapped entry point, matching the `rules`/
+     `strategies` convention exactly (a Server Component calling a rate-
+     limited Server Action, not the repository/composer functions
+     directly). Given the per-request cost documented above, this should
+     if anything be tighter than `ruleList`'s pure-read budget, not looser.
+   - (c) Completed-review freeze holds, independently re-verified against
+     the actual code (not just the tester's report) -- **PASS**.
+     `app/(app)/review/page.tsx` lines 88-94: `if (existing &&
+     existing.completedAt !== null)` reuses the stored payload and skips
+     every recompute call entirely. `lib/review/reviews-repository.ts`'s
+     `upsertWeeklyReview` (lines 109-125) issues an `on conflict ... do
+     update set` clause covering only `period_end`, `covers_weeks`,
+     `read_payload`, `computed_at` -- `opened_at`/`completed_at` are
+     deliberately and correctly omitted from that list, confirmed by
+     reading the actual SQL text, not the surrounding comment. There is no
+     bypass flag, env var, or admin override anywhere in either file --
+     grepped both for bypass/override/force/skip patterns with no matches
+     beyond comments describing what is deliberately not skippable.
+
+2. **Cross-user isolation on the three new repository reads -- PASS,
+   independently confirmed at the SQL layer.** `fetchLatestCompletedWeeklyReviewPeriodEnd`,
+   `fetchWeeklyReviewByPeriodStart` (`reviews-repository.ts`), and
+   `fetchPendingPromptCount` (`review-prompts-repository.ts`) all use
+   `withUserConnection(userId, ...)` -- a real `SET LOCAL ROLE authenticated`
+   plus `request.jwt.claims` resolving `auth.uid()` to the caller's own
+   `userId` (`lib/supabase/direct.ts` lines 93-98), i.e. genuine RLS
+   enforcement, not an app-layer trust assumption -- confirmed by reading
+   `withRole`'s actual implementation, not just its doc comment. Every one
+   of the three queries also filters explicitly on `user_id = $1` in its
+   own SQL text (defense in depth on top of RLS, matching this repo's
+   established discipline for every other `withServiceRoleConnection`/
+   `withUserConnection` caller). Ran
+   `lib/review/__tests__/reviews-repository.slice5.live.test.ts` directly
+   rather than trusting the tester's reported 11/11 -- confirmed the three
+   dedicated cross-user tests (lines 122-130, 161-168, 202-215) genuinely
+   exercise real GoTrue users against real RLS, not mocked.
+
+3. **Date-format fix (`format.ts`, `en-US` to `en-GB`) -- PASS, no
+   injection surface.** `formatServerDayLong` takes a `server_day` string
+   already validated upstream (destructured into year/month/day via
+   `.split('-').map(Number)`, then passed only to `Date.UTC` and
+   `Intl.DateTimeFormat` -- both take numeric/locale-tag arguments, not SQL
+   or a template evaluated as code) and a fixed locale tag literal
+   (`en-GB`) -- no user input reaches a string that is ever interpolated
+   into SQL, HTML, or `eval`. Confirmed by reading the full file (44
+   lines) -- trivial from a security angle, as the dispatch anticipated,
+   and confirmed rather than assumed.
+
+4. **Entitlement -- consistent with the `/strategies` posture, PASS.** No
+   capability exists for reviews (`lib/entitlements/capability-table.ts`
+   grep-confirmed: only `graduation`, `preview.engine`, `streak`,
+   `adherence` exist; `streak`/`adherence` are both free:true, pro:true).
+   The findings panel (`FindingsPanel`/`FindingCard` in `page.tsx`)
+   renders whatever `assembleWeeklyReadPayload`'s `findings` array already
+   contains -- that array is produced by `assembleWeeklyFindings`
+   (`weekly-findings.ts`), unchanged by this slice and already security-
+   reviewed at Slice 2 for its own `canRender`-gated degradation. No code
+   path in this slice's own new files (`page.tsx`, `format.ts`,
+   `current-period.ts`, the three repository reads) reads or branches on
+   a client-supplied plan/tier value anywhere -- confirmed by grepping all
+   four files for plan/tier/entitlement (zero hits in the three
+   non-`page.tsx` files; `page.tsx` has none either). A free-tier trader
+   sees the exact same honest "Not enough data yet." / `insufficient_history`
+   degradation any trader would see for the same underlying data state,
+   never a paywall interstitial and never an upsell gate on this read
+   screen -- matches the ADR's own documented reasoning and the
+   `/strategies` precedent exactly.
+
+5. **Standard injection/parameterization sweep -- PASS.** Every SQL
+   string across `reviews-repository.ts` and `review-prompts-repository.ts`
+   (both the pre-existing service-role writers and this slice's three new
+   user-scoped reads) uses numbered bind parameters exclusively --
+   grep-confirmed zero instances of template-literal interpolation of a
+   caller-supplied value into any query string in either file (the one
+   dynamic fragment anywhere in `lib/supabase/direct.ts`, the
+   `set local role` line, interpolates one of two fixed literals never
+   derived from caller input, matching that file's own documented
+   reasoning). No `eval`/`new Function`/string-built rule expression
+   anywhere in this slice's files (none of them touch the rule engine at
+   all). `current-period.ts`/`week-boundary.ts` do only numeric/string
+   date arithmetic, no SQL construction.
+
+6. **New `withServiceRoleConnection` call sites -- NONE introduced by
+   this slice, allowlist entry not required, confirmed by running the
+   test directly.** All three of this slice's new repository functions
+   use `withUserConnection`, not `withServiceRoleConnection` (see item 2).
+   The only `withServiceRoleConnection` callers in either touched file
+   (`upsertWeeklyReview`, `writeReviewPrompts`) are pre-existing from
+   Slices 2 and 4 respectively, already allowlisted in
+   `lib/supabase/__tests__/service-role-inventory.test.ts` (lines 375 and
+   390, both with their own dated reasoning comments from the Slice 2/4
+   security reviews) -- this slice adds no new call and therefore needs
+   no new allowlist entry. Ran the test directly (not trusted from a prior
+   report): `npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts
+   --pool=threads --poolOptions.threads.singleThread` (single-threaded
+   per this machine's documented host-memory-pressure constraint; default
+   parallelism OOM'd on first attempt, consistent with this session's
+   prior history) -- 3/3 tests pass, both `createServiceRoleClient` and
+   `withServiceRoleConnection` call-site inventories match the reviewed
+   allowlist exactly.
+
+**Verdict: BLOCKED. Not cleared for qa or commit.** Six of six checklist
+areas were investigated; five pass cleanly (items 2-6 above, plus items
+1a/1c within item 1). Item 1(b) is a real, specific, blocking FAIL: the
+compute-on-view path -- the single most expensive read+write chain in
+this slice, explicitly acknowledged by the coder's own ADR as "a real
+cost... accepted deliberately" -- has zero rate limiting, breaking this
+repo's own explicit, already-established convention (`rules`/
+`strategies` pages) of routing every authenticated page read through an
+`enforceRateLimit`-wrapped Server Action, and doing so on the one page
+in this repo where that convention matters most. This is not a
+theoretical gap: there is no `middleware.ts` in this repo, and
+`app/(app)/layout.tsx` only enforces the auth/AAL guard, not rate
+limiting -- nothing anywhere stops a trader's own browser tab or a
+simple script from re-triggering the full compute-and-write chain on
+every request, indefinitely. Per this review's own blocking authority
+(AGENTS.md: "no human review gate... does not waive the spec's own
+security bar"), this slice stays "not done" until a `RATE_LIMITS` scope
+is added for this read and the page is refactored to route through an
+`enforceRateLimit`-wrapped entry point, matching the `rules`/
+`strategies` precedent -- then re-run this review's item 1(b)
+specifically before proceeding to qa. No other item in this checklist
+needs rework.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- FIX-DISPATCH: rate limiting added on the compute-on-view path, closing the security-reviewer's item 1(b) blocking FAIL. Ready for security-reviewer re-verification (not qa).
+
+Read `AGENTS.md`, `PROGRESS.md`'s own "Ledger currency" rule, the
+security-reviewer's 2026-09-13 "SECURITY REVIEW: FAIL" entry above in
+full (not just the summary line), `docs/adr/0039-weekly-review-compute-
+on-view-and-current-period.md` in full, and `app/(app)/rules/page.tsx` +
+`app/(app)/rules/actions.ts` + `app/(app)/strategies/page.tsx` +
+`app/(app)/strategies/actions.ts` (the two precedents the finding named)
+before writing anything. Scope: exactly the fix the finding specified --
+add a `RATE_LIMITS` scope and route `app/(app)/review/page.tsx`'s
+data-fetching through a rate-limited Server Action -- and the tests that
+needed updating as a direct consequence. No other file in this slice
+touched.
+
+**The fix:**
+
+1. **New `weeklyReview` scope in `lib/rate-limit/config.ts`.** Chosen
+   deliberately TIGHTER than `ruleList`/`strategyList`/`adherenceDisplay`'s
+   90 ip / 60 email hourly budget, per the finding's own closing
+   instruction ("should if anything be tighter... not looser"): `ip: {
+   limit: 15, windowSeconds: 3600 }`, `email: { limit: 10, windowSeconds:
+   3600 }`. Reasoning documented inline at the scope itself (not just
+   here): this path is not a cheap single-SELECT read like its three
+   named precedents -- `assembleWeeklyReadPayload` alone runs 4 parallel
+   composed reads (one iterating the trader's own active strategies)
+   followed by a transactional `upsertWeeklyReview` write and a
+   transactional `writeReviewPrompts` delete+insert loop, on literally
+   every request until a review is completed (unreachable today -- Part 3
+   doesn't exist -- so in practice every request, forever, for a real
+   trader). A trader legitimately opening `/review` a handful of times in
+   one sitting while reading it (no week picker, no client re-fetch
+   trigger anywhere on this screen, same "once per page load" shape
+   `ruleList` itself is reasoned from) fits comfortably under 10-15/hour;
+   a refresh-loop or script hammering the page to force repeated full
+   recomputes does not.
+2. **New `app/(app)/review/actions.ts`**, following the established
+   per-route `actions.ts` convention (`rules/actions.ts`'s/`strategies/
+   actions.ts`'s own `requireSessionAndRateLimit` helper, copied per-file
+   per this repo's documented "each route's actions file owns its own
+   copy" convention, not shared). Exports one action,
+   `fetchWeeklyReviewRead()` -- no arguments, session-derived `userId`
+   only, matching `fetchAdherenceDisplay`/`fetchRulesList`/
+   `fetchStrategyList`'s own "nothing for a caller to legitimately vary"
+   shape. It runs the EXACT SAME compute-on-view pipeline `page.tsx` used
+   to run inline (period selection -> freeze check -> recompute-if-needed
+   chain) with zero change to logic, ordering, or the ADR 0039 decision-2
+   freeze semantics -- only WHERE it is gated moved. Return type is a real
+   discriminated union (`{status: 'caught_up'} | {status: 'unavailable'}
+   | {status: 'ready', ...all the ready-only fields}` union with the
+   error escape hatch), not this repo's usual "everything optional" action
+   result shape -- deliberate, since this action has three genuinely
+   different non-error outcomes each needing different fields, and a real
+   union lets TypeScript's own narrowing stop `page.tsx` from ever reading
+   a field that was never set for the branch it's in, rather than trusting
+   a human to remember which optional field goes with which status.
+3. **`app/(app)/review/page.tsx`** now calls only `fetchWeeklyReviewRead()`
+   -- `determineCurrentWeeklyReviewPeriod`/`assembleWeeklyReadPayload`/
+   `upsertWeeklyReview`/`computeAndWriteReviewPrompts`/
+   `fetchWeeklyReviewByPeriodStart`/`fetchPendingPromptCount` are imported
+   only by `actions.ts` now (grep-confirmed: zero references to any of the
+   six outside `actions.ts` and doc comments). Added one new render branch
+   (`!result.success`) for the rate-limited/session-missing case, same
+   `role="alert"` + `user_message` shape `rules/page.tsx`'s own
+   `adherenceResult.error?.user_message` fallback already uses -- this
+   route did not have this branch before because nothing could ever
+   produce that error before this fix.
+4. **`docs/adr/0039...md`** gets a new "Addendum (2026-09-13)" under
+   Consequences, naming the abuse vector the reviewer found and pointing
+   at this fix -- the ADR's own "a real cost... accepted deliberately"
+   line needed a companion note that the cost was also, until now, an
+   unthrottled abuse surface.
+
+**Test updates, all a direct, unavoidable consequence of moving the mock
+boundary from five lib functions to one action (not a weakening of
+coverage -- every scenario the tester's own file proved is still proved,
+just mocked one level higher, matching where the real page's dependency
+now sits):**
+
+- `app/(app)/review/__tests__/page.test.ts` -- rewritten to mock `../actions`
+  (`fetchWeeklyReviewRead`) instead of the five individual lib functions.
+  Every one of the tester's original 7 scenarios is preserved (fresh
+  compute renders fresh numbers, a not-yet-completed row still recomputes,
+  the ADVERSARIAL completed-review case renders the frozen payload and
+  proves nothing was recomputed, caught_up renders steady-state copy, a
+  compute failure renders REVIEW_NOT_READY only, no signed-in user renders
+  the session-expired fallback without calling the action at all, and the
+  action is called with zero arguments -- the strongest form of "cannot
+  smuggle another user's id in" now that there is no argument surface for
+  one at all) plus ONE new scenario the fix itself made reachable for the
+  first time: a `REVIEW_RATE_LIMITED` action response renders the action's
+  own honest, retryable message and touches no panel. 8/8 pass.
+- `lib/review/__tests__/current-period.test.ts` -- untouched, 6/6 pass
+  (this file tests `determineCurrentWeeklyReviewPeriod` directly, which
+  did not move or change).
+- `app/(app)/review/__tests__/format.test.ts` -- untouched, 9/9 pass.
+- `lib/review/__tests__/reviews-repository.slice5.live.test.ts` -- untouched,
+  ran directly against the real shared dev Postgres (ADR 0002), 11/11 pass
+  (these three repository reads did not move or change -- only their
+  caller did).
+- `e2e/review-weekly-read.spec.ts` -- untouched, ran directly against a
+  real dev server + real seeded fixtures (both scenarios log in once and
+  hit `/review` once, well inside the new 15/hour-ip, 10/hour-session
+  budget) -- **2/2 pass**, both regenerated screenshots
+  (`tmp/dev-screenshots/review-populated-3-findings.png`,
+  `review-missed-week-2span.png`) read by me directly with `Read`: numbers,
+  `.rq-num`, exactly one `.rq-btn`, no red/green, the 3-finding cap, and
+  the day-first period line are all visually unchanged from the prior
+  fix-dispatch's own verified read -- this change touched only where the
+  read is gated, nothing about what renders.
+- Broader regression sweep, single-threaded per this machine's documented
+  host-memory constraint: `npx vitest run --pool=threads
+  --poolOptions.threads.singleThread lib/review "app/(app)/review"
+  --exclude '**/*.live.test.ts'` -- **12 files, 106 tests, all pass** (105
+  before this fix, +1 net from the new rate-limited scenario in
+  `page.test.ts`, replacing the old cross-user-isolation-at-the-call-layer
+  test that no longer applies now the action takes no arguments to smuggle
+  a user id into).
+
+**Verification run myself, not deferred:** `npx tsc --noEmit` (clean, zero
+errors), `npx eslint` scoped to every touched file (clean, zero warnings),
+`npm run check:import-boundaries` (clean, "no dependency violations
+found" -- this fix touches nothing under `lib/analytics`, the only tree
+that check cruises, so this is confirming no accidental regression, not
+a targeted check), and `npm run build` (clean production build, `/review`
+listed as a dynamic route, zero type or build errors -- had to kill a
+stray `next dev` process first and retry with `NODE_OPTIONS=
+--max-old-space-size=4096` after the first attempt OOM'd with both a dev
+server and the build running at once on this machine's documented
+memory-constrained host, per this session's own MEMORY.md note; the OOM
+was a host-resource collision, not a real build error, confirmed by the
+clean rerun).
+
+**Does this close the security-reviewer's blocking finding?** The fix
+directly implements the reviewer's own "Required fix" text verbatim (a
+new `RATE_LIMITS` scope, a Server Component calling a rate-limited Server
+Action rather than the repository/composer functions directly, a budget
+tighter than `ruleList`'s), and I re-verified every one of the reviewer's
+own PASS findings (1a/1c, 2, 3, 4, 5, 6) still hold by re-reading the
+current files rather than assuming this fix couldn't have disturbed them
+-- none of those five files' cross-user-scoping, freeze logic, date
+formatting, entitlement posture, injection surface, or service-role
+allowlist changed in this diff. **I am not marking this "done" or
+re-running the reviewer's own item 1(b) verdict myself** -- per this
+repo's own instruction and the ledger-currency rule's spirit, a security
+FAIL needs the security-reviewer's own sign-off on the fix, not a
+coder's self-assessment substituting for it. This slice should go back to
+`retrospeq-security-reviewer` for a re-verification of item 1(b)
+specifically, per the original finding's own closing instruction -- not
+directly to qa.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- SECURITY RE-VERIFICATION: PASS. Item 1(b) closed. Cleared for qa and commit.
+
+Independent re-verification of the fix-dispatch above, done by re-reading
+the actual current files myself, not by trusting the coder's report or
+re-deriving the four items I already passed in my 2026-09-13 "SECURITY
+REVIEW: FAIL" entry from scratch. Scope: confirm item 1(b) (the only
+blocking finding) is genuinely closed, and spot-check that nothing else
+regressed as a side effect.
+
+**1(b) re-verification -- rate limiting on the compute-on-view path:**
+
+- Read `app/(app)/review/actions.ts` in full. `fetchWeeklyReviewRead()`
+  calls `requireSessionAndRateLimit('weeklyReview')` as its first
+  statement, before `determineCurrentWeeklyReviewPeriod`,
+  `fetchWeeklyReviewByPeriodStart`, `assembleWeeklyReadPayload`,
+  `upsertWeeklyReview`, or `computeAndWriteReviewPrompts` run -- the rate
+  limit check genuinely gates the entire pipeline, not just its entry
+  point in name only. `requireSessionAndRateLimit` resolves the session
+  user first (cheap, a single `auth.getUser()`), then calls
+  `enforceRateLimit`, and only returns the real user (letting the
+  expensive chain proceed) if that passes -- confirmed by reading
+  `lib/rate-limit/limiter.ts`'s `enforceRateLimit`/`checkOne`: the IP
+  check runs first, throws `RateLimitExceededError` on the first rule
+  over budget, before the email-scoped check even runs, and (for this
+  scope, which is post-auth) before any of the four parallel reads or two
+  writes execute. No path exists where the expensive work starts before
+  the rate-limit check completes.
+- Grepped the whole repo for
+  `determineCurrentWeeklyReviewPeriod|assembleWeeklyReadPayload|upsertWeeklyReview|computeAndWriteReviewPrompts|fetchWeeklyReviewByPeriodStart|fetchPendingPromptCount`.
+  22 hits total; every code hit outside `lib/review/*` (the implementing
+  files themselves) and their own live/unit tests is exactly
+  `app/(app)/review/actions.ts` (the one legitimate caller) plus doc
+  comments (`page.tsx`'s header, `page.test.ts`'s header,
+  `docs/adr/0039...md`, `PROGRESS.md`, `NEEDS_YOUR_INPUT.md`,
+  `docs/runbook.md`, `lib/rate-limit/config.ts`'s scope comment). Read
+  `app/(app)/review/page.tsx` in full: it imports only
+  `fetchWeeklyReviewRead` from `./actions` and nothing else from
+  `lib/review/*` directly -- confirmed by the import list at the top of
+  the file (only `WeeklyReadPayload`/`FindingPayload` types and
+  formatting helpers besides that). No bypass exists: there is no second
+  route, server action, or direct lib import anywhere that reaches this
+  pipeline without going through `fetchWeeklyReviewRead`.
+
+**2. Limit proportionality re-check** (`lib/rate-limit/config.ts`,
+`weeklyReview` scope, lines 623-626): `ip: 15/hour`, `email: 10/hour`,
+against `ruleList`/`strategyList`/`adherenceDisplay`'s `90 ip / 60 email`
+hourly and `createRule`/`strategyCreate`'s `30 ip / 20 email` hourly. My
+own original FAIL finding characterized this path as "the single most
+expensive read+write chain in this slice" -- 4 parallel composed reads
+(one iterating the trader's own active strategies) plus a transactional
+upsert plus a transactional delete+insert loop, on every request until a
+review is completed (unreachable today, so in practice every request).
+15/hour is roughly half of `createRule`'s already-tighter-than-`ruleList`
+budget, and 6x tighter than the read-only precedents this path structurally
+resembles in usage shape (once per page load, no client re-fetch trigger)
+but not in cost. That proportionality is correct: a genuine financial-
+record-creating write (`createRule`) is throttled looser than this
+read, because this read costs more per call than that write does, and the
+scope's own inline comment states that reasoning explicitly rather than
+just asserting a number. 10/hour email-side is tight enough that a
+scripted refresh loop hitting this page cannot force more than 10 full
+recomputes/writes per hour per session, which is the exact abuse shape
+named in my original finding. I have no changes to recommend to either
+number.
+
+**3. Service-role inventory + ordering re-check:**
+
+- Ran `npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts`
+  myself: **3/3 pass.** This fix touches no `withServiceRoleConnection`
+  call site -- grepped `lib/review/` for the literal string, confirmed the
+  only two hits (`reviews-repository.ts`, `review-prompts-repository.ts`)
+  are pre-existing entries already in the test's own allowlist (added
+  during Slices 2/4, both with their own dated allowlist comments), and
+  the diff for this fix touches neither file's body, only `actions.ts`
+  (new), `page.tsx` (import change), `config.ts` (new scope), and the ADR
+  addendum. No new allowlist entry is needed -- confirmed, not assumed,
+  by reading the allowlist's own comment blocks for both files.
+- Ordering: confirmed above under item 1(b) -- the rate-limit check is the
+  literal first line of work inside `fetchWeeklyReviewRead`, before any
+  read or write in the pipeline. No gap of the "check happens after the
+  expensive work already ran" shape exists.
+
+**4. Re-confirmation of the four items I already passed 2026-09-13,
+re-read (not re-derived) against the current files:**
+
+- **Compute-on-view scoping to the requesting user**: `actions.ts` derives
+  `userId` from `supabase.auth.getUser()` inside `requireSessionUser()`
+  and `fetchWeeklyReviewRead` takes zero arguments -- if anything this is
+  now a STRICTER guarantee than before the fix (no argument surface
+  exists at all for a caller to smuggle another user's id into, versus
+  the old inline `page.tsx` code which also derived it from session but
+  had more surrounding code where a mistake could theoretically creep in).
+  Confirmed by reading `actions.ts` lines 60-72 and 151-156 directly.
+- **`completed_at` freeze**: unchanged, verbatim from before this fix --
+  `actions.ts` lines 165-179 check `existing.completedAt !== null` and
+  return the stored `readPayload` untouched when true, matching ADR 0039
+  decision 2 exactly. `page.test.ts`'s ADVERSARIAL test (line 122-139)
+  still asserts the frozen payload renders and the fresh "999" value never
+  appears -- re-ran this file myself, 8/8 pass.
+- **Cross-user isolation on the three reads**: `weekly-read-payload.ts`
+  and `reviews-repository.ts` are untouched by this diff (confirmed by
+  reading both in full again) -- every query still takes `userId`
+  explicitly as its own parameter and `reviews-repository.ts`'s own header
+  still documents "every query below still filters explicitly on
+  `user_id`, defense in depth." Nothing about this fix could have
+  disturbed it since neither file was touched.
+- **Date-format fix / entitlement / `canRender` posture**: `page.tsx`'s
+  own header still documents the "no capability named for reviews...
+  available to every plan" reasoning unchanged, and the four-panel render
+  logic (`ConsistencyPanel`/`AdherencePanel`/`FindingsPanel`/the outcome
+  header) is byte-for-byte the same JSX as before this fix -- only the
+  data-fetching call above it changed from five inline calls to one
+  action call. Confirmed by reading the full current `page.tsx`.
+
+**Verdict: PASS. Item 1(b) is closed, no new gap introduced, all
+previously-passed items re-confirmed unchanged. This slice is cleared for
+`retrospeq-qa` and commit.**
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 5 -- QA GATE: PASS. Cleared to commit and push to main.
+
+Read AGENTS.md's "Non-negotiables" and "Design system" sections and
+retrospeq-design-system/modules/retrospeq-design-decisions.md in full
+before starting, per this dispatch's own instruction. Read all five prior
+Slice 5 decision-log entries in full (coder 2026-09-12, tester "TESTER
+GATE" 2026-09-13, coder fix-dispatch #1, security-reviewer FAIL, coder
+fix-dispatch #2, security "SECURITY RE-VERIFICATION: PASS") rather than
+trusting only the final entry's summary line, plus
+docs/adr/0039-weekly-review-compute-on-view-and-current-period.md in
+full (including its 2026-09-13 addendum) and 06-review-and-graduation.md
+sec 4.2/4.8/5.1 myself.
+
+**1. Date format ("21 July" day-first) -- PASS.** Read
+`app/(app)/review/format.ts` directly: `formatServerDayLong` uses
+`Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', timeZone:
+'UTC' })` -- `en-GB`, not the original `en-US` that caused the bug, with
+a code comment naming the actual failure mode and pointing at
+`trades/format.ts`'s `formatClockTime` as house-style precedent. Read
+`tmp/dev-screenshots/review-populated-3-findings.png` and
+`review-missed-week-2span.png` directly with the Read tool (both still
+exist, not deleted): the first reads "Week of 31 August", the second "24
+August - 6 September" -- both correctly day-first, matching sec 5.1's
+"Week of 21 July" reference markup exactly. Confirmed, not assumed from
+the chain's own claim.
+
+**2. Rate-limiting fix's shape -- PASS.** Read `app/(app)/review/page.tsx`
+and `app/(app)/review/actions.ts` in full. `page.tsx` imports only
+`fetchWeeklyReviewRead` from `./actions` -- grepped the file's full import
+list, confirmed no direct import of
+`determineCurrentWeeklyReviewPeriod`/`assembleWeeklyReadPayload`/
+`upsertWeeklyReview`/`computeAndWriteReviewPrompts`/
+`fetchWeeklyReviewByPeriodStart`/`fetchPendingPromptCount` remains in
+`page.tsx`; all six are imported only by `actions.ts`. `fetchWeeklyReviewRead`
+calls `requireSessionAndRateLimit('weeklyReview')` as its first statement,
+before any of the expensive chain runs. The discriminated-union return
+shape and the new `!result.success` render branch in `page.tsx` are the
+only additions -- confirmed by direct side-by-side comparison of the four
+ready-state JSX blocks (outcome header, ConsistencyPanel, AdherencePanel,
+FindingsPanel, the decisions/close button) against what the 2026-09-12
+coder entry and 2026-09-13 tester entry describe: identical markup,
+identical data shape consumed, nothing about the rendered success-case
+output changed by this refactor. Cross-checked against the tester's and
+first fix-dispatch's own screenshots (`review-populated-decisions-pending
+.png`, `review-zero-prompt-week.png`) plus the second fix-dispatch's
+explicit "visually unchanged" claim for the two E2E screenshots -- all
+four screenshots I read show the same four-panel layout, same button
+copy pattern, same markup classes.
+
+**3. Sec 4.2 Part 1 acceptance criteria, end to end -- PASS.** Verified
+directly in `review-populated-3-findings.png`: outcome line "3 trades . 3
+days . +1.3R" (R-multiple, `.rq-num` tabular spacing producing the
+visually-tracked "+1 . 3R" look already flagged by the coder as a
+pre-existing `--rq-track-snug` trait, not a new bug -- confirmed present
+identically in the zero-trades screenshot's "0 . 0R" too) sits above the
+panels and is never referenced by them, matching "context, not subject."
+Consistency panel: "3 of 3 days closed out." / "2-week streak intact."
+-- streak in weeks, matches the non-negotiable. Adherence panel: "Hard
+rules: 10 of 10." / "Soft: 18 of 20." -- two numbers, never blended,
+numerator-first phrasing, no bare percentage anywhere on screen. Findings
+panel: three findings shown (the cap), each with statement + n +
+confidence, matching sec 5.1's reference markup shape. Button reads "3
+decisions" -- correctly disabled, with the honest caption "Decisions and
+closing out this review aren't available yet." underneath, matching the
+coder's own disclosed, explicitly-scoped shortcut (Part 2/3 not yet
+built) -- this was flagged honestly in the original coder entry, not
+discovered here as a surprise.
+
+**4. Sec 4.8 scenarios -- PASS, confirmed by direct code read.** Read
+`lib/review/current-period.ts` in full: the brand-new-user branch shows
+only `lastEndedWeekStart` alone (no backdating to signup, per its own
+inline comment citing sec 4.8's "does not compound... feels like
+homework"), and the missed-review branch computes `periodStart` as the
+day after the last completed review's `period_end`, spanning through
+`lastEndedWeekStart`'s own week-end when that exceeds one week -- exactly
+sec 4.8's "covers two" language. Cross-checked against
+`review-missed-week-2span.png`: "24 August - 6 September" is a real
+14-day span rendered from a real seeded `covers_weeks = 2` row per the
+tester's own live-DB/E2E claim, not merely asserted in a unit test. This
+file was untouched by either fix cycle (confirmed: neither fix-dispatch
+entry lists it among touched files, and its own content matches the
+original 2026-09-12 coder description) -- correctly unaffected, as
+expected.
+
+**5. No UI drift -- PASS, via fresh screenshot read.** Read all four
+`tmp/dev-screenshots/review-*.png` files directly with Read (not
+re-trusting prior agents' descriptions): no red or green anywhere in any
+of the four (backgrounds are neutral grey/white, the one visible accented
+element -- the disabled decisions/close button -- is a flat tan/amber,
+matching this repo's established "genuinely disabled" convention, not a
+semantic-color pair); exactly one `.rq-btn` per view (the single
+decisions/close button; the app-shell "Sign out" button in the header is
+a distinct ghost/outline element, consistent with every other reviewed
+screen's established exclusion); `.rq-num` applied to every real number
+visible (trade/day/R counts, consistency fractions, adherence fractions,
+streak weeks) -- confirmed by the consistent bold-tabular rendering
+matching this repo's other `.rq-num`-bearing screens. No ambient
+gauge/strip on this screen, and that is correct, not a violation -- sec
+5.1's own reference markup for the weekly review has no gauge-bearing
+element (ambient strips are a pre-entry-capture-screen concept, sec 8.1,
+not a weekly-review concept) -- confirmed by re-reading sec 5.1's full
+reference markup myself rather than assuming the omission was intentional.
+
+**6. PROGRESS.md chain internal consistency -- PASS.** Read all five
+entries end to end. Each entry's stated verdict matches what the next
+entry treats as true: the tester's finding (`formatServerDayLong`
+month-first) is exactly what fix-dispatch #1 fixes and re-verifies against
+the tester's own committed test file (not a rewritten/weakened test); the
+security-reviewer's FAIL item 1(b) (no rate limiting on compute-on-view)
+is exactly what fix-dispatch #2 fixes, citing the same file names, same
+required-fix text, same precedent (`rules`/`strategies` `actions.ts`); the
+security re-verification entry re-checks its own prior PASS items (1a/1c,
+2-6) by re-reading current files rather than assuming they survived the
+second fix untouched, and confirms zero new gap. No entry claims a result
+contradicted by a later entry's own direct observation. Spot-checked two
+of the more load-bearing specific claims against the actual files myself
+rather than trusting transcription: `weeklyReview` scope numbers in
+`lib/rate-limit/config.ts` (ip: 15/hour, email: 10/hour) match exactly
+what both fix-dispatch #2 and the re-verification entry state;
+`withUserConnection` (not `withServiceRoleConnection`) is used by all
+three of this slice's new repository reads, matching every entry's claim,
+confirmed by direct grep of both repository files.
+
+**7. Documentation -- PASS.** `docs/adr/0039...md`'s "Addendum
+(2026-09-13)" section is present, complete, and specific (names the exact
+finding, the exact fix, and explicitly states "No change to the
+compute-on-view decision itself... only to whether an unauthenticated-
+in-effect volume of requests can exploit that cost") -- not a placeholder.
+`lib/rate-limit/config.ts`'s `weeklyReview` entry has a full reasoning
+comment (why tighter than `ruleList`/`strategyList`, the specific
+per-request cost breakdown, the proportionality math against
+`createRule`/`strategyCreate`) rather than a bare number. `docs/runbook.md`'s
+existing "Weekly review materialisation has no deployed scheduler yet"
+entry has a real, substantive "UPDATE, Slice 5" section (read directly,
+lines approx 2002-2048) documenting the new compute-on-view mitigation,
+what it does and does not solve, and the new
+"[review/page] compute-on-view failed:" log-grep alerting pattern -- this
+is a real runbook entry, not a TODO. `NEEDS_YOUR_INPUT.md`'s scheduler
+entry is likewise updated honestly (confirmed by direct read) rather than
+removed, correctly describing the mitigation without claiming the
+underlying scheduler blocker is closed. No new ADR was needed for either
+fix cycle (both are bugfixes within ADR 0039's already-documented scope,
+not new deviations from a 00-foundation convention) -- correctly not
+written, per both fix-dispatch entries' own accurate reasoning.
+
+**8. Standard non-negotiables -- PASS.** No currency P&L anywhere on this
+screen -- outcome line and all panels are R-multiple/count-based only,
+confirmed in both the code (`formatRMultiple`, `outcome.totalR`) and both
+screenshots. No XP/points anywhere. No compound rule logic touched or
+introduced by this slice (this slice reads Module 04's already-computed
+adherence via `WeeklyReadPayload`, no rule expression construction of any
+kind in any of this slice's own new files -- confirmed by grep for AND/
+OR/expr/operand_id across page.tsx/actions.ts/format.ts/current-period.ts:
+zero hits). `check:import-boundaries` reported clean (0 violations) in
+every one of the five prior gate entries and this slice's own files don't
+touch `lib/analytics` or `lib/rules` internals directly (only
+`WeeklyReadPayload`, an already-assembled cross-module read type) -- no
+Module 04/05 cross-import violation introduced.
+
+**Verdict: PASS. This slice is cleared to commit and push to main.**
+Every one of the eight items above was independently verified against the
+actual current files and fresh/existing screenshots, not taken on the
+prior chain's word alone -- no new gap found. The orchestrating session
+should commit `app/(app)/review/` (page.tsx, format.ts, actions.ts and
+their `__tests__`), `lib/review/current-period.ts` (and its test),
+`lib/review/reviews-repository.ts`, `lib/review/review-prompts-repository.ts`
+(and the new live test), `lib/rate-limit/config.ts`,
+`docs/adr/0039-weekly-review-compute-on-view-and-current-period.md`,
+`docs/runbook.md`, `NEEDS_YOUR_INPUT.md`, `e2e/review-weekly-read.spec.ts`,
+and this file, with no further human review gate before doing so, per
+this project's Autonomy policy.

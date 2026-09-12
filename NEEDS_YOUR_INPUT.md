@@ -192,28 +192,64 @@ trade confirm, rather than once genuinely after the period ends, would
 be actively WRONG, not just untested (§4.10: "materialised on a
 schedule, not on open").
 
-**What's stalled:** Module 06's weekly review Part 1 ("the read")
-never actually gets computed for a real trader in production — no
-`reviews` row will ever exist outside a direct test call. This does NOT
-block the underlying work being done, reviewed, and marked complete:
+**What's stalled:** a scheduled, proactive materialisation of every
+trader's weekly review still does not exist — Module 06's §4.10 step 6
+("notify") can never fire for a review nothing ever computed, and a
+trader who never manually opens `/review` still never gets one computed
+for them.
+
+**UPDATE, Slice 5 (2026-09-12) — a real, non-fake interim mitigation now
+exists and makes the READ screen usable today: compute-on-view.**
+`app/(app)/review/page.tsx` now calls `assembleWeeklyReadPayload` →
+`upsertWeeklyReview` → `computeAndWriteReviewPrompts` synchronously, in
+the SAME request, the first time a trader opens `/review` for a period
+that isn't already computed-and-completed — full reasoning in
+`docs/adr/0039-weekly-review-compute-on-view-and-current-period.md`.
+This is deliberately NOT the "fake trigger" pattern this entry's own
+"Why an agent can't fix this" paragraph above warns against: nothing is
+wired into an UNRELATED handler (no per-trade-confirm side effect, no
+`setInterval`) — the compute runs only on the one page whose entire job
+is to show this exact data, when the one person who could act on it is
+already there looking at it. `reviews`/`review_prompts` rows DO now get
+created for any real trader who opens the screen (verified live,
+2026-09-12: a brand-new signup with zero seed data correctly renders a
+real, honestly-empty first review; a seeded populated week correctly
+produces a real ranked `review_prompts` row via the full Slice 3/4
+pipeline, unmodified). `docs/runbook.md`'s scheduler entry is updated
+with the same detail, including the one new failure mode this
+introduces (a mid-request compute failure falls back to §9's
+`REVIEW_NOT_READY` copy, and the very next page view retries from
+scratch — no persisted "failed" state).
+
+**What a real scheduler would still add, once Vercel infra exists**: (1)
+a review for a trader who never opens the app — currently truly zero
+coverage; (2) the one notification §4.10 step 6 describes, which needs
+something to have computed and noticed a fresh review BEFORE the trader
+opens it, not after; (3) removing the "recompute on every view of a
+not-yet-completed period" cost (ADR 0039 decision 2) once a cached/
+completed path exists to prefer instead.
+
 `lib/review/weekly-read-payload.ts`'s `assembleWeeklyReadPayload` and
-`lib/review/reviews-repository.ts`'s `upsertWeeklyReview` are both real,
-fully working, independently callable functions (live-DB self-checked
-by this slice's own coder — 3/3 scenarios passed against the real shared
-dev Supabase project: an empty user, a fully populated single week, and
-a `covers_weeks = 2` multi-week period), just not wired into anything
-that runs on its own. See `docs/runbook.md`'s "Weekly review
+`lib/review/reviews-repository.ts`'s `upsertWeeklyReview` remain the
+same real, fully working, independently callable functions this entry
+originally described (live-DB self-checked by that slice's own coder —
+3/3 scenarios passed against the real shared dev Supabase project), now
+joined by a real caller (`/review`) in addition to "any future
+scheduler or test." See `docs/runbook.md`'s "Weekly review
 materialisation has no deployed scheduler yet" entry and
-`docs/adr/0036-weekly-review-read-payload-assembly.md` for the full
-detail.
+`docs/adr/0036-weekly-review-read-payload-assembly.md` /
+`docs/adr/0039-weekly-review-compute-on-view-and-current-period.md` for
+the full detail.
 
 **What was built in the meantime:** the real assembly + materialisation-
-write pipeline, built against the correct interface (an explicit
+write pipeline (Slice 2/4), now with a real, working Part 1 "read" UI on
+top of it (Slice 5) — built against the correct interface (an explicit
 `periodStart`/`periodEnd`, callable by any future scheduler or test) —
-not a stub, not a fake trigger. Module 06 §4.3-4.9's prompt-ranking/cap/
-graduation/relaxation/promotion/retirement logic and any weekly-review UI
-remain entirely out of scope for this same reason (a later slice, once
-this scheduling gap and Module 06's remaining stories are picked up).
+not a stub, not a fake trigger. Module 06 §4.3/§4.5-4.9's remaining
+decision-flow UI (Part 2 accept/decline/defer, Part 3 close, deferral/
+backlog, the monthly trend view) remain out of scope for this same
+reason (later slices, once this scheduling gap and Module 06's
+remaining stories are picked up).
 
 ---
 

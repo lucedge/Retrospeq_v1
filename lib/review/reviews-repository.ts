@@ -1,5 +1,5 @@
 import 'server-only';
-import { withServiceRoleConnection } from '@/lib/supabase/direct';
+import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import type { WeeklyReadPayload } from './weekly-read-payload';
 
 /**
@@ -133,6 +133,94 @@ export async function upsertWeeklyReview(
       openedAt: row.opened_at,
       completedAt: row.completed_at,
       computedAt: row.computed_at,
+    };
+  });
+}
+
+/**
+ * Module 06 Slice 5 — the FIRST reads this file has ever had (every prior
+ * function here is a write; grep-confirmed at this slice's own dispatch
+ * time). Both use `withUserConnection`, deliberately NOT
+ * `withServiceRoleConnection` like the write functions above: unlike
+ * §4.10's scheduled-job write (no real session), these two reads run
+ * inside an actual authenticated page view (`app/(app)/review/page.tsx`)
+ * — a real session exists at the call site, so RLS enforcement is a real,
+ * available defense-in-depth layer here, matching every other page-level
+ * read in this repo (`fetchPeriodOutcome`, `fetchPeriodConsistency`, ...)
+ * rather than the scheduled-job posture. See `lib/review/current-period.ts`
+ * for what calls `fetchLatestCompletedWeeklyReviewPeriodEnd`, and
+ * `app/(app)/review/page.tsx` for what calls `fetchWeeklyReviewByPeriodStart`.
+ */
+
+/**
+ * The `period_end` of this user's most recently COMPLETED weekly review
+ * (`completed_at is not null`), or `null` if none exists yet (every real
+ * trader today, since no Part 3 "close" UI has shipped yet — see
+ * `docs/adr/0039` for why `current-period.ts` treats that as "first ever
+ * review, don't backdate" rather than an error). Deliberately reads
+ * `completed_at`, not `computed_at`: a review that has merely been
+ * COMPUTED (this slice's own compute-on-view path runs on every
+ * not-yet-completed period) must not count as "reviewed" for the purpose
+ * of deciding what the NEXT period to show is — only a trader's own
+ * completion of Part 3 should ever advance this cursor. Ordered by
+ * `period_end desc` (not `period_start`) so a `covers_weeks > 1` (§4.8)
+ * catch-up review correctly advances the cursor past every week it
+ * covered, not just its first.
+ */
+export async function fetchLatestCompletedWeeklyReviewPeriodEnd(userId: string): Promise<string | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ period_end: string }>(
+      `select period_end::text as period_end
+         from retrospeq.reviews
+        where user_id = $1 and period_kind = 'weekly' and completed_at is not null
+        order by period_end desc
+        limit 1`,
+      [userId],
+    );
+    return res.rows[0]?.period_end ?? null;
+  });
+}
+
+export interface WeeklyReviewWithPayload extends WeeklyReviewRecord {
+  readPayload: WeeklyReadPayload;
+}
+
+/**
+ * The full `reviews` row (including its stored `read_payload`) for
+ * `(userId, 'weekly', periodStart)`, or `null` if this period has never
+ * been materialised. `app/(app)/review/page.tsx` uses this to decide
+ * whether to reuse an already-COMPLETED review's frozen payload as-is, or
+ * to fall through to a fresh `assembleWeeklyReadPayload` +
+ * `upsertWeeklyReview` compute (see docs/adr/0039's "compute on view"
+ * decision for the full reasoning on why "not completed" is the
+ * recompute trigger, not a `computed_at`/`period_end` timestamp
+ * comparison).
+ */
+export async function fetchWeeklyReviewByPeriodStart(
+  userId: string,
+  periodStart: string,
+): Promise<WeeklyReviewWithPayload | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<WeeklyReviewQueryRow & { read_payload: WeeklyReadPayload }>(
+      `select id, period_start::text as period_start, period_end::text as period_end, covers_weeks,
+              opened_at::text as opened_at, completed_at::text as completed_at, computed_at::text as computed_at,
+              read_payload
+         from retrospeq.reviews
+        where user_id = $1 and period_kind = 'weekly' and period_start = $2`,
+      [userId, periodStart],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId,
+      periodStart: row.period_start,
+      periodEnd: row.period_end,
+      coversWeeks: row.covers_weeks,
+      openedAt: row.opened_at,
+      completedAt: row.completed_at,
+      computedAt: row.computed_at,
+      readPayload: row.read_payload,
     };
   });
 }

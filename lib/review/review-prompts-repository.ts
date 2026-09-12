@@ -1,5 +1,5 @@
 import 'server-only';
-import { withServiceRoleConnection } from '@/lib/supabase/direct';
+import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import type { RankedPromptCandidate } from './prompt-candidates/ranking';
 
 /**
@@ -109,5 +109,28 @@ export async function writeReviewPrompts(
       subjectType: row.subject_type,
       subjectId: row.subject_id,
     }));
+  });
+}
+
+/**
+ * Module 06 Slice 5 — the weekly review's own "N decisions" / "Week
+ * closed" button (§5.1) needs a pending-prompt COUNT, not the rows
+ * themselves (Part 2's decision-by-decision UI, which reads and renders
+ * `payload`, is a separate future slice — see that slice's own scope
+ * note). `withUserConnection`, not `withServiceRoleConnection`: this is a
+ * real page-view-time read behind a real authenticated session (same
+ * reasoning `reviews-repository.ts`'s two new Slice-5 reads document),
+ * unlike `writeReviewPrompts` above, which is the scheduled-job write
+ * half with no session to run a user-scoped connection against.
+ */
+export async function fetchPendingPromptCount(userId: string, reviewId: string): Promise<number> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ count: string }>(
+      `select count(*)::text as count
+         from retrospeq.review_prompts
+        where user_id = $1 and review_id = $2 and state = 'pending'`,
+      [userId, reviewId],
+    );
+    return Number(res.rows[0]?.count ?? '0');
   });
 }

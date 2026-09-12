@@ -1992,11 +1992,60 @@ actually watch for:**
 
 **How to check, once wired up:** grep application logs for whatever
 per-user error prefix the real scheduler slice establishes (matching
-this file's own `[engagement]`/`[adherence]` convention). Until then:
-`select count(*) from retrospeq.reviews` staying at 0 (or not growing
-week over week) against a live project with real trading activity is
-the expected, correct state — not a symptom — for exactly as long as no
-scheduler exists.
+this file's own `[engagement]`/`[adherence]` convention). Before Slice 5
+below shipped: `select count(*) from retrospeq.reviews` staying at 0 (or
+not growing week over week) against a live project with real trading
+activity was the expected, correct state — not a symptom — for exactly
+as long as no scheduler existed. **That is no longer true as of Slice 5**
+— see immediately below.
+
+**UPDATE, Slice 5 (2026-09-12) — a genuine, documented interim mitigation
+now exists: compute-on-view.** `app/(app)/review/page.tsx` calls
+`assembleWeeklyReadPayload` → `upsertWeeklyReview` →
+`computeAndWriteReviewPrompts` synchronously, in-request, the first time
+any trader opens `/review` for a period with no row yet (or one not yet
+`completed_at`) — see `docs/adr/0039-weekly-review-compute-on-view-and-
+current-period.md` for the full reasoning. This means:
+
+- `retrospeq.reviews`/`retrospeq.review_prompts` DO now grow for any real
+  trader who actually opens `/review` — a `count(*)` staying at 0 is no
+  longer automatically "correct, not a symptom" once real traffic exists;
+  it now more likely means either no trader has opened the screen yet, or
+  something in the compute-on-view path is failing (see below).
+- **This does NOT close the underlying scheduler gap** — a trader who
+  never opens `/review` still never gets a review computed, and no
+  notification (§4.10 step 6) can ever fire for a review that was never
+  computed. The real fix (a deployed scheduler, Vercel Cron or
+  equivalent) is still required and still tracked in
+  `NEEDS_YOUR_INPUT.md`.
+- **New failure mode this introduces: what happens if the synchronous
+  compute fails mid-request.** `page.tsx` wraps the three-call chain in
+  one try/catch; on ANY failure (a dead DB connection, an unexpected
+  throw from any of the four `assembleWeeklyReadPayload` composers per
+  this entry's own already-flagged propagation gap above, or from
+  `computeAndWriteReviewPrompts`), the whole screen falls back to §9's
+  `REVIEW_NOT_READY` copy ("Your review is being prepared. Please try
+  again in a moment.") — never a partially-rendered review (no panel
+  renders using half of a payload that failed to fully assemble). Because
+  nothing is written to `reviews` on a failed attempt, **the very next
+  page view retries the entire computation from scratch** — there is no
+  persisted "failed" state to get stuck in, and no separate retry/backoff
+  logic was needed for that reason. **How to check:** grep application
+  logs for `[review/page] compute-on-view failed:` — a RECURRING
+  occurrence for the SAME `user_id` across repeated page loads is the
+  alertable pattern (matches this file's own established convention); a
+  one-off is more likely a transient connectivity blip.
+- **This compute now runs inside the SAME request that renders a page for
+  a real, waiting trader** — unlike a scheduled job, a slow assembly
+  (e.g. a strategy with many segmentable fields) is directly on the
+  critical path of a real page load, not a background concern. §11's own
+  "< 2s materialised" budget describes the SCHEDULED case; this synchronous
+  path has no such budget enforced or measured yet. Flagged for whoever
+  eventually wires the real scheduler: once it exists, this page's own
+  logic should prefer an already-`completed_at` OR already-fresh-enough
+  row over recomputing (today it always recomputes anything not yet
+  `completed_at`, a deliberate, documented, but not free, simplification —
+  ADR 0039 decision 2).
 
 **UPDATE (Module 06 Slice 4, 2026-09-12):** the same "no deployed
 scheduler" gap now also covers `lib/review/review-prompts.ts`'s

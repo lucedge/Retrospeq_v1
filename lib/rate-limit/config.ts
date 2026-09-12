@@ -587,6 +587,43 @@ export const RATE_LIMITS = {
     ip: { limit: 60, windowSeconds: 3600 },
     email: { limit: 40, windowSeconds: 3600 },
   },
+  /**
+   * Module 06 (Review & Graduation) Slice 5 — `app/(app)/review/actions.ts`'s
+   * `fetchWeeklyReviewRead`, the `/review` page's own data-fetching entry
+   * point. SECURITY-REVIEWER FINDING (2026-09-13, "SECURITY REVIEW: FAIL"):
+   * this scope did not exist at all, and `app/(app)/review/page.tsx` called
+   * `fetchWeeklyReviewByPeriodStart`/`assembleWeeklyReadPayload`/
+   * `upsertWeeklyReview`/`computeAndWriteReviewPrompts` directly from the
+   * Server Component with zero rate limiting anywhere in that chain — see
+   * the fix commit's own PROGRESS.md entry for the full remediation.
+   *
+   * This is deliberately TIGHTER than `ruleList`/`strategyList`/
+   * `adherenceDisplay` above (90 ip / 60 email, hourly) even though all four
+   * share the same "read-only, once per page load, no client re-fetch
+   * trigger" usage shape — because this one is not actually a cheap read.
+   * Per ADR 0039's own "Consequences" section, every view of a
+   * not-yet-completed review (today: EVERY view, since nothing sets
+   * `completed_at` yet — Part 3/"close" is a future slice) runs
+   * `assembleWeeklyReadPayload`'s 4 parallel composed reads (one of which,
+   * `assembleWeeklyFindings`, iterates the trader's own active strategies)
+   * followed by a transactional `upsertWeeklyReview` write AND a
+   * transactional `writeReviewPrompts` delete+insert loop — an order of
+   * magnitude more DB work per request than `ruleList`'s single SELECT.
+   * Given that cost, this reuses `createRule`/`strategyCreate`'s "genuine
+   * new-record write" reasoning as a starting point and then halves it: a
+   * trader legitimately opens `/review` a handful of times in one sitting
+   * while reading it (never more than a few page loads, since there is no
+   * week picker or client-triggered re-fetch anywhere on this screen today,
+   * matching `ruleList`'s own "no client re-fetch trigger" observation) —
+   * 15/hour per IP and 10/hour per session comfortably covers that, while
+   * closing off a tight refresh-loop or script hitting this page
+   * indefinitely to force repeated full recomputes, which is exactly the
+   * abuse shape the security review flagged.
+   */
+  weeklyReview: {
+    ip: { limit: 15, windowSeconds: 3600 },
+    email: { limit: 10, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;
