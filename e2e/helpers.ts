@@ -52,3 +52,67 @@ export async function deleteAuthUserByEmail(email: string): Promise<void> {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
   });
 }
+
+/**
+ * Shared confirmed-user + UI-login helpers (2026-09-14). Five specs still
+ * carry their own inline copies from before this existed; new specs use
+ * these. Creation goes through the GoTrue admin API with
+ * `email_confirm: true` (the project's mailer is broken, see
+ * NEEDS_YOUR_INPUT.md); deletion goes profiles-first under the erasure
+ * escape hatch, then GoTrue — the same order scripts/test-user.mjs uses.
+ */
+export const E2E_TEST_PASSWORD = 'Retrospeq-E2E-Pass-1234!';
+
+export interface E2ETestUser {
+  id: string;
+  email: string;
+}
+
+export async function createConfirmedUser(label: string): Promise<E2ETestUser> {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('createConfirmedUser: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing (.env.local)');
+  const email = uniqueTestEmail(label);
+  const res = await fetch(`${url}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ email, password: E2E_TEST_PASSWORD, email_confirm: true }),
+  });
+  const body = (await res.json()) as { id?: string; msg?: string };
+  if (!res.ok || !body.id) throw new Error(`createConfirmedUser failed: ${res.status} ${body.msg ?? ''}`);
+  return { id: body.id, email };
+}
+
+export async function deleteTestUser(userId: string): Promise<void> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (dbUrl) {
+    const { Client } = await import('pg');
+    const c = new Client({ connectionString: dbUrl });
+    await c.connect();
+    try {
+      await c.query('begin');
+      await c.query(`select set_config('retrospeq.erasure_in_progress', 'true', true)`);
+      await c.query('delete from retrospeq.profiles where id = $1', [userId]);
+      await c.query('commit');
+    } catch {
+      await c.query('rollback').catch(() => {});
+    } finally {
+      await c.end();
+    }
+  }
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return;
+  await fetch(`${url}/auth/v1/admin/users/${userId}`, {
+    method: 'DELETE',
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+}
+
+export async function loginAs(page: import('@playwright/test').Page, email: string): Promise<void> {
+  await page.goto('/login');
+  await page.fill('#email', email);
+  await page.fill('#password', E2E_TEST_PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 });
+}

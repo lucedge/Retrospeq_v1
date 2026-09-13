@@ -15,6 +15,7 @@ copying it:
 | Why was a spec convention deviated from | `docs/adr/NNNN-*.md` |
 | What alerting/error conditions exist and what to do about them | `docs/runbook.md` |
 | Product spec / non-negotiables / design system | `AGENTS.md` + `retrospeq-design-system/modules/` |
+| How the agent pipeline works (tiers, scripts, skills) — v2 since 2026-09-14 | `docs/process.md`, `.claude/skills/verify/SKILL.md` |
 
 This file is for everything else a developer (human or agent) needs
 to get productive: how to run the thing, how the pieces fit together,

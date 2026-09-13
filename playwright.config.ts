@@ -1,12 +1,14 @@
 import { defineConfig } from '@playwright/test';
+import './e2e/helpers'; // loads .env.local into process.env (Playwright doesn't)
 
 /**
- * Module 01 §7.4 E2E coverage, run against a manually-started `next dev`
- * server (see PROGRESS.md test-report notes for the exact port — Next.js
- * picks the next free port when 3000 is occupied). No `webServer` block:
- * this repo's dev server needs `.env.local` (real Supabase project
- * credentials), and starting/stopping it per test run is the tester's
- * job, done explicitly, not implicitly by Playwright.
+ * E2E against the real dev server + shared dev Supabase project.
+ *
+ * `webServer` reuses an already-running `next dev` on :3000 (the normal
+ * case during a slice) and starts one otherwise, with the fail-closed
+ * rate-limit bypass on so a full run doesn't trip Module 01 §7.2's
+ * sign-in throttle (docs/adr/0042). Prefer `npm run e2e:changed` (1–3
+ * spec files for the routes a change touched) over the full suite.
  */
 export default defineConfig({
   testDir: './e2e',
@@ -16,8 +18,12 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'retain-on-failure',
-    launchOptions: process.env.PLAYWRIGHT_CHROME_PATH
-      ? { executablePath: process.env.PLAYWRIGHT_CHROME_PATH }
-      : undefined,
+  },
+  webServer: {
+    command: 'npm run dev',
+    url: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
+    reuseExistingServer: true,
+    timeout: 60_000,
+    env: { RETROSPEQ_E2E_RATE_LIMIT_BYPASS: 'true' },
   },
 });

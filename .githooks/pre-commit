@@ -1,0 +1,6 @@
+#!/bin/sh
+# Deterministic, fast, always-on. Anything slower belongs in `npm run verify`.
+set -e
+node scripts/ledger-check.mjs
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|mjs)$' | grep -vE '^(retrospeq-design-system|reference)/' || true)
+if [ -n "$staged" ]; then npx eslint $staged; fi

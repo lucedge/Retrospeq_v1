@@ -10,301 +10,67 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Retrospeq — project rules for autonomous agents
 
-This project is being built end-to-end by autonomous Claude Code agents
-with no human review gate on commits or deploys (owner decision,
-2026-08-19 — see PROGRESS.md "Autonomy policy"). That makes this file
-and PROGRESS.md the only checks in the loop. Read both fully before
-touching code. Do not wait for a human to confirm direction — decide
-from the spec, record the decision, keep moving.
+Built end-to-end by autonomous Claude Code agents with no human review gate on commits (owner decision 2026-08-19). This file and `PROGRESS.md` are the checks in the loop. Read both before touching code; decide from the spec, record the decision, keep moving. How the agent system works and why: `docs/process.md`.
 
 ## Working with the owner (Aditya)
 
-Notes that don't fit neatly elsewhere but matter for how this project
-gets built, captured 2026-08-20 so they survive a workspace switch away
-from the parent `E:\LuceEdge` folder (Claude's own cross-session memory
-is tied to that folder path and won't carry over automatically; this
-file will, since it's just a repo file):
+- Plain-language summary first, technical detail second.
+- Cost and cadence are the owner's call — model choices, loop frequency, full-suite runs, anything recurring. State the tradeoff, let them pick.
+- LuceEdge is a separate live product by the same owner sharing one dev/test Supabase project (`docs/adr/0002`). `reference/lucedge-broker-prior-art/` is a frozen snapshot: prior art, never copy-paste (it doesn't meet this security bar).
+- **Stop means stop everything**, in any phrasing: end the `/loop` (`ScheduleWakeup stop`), `TaskStop` every background agent, confirm the cloud routine is paused, `git status`, then say plainly what was stopped. Act first, ask after. Resuming is always an explicit instruction.
 
-- **Explain plainly first, technical depth second.** When reporting on
-  multi-step agent/infra work, lead with a short plain-language summary
-  of what happened and what it means before technical detail — don't
-  front-load jargon (agent names, cron/schema mechanics, tool internals).
-- **Cost and cadence are the owner's call, not the agents'.** Full
-  autonomy over code/git (see "Autonomy policy" in PROGRESS.md) is not
-  the same as unlimited autonomy over how often/expensively autonomous
-  work runs. If setting up or changing any recurring/scheduled agent
-  work, state the realistic cost/frequency tradeoff and let the owner
-  pick the cadence — don't default to maximum frequency.
-- **LuceEdge (`E:\LuceEdge`) is a separate, still-functional product**
-  by the same owner, not something this project supersedes or should
-  touch. They share one Supabase project for dev/test only (see
-  `docs/adr/0002-shared-dev-supabase-project.md`). `reference/lucedge-
-  broker-prior-art/` is a one-time, unsynced snapshot copied over before
-  a workspace switch made `E:\LuceEdge` unreachable — treat it as frozen
-  reference, not a live source to pull further updates from.
+## Never fake it, always flag it
 
-## Stopping everything — the kill-switch convention
-
-Captured 2026-08-20 after a real instance of this taking several
-back-and-forth exchanges to actually achieve, which is exactly the
-friction this convention exists to remove.
-
-**When the owner signals stop, in any phrasing** ("stop", "no no stop",
-"hold off", "pause this", "kill it") — treat it as urgent and total,
-covering everything autonomous, not just whatever the most recent
-message was about. Act immediately, in this order, without asking
-first:
-
-1. Stop the local `/loop` if one is running (`ScheduleWakeup` with `stop: true`).
-2. Stop every in-flight background agent this session dispatched (`TaskList` to find them, `TaskStop` each one).
-3. Check whether the cloud scheduled routine is enabled; if so, pause it too (`RemoteTrigger` update, `enabled: false`). "Stop" means stop all autonomous activity, not just whatever is local to this chat.
-4. Run `git status` to confirm nothing is left mid-write, and report that honestly — clean, or here's exactly what's uncommitted.
-5. Tell the owner plainly what was actually stopped. Don't assume they know which separate mechanisms (loop vs. background task vs. cloud routine) existed — that gap is what caused the friction last time.
-
-**Do not lead with clarifying questions before acting.** Stop everything
-first; ask the one thing that genuinely can't be inferred (e.g.
-"temporary pause or done for the day?") only after everything is
-already stopped, not before. A stop that turns out to have been broader
-than intended costs a small amount of redone work; a stop that's slower
-than the owner wanted costs trust.
-
-**Resuming is always a separate, explicit instruction** — saying
-`/loop` again, saying "resume," or re-enabling the routine. Never
-resume automatically just because time has passed or a wakeup fires;
-a stop is a stop until the owner says otherwise.
-
-## When something needs the owner — never fake it, always flag it
-
-This is a hard rule, above every other instruction in this file: **if
-a real dependency is missing (a database, a credential, an external
-account, a genuinely ambiguous product decision the spec doesn't
-answer), do not simulate success.**
-
-Concretely:
-
-- If code needs a real Supabase/KMS/broker connection that doesn't
-  exist yet, write it to fail loudly and clearly when that dependency
-  is absent (a thrown error naming exactly what's missing) — never a
-  hardcoded fake value, a silent mock standing in for a real service,
-  or a "TODO: this returns dummy data for now" left unmarked.
-- Never mark a task "done," a test "passing," or a security check
-  "passed" in `PROGRESS.md` if it only worked against a stand-in for
-  something real. Report it as blocked, not as complete.
-- The moment you hit something that genuinely needs the owner (an
-  account only they can create, a payment method, a product decision
-  the design-decisions doc doesn't resolve) — write an entry to
-  **`NEEDS_YOUR_INPUT.md`** at the repo root: what's needed, exactly
-  why, which task is stalled on it, and what (if anything) you built
-  in the meantime against the missing piece's interface. This file is
-  the one thing the owner should be able to glance at and trust
-  completely — if it's empty, nothing needs them; if it has an entry,
-  something genuinely does. Don't let it accumulate stale resolved
-  entries — remove one once its blocker is actually cleared.
-- This is different from `PROGRESS.md`'s "Infra gaps" list, which is a
-  standing reference of known future needs (e.g. "will need Vercel
-  eventually"). `NEEDS_YOUR_INPUT.md` is only for things blocking
-  *current* work, right now.
+If a real dependency is missing (database, credential, external account, a product decision the spec doesn't answer): code fails loudly naming what's missing — never a mock, placeholder value, or silent stand-in. Never mark a task done, a test passing, or a check passed against a stand-in. Write what's needed, why, and what's stalled to **`NEEDS_YOUR_INPUT.md`** (only things blocking work *now*; remove entries once cleared). Standing future needs go to `docs/infra-gaps.md`.
 
 ## What we're building
 
-A trading journal that asks **"was this a good decision?"**, not
-**"did this trade make money?"**. When something looks wrong, check it
-against that sentence first.
+A trading journal that asks **"was this a good decision?"**, not "did this trade make money?". Three objects: **Strategy** (many) → Findings · **Rulebook** (one) → Adherence · **Field registry** (one) underneath both. *Can it be violated?* → Rulebook. A fact → Strategy.
 
-Three objects: **Strategy** (many, "what am I looking for / what do I
-record") → produces Findings. **Rulebook** (one per trader, "how do I
-conduct myself") → produces Adherence. **Field registry** (one,
-substrate for both). Test for where anything belongs: *can it be
-violated?* A violation is Rulebook; a fact is Strategy.
+## Source of truth, in order
 
-## Source of truth — read in this order
+1. `retrospeq-design-system/modules/brief-developer-and-design.md`
+2. `…/retrospeq-design-decisions.md` — intent; wins over specs
+3. `…/00-foundation.md` — stack, conventions, security, testing bar
+4. `…/0{1-8}-*.md` — module specs · 5. `…/analytics-registry.md`
+6. `retrospeq-design-system/brand/` — **the** design system. Authoritative for every visual decision (owner, 2026-09-13): amber "Instrument" tokens, `.rq-*` components, 17-screen mockup `brand/docs/instrument.html`. `modules/09-design-system.md` (indigo, IBM Plex, shadcn, Phosphor) is superseded where it disagrees.
 
-1. `retrospeq-design-system/modules/brief-developer-and-design.md` — start here, always
-2. `retrospeq-design-system/modules/retrospeq-design-decisions.md` — product intent; wins over specs when they disagree
-3. `retrospeq-design-system/modules/00-foundation.md` — stack, conventions, security, privacy, error handling, testing bar. Every module inherits this.
-4. `retrospeq-design-system/modules/0{1-8}-*.md` — the module specs, in build-order (below)
-5. `retrospeq-design-system/modules/analytics-registry.md` — every analytic's data tier, confidence, kill switch
-6. `retrospeq-design-system/brand/` — the design system (see "Design system" below)
+Spec vs design doc → design doc wins, spec is wrong until reconciled. Spec vs code → fix one deliberately. Log reconciliations in the decision log.
 
-**Visual design authority (owner decision, 2026-09-13):** `retrospeq-design-system/brand/` — the amber "Instrument" system already wired into `app/` (tokens, `.rq-*` components, and the 17-screen mockup at `brand/docs/instrument.html`) — is authoritative for every visual decision. `modules/09-design-system.md` (indigo `#5B6EF5` accent, IBM Plex, shadcn/ui, Phosphor, dark-primary) is **superseded** wherever it disagrees: do not introduce its accent, fonts, icon set, or component library. Where it doesn't conflict with `brand/` (e.g. its thesis-to-pixels reasoning, accessibility checklist), it can still be read as rationale. Every screen is built against its matching `instrument.html` mockup, not just against the class names.
+## Non-negotiables (each has an ADR in the design-decisions doc)
 
-The old LuceEdge trade-journal spec (superseded — do not build against it) used to be vendored locally at `module-docs-github/`; removed 2026-08-20 as confusing dead weight now that its provenance is confirmed (`lucedge/module-docs` on GitHub, `main` branch — the current spec is that same repo's `retrospeq-v1` branch, already vendored at `retrospeq-design-system/modules/`). If you need to compare against the old spec for historical context, clone `main` from that repo rather than expecting a local copy.
+- No currency P&L on home. R-multiple only. · Adherence earns no XP. · Streaks count weeks.
+- "Not enough data yet" is a correct state, not a bug. · Price proximity is banned from trade grouping.
+- Rule evaluations freeze at close-out, never recomputed. · No compound rules (AND/OR) anywhere.
+- Analytics code never imports rule code (ESLint + dependency-cruiser enforce it).
+- One notification per week, total. · No red/green anywhere; direction is geometry. No success/danger tokens exist, by design.
 
-`reference/lucedge-broker-prior-art/` — LuceEdge's actual cTrader/MT5 broker integration code, copied 2026-08-20 as a one-time snapshot (not synced) because the LuceEdge repo won't be reachable once this workspace is retrospeq-app-only. Prior art for Module 02's `BrokerAdapter` work — read its own README before touching it. **Do not copy-paste from it** — none of it meets Retrospeq's security bar (envelope encryption, vendor-agnostic adapter, mandatory read-only verification); see the README for specifics.
+## Security bar (00-foundation §4, Module 01 §7.2) — blocking
 
-**Convention (00-foundation §12):** spec vs design-decisions doc → design doc is intent, spec is wrong until reconciled. Spec vs code → fix one deliberately, do not let drift accumulate silently. Log every such reconciliation in PROGRESS.md's decision log.
+RLS + a real policy on **every** table, tested · broker credentials envelope-encrypted with an external KMS master key, never a static app key, never client-readable · connect-time read-only verification with no bypass, 100% master-credential rejection · rule engine `{operand_id, op, value}` only, never SQL/eval, catalogue-validated · no vendor type past `BrokerAdapter` · Server Actions `.strict()` Zod + server-side entitlement + ownership checks · the only rate-limit bypass is `lib/rate-limit/test-bypass.ts` (ADR 0042, fail-closed, dev/test only).
 
-## Non-negotiables (each has an ADR in the design-decisions doc — read it before "fixing" one)
+## Build order
 
-- No currency P&L on the home screen. R-multiple only.
-- Adherence earns no XP, ever.
-- Streak counts weeks, not days.
-- "Not enough data yet" is a correct, intended state — not an error, not a bug.
-- Price proximity is banned from the trade-grouping algorithm.
-- Rule evaluations freeze at close-out and are never recomputed retroactively.
-- No compound rules — no AND, no OR — in the model, API, or UI, ever.
-- Analytics code cannot import rule code (enforce in CI, not just review).
-- One notification per week, total. No re-engagement pushes, no streak warnings.
-- No red/green anywhere, ever, in any chart or mark. Direction is geometry (which side of zero), never hue. There is deliberately no `--color-success`/`--color-danger` token pair — if you want one, the design is fighting the product, not missing a token.
-
-## Security bar (00-foundation §4, Module 01 §7.2) — mandatory, no exceptions, blocking on every relevant PR
-
-- RLS enabled + a real policy on **every** table, including join/lookup tables. 100% coverage, automated test, no exceptions.
-- Broker credentials: envelope encryption only (per-credential AES-256-GCM key, wrapped by an external KMS master key). The master key must never live in Supabase or in application config. A single static app-wide encryption key (what the old LuceEdge app used) does **not** meet this bar — do not reintroduce that pattern.
-- Credential tables: no select policy for any role except service. The owner can create/delete, never read back.
-- The "attempt a benign trade operation, reject if it succeeds" read-only verification at connect time is mandatory and has no bypass. Master-credential rejection accuracy must be 100% — a false negative is a critical incident, test it as such.
-- Rule expression engine: `{operand_id, op, value}` only. Never compiled to SQL, never `eval`'d. `operand_id` validated against a static catalogue.
-- No vendor type may leak past the `BrokerAdapter` interface (00-foundation §10.1) into any downstream module.
-
-## Build order (brief-developer-and-design.md §"Build order")
-
-0. Golden fixture library + shadow harness (Module 05's harness) — build before the grouping engine, not after
-1. Modules 01 (Identity & Accounts) + 02 (Trade Ingestion & Model)
-2. Module 04 (Rulebook) + Module 08 onboarding — this is a shippable free tier
-3. Modules 03 (Field Registry & Strategy) + 05 (Analytics & Findings) — the Pro tier
-4. Modules 06 (Review & Graduation) + 07 (Engagement)
-5. v1.1: Modules 09 (Prop firm rulebooks), 10 (AI layer) — not before v1 phases above are done
-
-Current phase and next task: see PROGRESS.md — update it before and after every work session, it is the only continuity mechanism across context resets and token-limit restarts.
+0 fixtures + shadow harness → 1 Modules 01 + 02 → 2 Module 04 + 08 (shippable free tier) → 3 Modules 03 + 05 (Pro) → 4 Modules 06 + 07 → UI phase (design system, then screens against the mockup) → v1.1 Modules 09 + 10. Current position: `PROGRESS.md`.
 
 ## Design system
 
-Two integration layers, both already wired in `app/layout.tsx` / `app/globals.css` — do not fight this setup:
+Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout.tsx` (`.rq-btn`, `.rq-h1`, `.rq-num`, `.rq-row`, marks, tab bar) and `app/brand-tokens/tailwind.css` (`bg-bg`, `text-ink`, `border-line`, …). `public/brand/` and `app/brand-tokens/` are **copies** of `retrospeq-design-system/brand/` — edit the source, re-sync all three. Rules that look like bugs: one `.rq-btn` per view; `.rq-btn--equal` pairs have no primary; gauges/ambient strip always visible; ratings are dots, values are steppers, nothing on a fast-capture screen takes a keyboard; `.rq-num` on every number. Every screen lives inside the app shell (`app/(app)/AppShellNav.tsx`, four tabs, phone-width column) and is built against its `instrument.html` counterpart.
 
-- `<link href="/brand/css/index.css">` in `app/layout.tsx` — fonts → tokens → base → marks → components, gives `.rq-btn`, `.rq-h1`, `.rq-num`, `.rq-row`, rating/stepper primitives etc.
-- `app/brand-tokens/tailwind.css` imported from `app/globals.css` — Tailwind v4 `@theme` mapping (`bg-bg`, `text-ink`, `border-line`, `bg-accent`, `font-sans`/`font-mono`, the type/space/radius scale).
+## How work flows (details: `docs/process.md`, `.claude/skills/verify/SKILL.md`)
 
-**Design system sync:** `retrospeq-design-system/` is vendored into this repo (plain copy, no `.git`, no submodule — the cloud build agents only ever see this one repo). `public/brand/` and `app/brand-tokens/{tokens,tailwind}.css` are copies of `retrospeq-design-system/brand/`. If the upstream design system changes, re-copy all three locations — do not hand-edit the copies, edit the source and re-sync.
-
-Rules that look like bugs (design-system README): one `.rq-btn` per view; `.rq-btn--equal` pairs have no primary/secondary distinction (an ethics decision — the relaxation prompt must not imply a recommendation); gauges/ambient strip are always visible, never appear-on-threshold (appearing-on-cross *is* an alarm); ratings are dots and values are steppers, nothing on a fast-capture screen takes a keyboard; `.rq-num` (tabular mono) on every number, no exceptions.
-
-## Testing bar (00-foundation §9) — do not mark a module done without these
-
-Unit 90% line coverage on the grouping/rule/statistics engines, 70% overall · property-based tests on grouping and rule-evaluation invariants · RLS cross-user isolation asserted on 100% of tables, automated · E2E on every module's core flow plus one failure path · golden fixture replay for anything touching the grouping engine.
-
-## Documentation
-
-Required per 00-foundation §12, checked (not written) by `retrospeq-qa`, written by `retrospeq-coder` as part of finishing a slice — not a separate pass, not optional:
-
-- `docs/adr/NNNN-short-title.md` — one per deliberate deviation from a 00-foundation convention. What was deviated from, why, what it costs.
-- `docs/runbook.md` — one entry per alerting condition a module's spec calls out (00-foundation §7.3 / the module's own error-handling section).
-- Non-obvious migration constraints get an inline comment, not a separate doc.
-
-No dedicated documentation agent — see "Subagents" below for why the 5-agent roster (not the larger role list sometimes proposed for this kind of pipeline) is deliberate.
+- **Risk tiers, not one pipeline.** `npm run classify` → tier 0–3 from files touched. Tier 0–1 (docs, markup, CSS, tests): coder self-check + `npm run verify`, commit. Tier 2 (logic): + `retrospeq-tester`, + `retrospeq-qa` only on non-negotiable surfaces. Tier 3 (schema/RLS/auth/credentials/rule engine/entitlements/rate-limit/privacy/`actions.ts`): + `retrospeq-security-reviewer` (blocking) and `retrospeq-qa` in parallel.
+- **Deterministic before deliberative.** `npm run check` / `check:live` / `check:security` / `e2e:changed` / `verify`; `.githooks/pre-commit` runs ledger-check + eslint. Agents interpret script output; they don't re-derive it.
+- **Commit after every gate PASS.** Full E2E suite only at phase ends.
+- **Testing bar** (00-foundation §9): 90% lines on grouping/rule/statistics engines, 70% overall; property tests on grouping + rule-evaluation invariants; RLS isolation on 100% of tables; E2E core flow + one failure path per module; golden-fixture replay for anything touching grouping.
+- **Docs are part of a slice** (00-foundation §12): ADR per deliberate deviation (`docs/adr/`), runbook entry per alerting condition, inline comments on non-obvious migration constraints. qa checks; coder writes.
+- **Ledger is ≤ 200 lines** (`PROGRESS.md`; history in `docs/ledger/`). A gate isn't done until its own ≤ 20-line entry is written (`.claude/skills/ledger/SKILL.md`) — sessions get cut off.
+- **UI is looked at, not just asserted**: Playwright screenshot → `Read` the PNG. `npm run test:user` for throwaway accounts; clean up.
 
 ## Subagents
 
-6 roles, not the originally-larger list. A broader ~17-role pipeline
-(separate Requirements/Architecture/Frontend/Backend/Database/
-Integration/Code-Review/Performance/Bug-Fix/Documentation agents) was
-considered and rejected 2026-08-19 — see PROGRESS.md decision log. The
-short version: this spec ships vertical slices, not layers, so
-splitting one slice across several coding agents adds handoff overhead
-without adding coverage; the responsibilities that were real
-(repo-reuse checks, performance budgets) got folded into the existing
-agents instead of becoming new ones.
+`retrospeq-orchestrator` (entry point for `/loop` and cold resumes) · `retrospeq-coder` · `retrospeq-tester` · `retrospeq-security-reviewer` · `retrospeq-qa` · `retrospeq-docs`. Definitions in `.claude/agents/`; skills `/slice`, `/verify`, `/ledger` in `.claude/skills/`. Six roles is deliberate (`docs/process.md`).
 
-That count went from 5 to 6 on 2026-08-20 — owner-directed, not a
-drift back toward the rejected 17-role pipeline. The 2026-08-19
-decision folded documentation into `retrospeq-coder`/`retrospeq-qa`
-(ADRs + runbook, checked not written) specifically because those are
-narrow, per-slice artifacts a coder writing the slice is well-placed
-to produce. A standing, synthesized "how do I run/understand this
-repo" reference is a different shape of work — it needs to look across
-the whole repo state, not just the slice just written — so it gets its
-own agent rather than being bolted onto one that's mid-slice. See the
-decision log entry for 2026-08-20 for the full reasoning.
+## Known infra gaps (build against the interfaces, don't block)
 
-Definitions live in `.claude/agents/`. Roster: `retrospeq-coder`
-(implements one story/module slice against spec + this file, and does
-a screenshot-based visual self-check for any UI surface — see "UI
-self-verification" below), `retrospeq-tester` (writes/runs unit,
-property, RLS, integration, E2E, fixture-replay tests, plus screenshot
-capture for UI E2E flows), `retrospeq-security-reviewer` (credential
-handling, RLS, injection surface — blocking authority on the security
-bar above), `retrospeq-qa` (reviews against the non-negotiables list
-and design-system rules, catches drift, screenshot-verifies anything
-about rendered appearance), `retrospeq-docs` (keeps
-`docs/DEVELOPMENT.md` — the synthesized developer reference — current,
-dispatched at phase boundaries), `retrospeq-orchestrator` (reads
-PROGRESS.md, decides next task per build order, dispatches the others,
-updates the ledger). The orchestrator is the one invoked by the local
-`/loop` (the cloud routine is deliberately paused — owner checks
-progress in person, see PROGRESS.md "Autonomous continuation —
-cost/cadence policy") after a context reset or usage-limit restart.
-
-## Ledger currency — a review gate isn't done until it's written down
-
-Added 2026-09-08 after this exact gap recurred **five times** across
-Module 04/08/03 slices (10f, 08b, 03a, 03b, 03c) despite a session-
-internal "please remember to update the ledger" convention that kept
-failing anyway — the fifth occurrence was the threshold a prior
-PROGRESS.md note itself set for promoting this from a convention to a
-real rule here. The pattern every time: a `retrospeq-tester`/
-`retrospeq-security-reviewer`/`retrospeq-qa` dispatch found something
-real, passed or failed correctly, reported back in the conversation —
-and then a context reset or usage-limit crash hit before that finding
-got written into `PROGRESS.md`, leaving the ledger claiming a gate was
-"still pending" when it had actually already run and passed (or, worse,
-silently dropping a real fail). A reader restarting cold from
-`PROGRESS.md` alone — the only continuity mechanism this build has —
-would get the wrong answer every time this happened.
-
-**Root cause**: writing the ledger was always an implicit expectation of
-whichever session *received* a review's findings, never an explicit,
-checkable deliverable of the review dispatch itself. That's fragile
-across a build that gets interrupted mid-conversation as routinely as
-this one does.
-
-**The rule, not just a convention**: a `retrospeq-tester`/
-`retrospeq-security-reviewer`/`retrospeq-qa` dispatch is not complete
-until it has written its own dated entry into `PROGRESS.md`'s Decision
-log — a real PASS/FAIL record with enough detail to stand on its own,
-not a placeholder — as part of finishing its own work, not left for the
-orchestrating session to transcribe later from a chat summary. This
-applies whether the agent is run by the interactive orchestrator, the
-local `/loop`, or a scheduled routine. The dispatching session still
-also updates `PROGRESS.md`'s "Current task"/phase-status sections
-afterward (that synthesis is the orchestrator's own job, not
-mechanically transcribable by the review agent, which doesn't have the
-cross-slice context to know where its finding fits in the larger
-narrative) — but the raw, dated, findable record of what a gate found
-must exist the moment the gate finishes, regardless of what happens to
-the session immediately after.
-
-**Symmetric habit on the other side of the handoff**: whatever runs
-next after a gate passes — the next dispatch in the coder → tester →
-security-reviewer → qa chain, or the orchestrator's own next action —
-does a quick "does PROGRESS.md's own status line match what I was just
-told happened" check before proceeding. This is the same reflexive
-check `retrospeq-qa` already does at the end of a slice, just applied at
-every handoff point instead of only the final one — it's what caught
-all five prior occurrences and is what caught the one this note itself
-responds to.
-
-## UI self-verification (no interactive browser tool available)
-
-Agents in this environment have Bash but no interactive browser
-control — they can't click through the running app the way a person
-can. The substitute: headless Playwright screenshots.
-
-```bash
-npx playwright screenshot http://localhost:3000/<route> tmp/dev-screenshots/<name>.png
-```
-
-`tmp/dev-screenshots/` is gitignored — throwaway visual checks, not
-build artifacts. Any agent (coder self-checking its own slice, tester
-capturing E2E states, qa verifying a design-system rule that's about
-rendered appearance) runs the dev server, captures the relevant
-view(s), then uses `Read` on the PNG to actually look at it — that's
-how a color, spacing, or empty-state regression gets caught, since
-grepping code can't see what actually renders. For flows behind auth
-or needing interaction first, a short Playwright script
-(`page.goto` → interact → `page.screenshot()`) replaces the one-line
-CLI form. This is a supplement to functional test assertions, not a
-replacement for them.
-
-## Known infra gaps (do not block coding on these — build against the interfaces; flag and keep moving)
-
-No Vercel project, no Supabase project for Retrospeq (env vars in the parent `E:\LuceEdge` repo are for the old LuceEdge project, not this one), no external KMS account, no git remote for this repo yet, broker integration vendor undecided (00-foundation §10 — build against `BrokerAdapter` only). These block *real* deploys and *real* encryption keys, not local development — write code that reads secrets from env vars that don't exist yet rather than hardcoding placeholders.
-
+No Vercel project · no dedicated Supabase project (shared dev one only) · no external KMS · broker vendor undecided · no email provider · Supabase mailer broken on the dev project. Details and follow-ups: `docs/infra-gaps.md`. Host is macOS / Node 24 (since 2026-09-13); any Windows-drive workaround you find in archived history is obsolete.

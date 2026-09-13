@@ -15,12 +15,7 @@
 /test-results
 /playwright-report
 /blob-report
-# machine-local Playwright browser binary cache — redirected here (rather
-# than the default %USERPROFILE%\AppData\Local\ms-playwright) because the
-# C: drive has ~0 bytes free (see PROGRESS.md decision log, npm
-# cache/tmp redirect entry, same root cause). Set via
-# PLAYWRIGHT_BROWSERS_PATH=E:\playwright-browsers when running
-# `npx playwright install` / `npx playwright test` on this machine.
+# optional machine-local Playwright browser cache (PLAYWRIGHT_BROWSERS_PATH)
 /playwright-browsers
 
 # next.js

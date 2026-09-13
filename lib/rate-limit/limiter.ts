@@ -4,6 +4,7 @@ import { requireEnv, SupabaseNotConfiguredError } from '@/lib/supabase/errors';
 import '@/lib/supabase/pg-type-parsers';
 import { RateLimitExceededError } from './errors';
 import { RATE_LIMITS, type RateLimitScope } from './config';
+import { rateLimitBypassedForTests } from './test-bypass';
 
 /**
  * Module 01 §7.2's mandatory rate-limit test, backed by
@@ -93,6 +94,9 @@ export async function enforceRateLimit(
   ip: string,
   email?: string,
 ): Promise<void> {
+  // E2E/dev-only, fail-closed — see ./test-bypass.ts. Checked before the
+  // DB round-trip so a bypassed run also never writes rate_limit_hits.
+  if (rateLimitBypassedForTests()) return;
   const rules = RATE_LIMITS[scope];
 
   await checkOne({
