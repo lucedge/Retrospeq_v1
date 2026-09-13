@@ -31,7 +31,7 @@ authority.
 
 ## Current task
 
-**AT A GLANCE (2026-09-13, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 6 -- PART 2 GRADUATION DECISION FLOW -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full chain, two real fix cycles, all dated 2026-09-13 (search "Module 06" and "Slice 6"): coder -> tester (found order_type resolving to a non-computable operand, a graduated rule on it would silently never evaluate) -> coder-fix (checks `computableToday` generically for every mapped field, not a one-off patch) -> security-reviewer (found `createRule` accepted a client-suppliable `origin` field with no gate, letting a trader bypass the Pro-gated graduation flow directly -- ruled BLOCKING, cheap fix available) -> coder-fix (moved the origin-accepting logic into `lib/rules/create-rule-internal.ts`, a module with no `'use server'` directive at all -- structurally, not just conventionally, unreachable from the network) -> security-reviewer re-verification (PASS, independently confirmed against this Next.js version's own docs) -> qa (PASS). New route `/review/decisions` renders section 5.1's `review--decision` markup -- the finding, its evidence, and the explore/exploit cost, always together, per section 4.6 -- for graduation prompts one at a time. Accept creates a real rule (`origin: 'graduated'`, `severity: 'soft'`) plus a `finding_rule_links` row enabling decay checking; defer marks the prompt `state='deferred'` with zero `prompt_history` write, per section 4.5's "no penalty" framing. **A genuine, previously-known product gap is honestly tracked, not worked around**: rule `operand_id` and finding `field_id` are different namespaces, so only 4 specific derived fields (`risk_pct`, `hold_seconds`, `day_of_week`, `instrument`) can graduate into a rule end-to-end today -- every other field, including the spec's own "conviction" example, correctly rejects with zero writes rather than crashing or faking success (see `NEEDS_YOUR_INPUT.md` for the real product decision this needs from the owner). **This closes Module 06 Slice 6 -- graduation only.** Still unbuilt: the other four decision kinds (relaxation/promotion/retirement-decay/retirement-condition/detection all reuse this same screen shape but aren't wired yet), Part 3 (close), deferral/backlog beyond the basic defer-state flip, the monthly trend view, section 4.8's 4-week prompt expiry, and the production scheduler. **Process note**: starting with this slice, commits now happen after each gate passes (tester, security-reviewer, qa) rather than only once at the end of the full chain -- see this date's own "process change" Decision-log entry for the reasoning (owner-requested, given this machine's repeated mid-chain session crashes). New route `/review/decisions` (Server Component `page.tsx` + client `DecisionCard.tsx`, both `app/(app)/review/decisions/`), wired up from `/review`'s own "N decisions" button (previously shipped disabled by Slice 5, now real). GRADUATION KIND ONLY, per this slice's own explicit scope -- relaxation/promotion/retirement/detection decisions have no UI yet and are future slices reusing this same screen shape. Reads the existing pending `review_prompts` rows Slice 4 already writes (no ranking/eligibility logic touched); on accept, calls the EXISTING `createRule` Server Action (`app/(app)/rules/actions.ts`, extended with a new optional `origin` parameter, `'graduated'`/`'authored'`/etc., now a genuinely recognised field on its own `.strictObject` schema -- a first attempt that excluded `origin` from the parsed object instead of declaring it was caught as a real regression by this repo's own pre-existing Slice-2 security-review test suite, "no compound expression is representable," and fixed before handoff), then writes `finding_rule_links` (Module 05, decay-checking) and a NEW `field_usages(used_by='rule')` row (Module 03, closing a real, previously-flagged "will re-offer the same graduation forever" bug) via a real live-DB self-check: seeded a real `drv.risk_pct` finding, drove a real Chromium browser through login -> `/review/decisions` -> "Add the rule" click, and verified directly in Postgres that a real `rules` row (`origin='graduated'`, `severity='soft'`, `scope='strategy'`, rendered "Never risk more than 1% per trade.") plus the matching `finding_rule_links` and `field_usages` rows and the `review_prompts` state flip to `'accepted'` all landed correctly. Defer flow (`state='deferred'`, no `prompt_history` write per section 4.5's "no penalty") also verified live. **One real, structural, currently-blocking product gap found and NOT worked around**: a rule's `operand_id` is validated against a fixed static catalogue, but a finding's `field_id` is a per-user Module 03 field -- the two are different namespaces, a gap Module 03's OWN migration header already flagged independently. Only 5 specific `drv.*`-prefixed derived fields have a real operand-catalogue counterpart today; every custom field a trader actually defines (including section 4.6's OWN worked example, "conviction") honestly rejects with "This kind of finding can't become a rule yet." rather than faking a rule. Flagged in `NEEDS_YOUR_INPUT.md` as a genuine, currently-blocking architecture decision, not silently guessed at. A second real bug found and fixed during self-check: the client's own "fetch the next decision" state machine was PROVEN DEAD CODE by the live screenshot check (Next.js's own documented Server-Actions-plus-`revalidatePath` behavior already re-renders the whole route server-side inside the SAME request/response, before any client-side post-`await` state update can ever paint) -- removed rather than shipped as inert, misleading code; see `docs/adr/0040` for the full writeup of this and four other judgment calls (threshold derivation reusing `guided-front-door.ts`'s directional reasoning, the `field_usages` write, skipping `finding_rule_links` safely when `delta_win_rate` is null/non-positive rather than than fabricating a value, and the defer-state semantics). New `reviewDecision` rate-limit scope (`lib/rate-limit/config.ts`). `docs/runbook.md` gets one new entry (the `finding_rule_links` skip condition). Full `npx tsc --noEmit`, `npm run build`, and `npx eslint` all pass; the two live-DB test files touched by this slice's `origin` change (`lib/rules/__tests__/rules-repository.live.test.ts`, `app/(app)/rules/__tests__/actions.test.ts`) both still pass in full (113 tests combined). **No new automated test file was written for the new `/review/decisions` route or `lib/review/decisions/**` itself** -- that is `retrospeq-tester`'s own gate, not yet run. Do NOT mark Module 06 Slice 6 "done" until tester -> security-reviewer -> qa have each run and logged their own dated PASS/FAIL entry per the ledger-currency rule.**
+**AT A GLANCE (2026-09-13, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 7 -- PART 2 RELAXATION DECISION FLOW -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full chain, all dated 2026-09-13, no blocking findings this time (search "Module 06" and "Slice 7"): coder -> tester -> security-reviewer -> qa, every gate PASS on the first pass. Extends Slice 6's `/review/decisions` screen to also handle relaxation-kind prompts (rank 1 priority, ahead of graduation), reusing the exact same screen shape. Section 4.7's equal-weight requirement -- "the product does not have an opinion about which the trader should choose" -- was proven at the DOM/CSS level, not just visually: identical class list (`rq-btn rq-btn--equal`), matching `getComputedStyle` across 8 properties, matching bounding boxes. Recommit and adjust are two genuinely distinct write paths, confirmed by three separate `prompts-repository.ts` functions with different state transitions: recommit touches nothing but the prompt's own state (never `prompt_history`, since recommitting is a real resolved decision, not a decline); adjust derives its new threshold from a live `percentile_cont(0.5)` median (independently hand-computed and cross-checked by the tester against raw SQL), then reuses Module 04's existing, already-reviewed `editRule` mechanism end to end -- the adjusted value is server-computed throughout, never client-supplied, and `editRule`'s own ownership/optimistic-concurrency checks run unmodified. One honest, non-blocking gap surfaced and flagged rather than silently assumed working: the ADR's claim that adjusting produces a visible adherence-timeline annotation "for free" is only half true -- a new `rule_versions` row genuinely gets created, but `lib/rules/adherence-display.ts` has nowhere to render it yet, so the annotation isn't actually reachable by a trader today. **This closes Module 06 Slice 7 -- relaxation only.** Still unbuilt: promotion, retirement (decay and condition), and detection decision flows (all three remaining kinds reuse this same established screen shape), Part 3 (close), deferral/backlog beyond the basic defer-state flip, the monthly trend view, section 4.8's 4-week prompt expiry, the production scheduler, and the adherence-timeline rendering gap this slice's own ADR just surfaced. Full chain, two real fix cycles, all dated 2026-09-13 (search "Module 06" and "Slice 6"): coder -> tester (found order_type resolving to a non-computable operand, a graduated rule on it would silently never evaluate) -> coder-fix (checks `computableToday` generically for every mapped field, not a one-off patch) -> security-reviewer (found `createRule` accepted a client-suppliable `origin` field with no gate, letting a trader bypass the Pro-gated graduation flow directly -- ruled BLOCKING, cheap fix available) -> coder-fix (moved the origin-accepting logic into `lib/rules/create-rule-internal.ts`, a module with no `'use server'` directive at all -- structurally, not just conventionally, unreachable from the network) -> security-reviewer re-verification (PASS, independently confirmed against this Next.js version's own docs) -> qa (PASS). New route `/review/decisions` renders section 5.1's `review--decision` markup -- the finding, its evidence, and the explore/exploit cost, always together, per section 4.6 -- for graduation prompts one at a time. Accept creates a real rule (`origin: 'graduated'`, `severity: 'soft'`) plus a `finding_rule_links` row enabling decay checking; defer marks the prompt `state='deferred'` with zero `prompt_history` write, per section 4.5's "no penalty" framing. **A genuine, previously-known product gap is honestly tracked, not worked around**: rule `operand_id` and finding `field_id` are different namespaces, so only 4 specific derived fields (`risk_pct`, `hold_seconds`, `day_of_week`, `instrument`) can graduate into a rule end-to-end today -- every other field, including the spec's own "conviction" example, correctly rejects with zero writes rather than crashing or faking success (see `NEEDS_YOUR_INPUT.md` for the real product decision this needs from the owner). **This closes Module 06 Slice 6 -- graduation only.** Still unbuilt: the other four decision kinds (relaxation/promotion/retirement-decay/retirement-condition/detection all reuse this same screen shape but aren't wired yet), Part 3 (close), deferral/backlog beyond the basic defer-state flip, the monthly trend view, section 4.8's 4-week prompt expiry, and the production scheduler. **Process note**: starting with this slice, commits now happen after each gate passes (tester, security-reviewer, qa) rather than only once at the end of the full chain -- see this date's own "process change" Decision-log entry for the reasoning (owner-requested, given this machine's repeated mid-chain session crashes). New route `/review/decisions` (Server Component `page.tsx` + client `DecisionCard.tsx`, both `app/(app)/review/decisions/`), wired up from `/review`'s own "N decisions" button (previously shipped disabled by Slice 5, now real). GRADUATION KIND ONLY, per this slice's own explicit scope -- relaxation/promotion/retirement/detection decisions have no UI yet and are future slices reusing this same screen shape. Reads the existing pending `review_prompts` rows Slice 4 already writes (no ranking/eligibility logic touched); on accept, calls the EXISTING `createRule` Server Action (`app/(app)/rules/actions.ts`, extended with a new optional `origin` parameter, `'graduated'`/`'authored'`/etc., now a genuinely recognised field on its own `.strictObject` schema -- a first attempt that excluded `origin` from the parsed object instead of declaring it was caught as a real regression by this repo's own pre-existing Slice-2 security-review test suite, "no compound expression is representable," and fixed before handoff), then writes `finding_rule_links` (Module 05, decay-checking) and a NEW `field_usages(used_by='rule')` row (Module 03, closing a real, previously-flagged "will re-offer the same graduation forever" bug) via a real live-DB self-check: seeded a real `drv.risk_pct` finding, drove a real Chromium browser through login -> `/review/decisions` -> "Add the rule" click, and verified directly in Postgres that a real `rules` row (`origin='graduated'`, `severity='soft'`, `scope='strategy'`, rendered "Never risk more than 1% per trade.") plus the matching `finding_rule_links` and `field_usages` rows and the `review_prompts` state flip to `'accepted'` all landed correctly. Defer flow (`state='deferred'`, no `prompt_history` write per section 4.5's "no penalty") also verified live. **One real, structural, currently-blocking product gap found and NOT worked around**: a rule's `operand_id` is validated against a fixed static catalogue, but a finding's `field_id` is a per-user Module 03 field -- the two are different namespaces, a gap Module 03's OWN migration header already flagged independently. Only 5 specific `drv.*`-prefixed derived fields have a real operand-catalogue counterpart today; every custom field a trader actually defines (including section 4.6's OWN worked example, "conviction") honestly rejects with "This kind of finding can't become a rule yet." rather than faking a rule. Flagged in `NEEDS_YOUR_INPUT.md` as a genuine, currently-blocking architecture decision, not silently guessed at. A second real bug found and fixed during self-check: the client's own "fetch the next decision" state machine was PROVEN DEAD CODE by the live screenshot check (Next.js's own documented Server-Actions-plus-`revalidatePath` behavior already re-renders the whole route server-side inside the SAME request/response, before any client-side post-`await` state update can ever paint) -- removed rather than shipped as inert, misleading code; see `docs/adr/0040` for the full writeup of this and four other judgment calls (threshold derivation reusing `guided-front-door.ts`'s directional reasoning, the `field_usages` write, skipping `finding_rule_links` safely when `delta_win_rate` is null/non-positive rather than than fabricating a value, and the defer-state semantics). New `reviewDecision` rate-limit scope (`lib/rate-limit/config.ts`). `docs/runbook.md` gets one new entry (the `finding_rule_links` skip condition). Full `npx tsc --noEmit`, `npm run build`, and `npx eslint` all pass; the two live-DB test files touched by this slice's `origin` change (`lib/rules/__tests__/rules-repository.live.test.ts`, `app/(app)/rules/__tests__/actions.test.ts`) both still pass in full (113 tests combined). **No new automated test file was written for the new `/review/decisions` route or `lib/review/decisions/**` itself** -- that is `retrospeq-tester`'s own gate, not yet run. Do NOT mark Module 06 Slice 6 "done" until tester -> security-reviewer -> qa have each run and logged their own dated PASS/FAIL entry per the ledger-currency rule.**
 
 **AT A GLANCE (2026-09-13, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 5 -- WEEKLY REVIEW PART 1 UI -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full chain, two real fix cycles, all dated 2026-09-12/2026-09-13 (search "Module 06" and "Slice 5"): coder -> tester (found a real date-format bug, "Week of July 21" instead of the spec's day-first "Week of 21 July") -> coder-fix (locale corrected to en-GB, matching existing house-style precedent) -> security-reviewer (found a real gap: the compute-on-view path -- 4 parallel reads plus 2 transactional writes per request -- had zero rate limiting, the one page-load path in the repo without one, FAIL) -> coder-fix (new `weeklyReview` rate-limit scope, deliberately tighter than sibling read-only precedents given the real cost difference, routed through a new `app/(app)/review/actions.ts` matching `rules`/`strategies`' own established pattern) -> security-reviewer re-verification (PASS, confirmed via repo-wide grep that no bypass path to the underlying compute functions exists) -> qa (PASS). New route `/review` renders section 5.1's Part 1 read screen -- outcome (R-multiple, never celebrated), Consistency/Adherence/Findings panels (findings capped at 3, reusing Module 03's exact `.finding` markup), and an honestly-disabled "N decisions"/"Week closed" button (Part 2/3 don't exist yet). **The real architecture answer to the missing-scheduler gap**: since no cron/scheduled-job infra is deployed, this screen computes and materializes a review synchronously on first view rather than assuming a background job already ran -- documented in `docs/adr/0039`, with the `completed_at` freeze (once a trader marks a review done, it's never silently recomputed/overwritten) proven live by the tester. **This closes Module 06 Slice 5.** Still unbuilt: Part 2 (decisions -- accept/decline/defer, needs `prompt_history` writes), Part 3 (close), deferral/backlog, the monthly trend view, section 4.8's 4-week prompt expiry, and the production scheduler that would eventually replace this slice's own compute-on-view mitigation. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11/2026-09-12 Decision-log entries, search "Module 06" and "Slice 4"). Ranks section 4.3's five candidate kinds (Relaxation > Graduation > Detection > Promotion > Retirement, magnitude within kind, single-detection cap, 3-per-review cap), filters by section 4.5's dormancy/mute rules against `prompt_history`, and writes the ranked result into `review_prompts` -- the module's first real write to that table. **Closes a hard, explicitly-tracked precondition from Slice 3's own security review**: `graduation-candidates.ts`/`detection-candidates.ts` previously skipped the plan/cohort `canRender` gate, ruled safe to defer only until something actually consumed those lists -- this slice is that consumer, and the tester proved live, in both directions, that a plan-gated or kill-switched candidate is correctly excluded from the final written output. One real behavioral property confirmed intentional, not an accidental side effect: a high-priority kind with 3+ qualifying candidates can consume the entire cap before a lower-priority kind ever competes -- this is a literal, correct reading of section 4.3's two-step "rank by kind, then by magnitude, then cap" algorithm, independently concurred by tester, security-reviewer, and qa. **This closes Module 06 Slice 4.** Still unbuilt and honestly tracked (docs/adr/0038's Consequences section, docs/runbook.md): section 4.8's 4-week pending-prompt expiry, any accept/decline UI (so `prompt_history` still has zero writers), and the production scheduler that would actually invoke this whole pipeline periodically. Module 06 remains a large, multi-slice module -- still unbuilt beyond the above: all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view. Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
 
@@ -29215,3 +29215,218 @@ CLEARED for retrospeq-qa, and, once qa passes, for commit -- no blocking
 finding. No docs/adr entry needed from this gate (no deviation found
 requiring one); no service-role-inventory.test.ts allowlist change needed
 (verified, not assumed -- see item 8).
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 7 -- QA GATE: PASS. Cleared to commit and push to main.
+
+Read `docs/adr/0041-relaxation-decision-recommit-adjust-and-scope.md` in
+full, `06-review-and-graduation.md` sec 4.3/4.5/4.7/5.1 in full (not
+trusted from the ADR's own paraphrase), and every file the coder/tester/
+security-reviewer dated 2026-09-13 entries name, independently, before
+forming a verdict. Did not take the chain's PASS verdicts on faith --
+re-derived each of the 9 dispatched checklist items against the actual
+current file contents and a fresh screenshot read.
+
+**1. Sec 4.7 equal-weight -- independently confirmed, not just re-trusted
+from the tester's DOM/CSS proof.** Read `RelaxationDecisionCard.tsx`
+directly: both buttons use the literal identical string
+`"rq-btn rq-btn--equal"` (lines 104/107), inside one `.rq-btn-row` (equal
+`flex:1` per `components.css:44-45`), no third button anywhere in the
+file, no `disabled`/style prop divergence between the two `<button>`
+elements. Read `components.css:32-42` directly: `.rq-btn--equal`'s own
+header comment states the ethics reasoning verbatim ("A well-meaning
+refactor to 'primary + secondary' breaks an ethics decision, not a style
+preference") and its ruleset (`background:none`, one shared `box-shadow`,
+one shared `font-weight`) shares nothing with `.rq-btn`'s own
+accent-filled primary look or `.rq-btn--ghost`'s look -- structurally a
+third, genuinely neutral variant, not a themed primary/secondary pair.
+Read both `tmp/dev-screenshots/review-decisions-relaxation-{adjust,
+recommit}-flow-ready.png` directly (still present, per the dispatch's own
+instruction to check): both show two visually identical black-ink-
+bordered, white-fill, bold-text buttons side by side, equal width, no
+color distinction of any kind, no red/green anywhere on the screen,
+`.rq-num` tabular styling correctly applied to "Decision 1 of 1",
+"1.0%"/"1.4%" (the rule values), and "15 of 30" (the trade count) --
+matches the tester's own `iv-relaxation-decision-equal-weight-ready.png`
+finding, confirmed independently rather than re-described from it. Also
+confirmed the header nav's "Sign out" button (the only other `.rq-btn`
+DOM node on this route, `app/(app)/layout.tsx:109`) is `.rq-btn--ghost`,
+not primary -- this view genuinely has ZERO primary `.rq-btn`s, which is
+the correct reading of "no primary/secondary distinction" for a screen
+whose whole point is not recommending either option, not a violation of
+"one primary per view" (that rule exists to catch competing primaries,
+not to mandate a primary exist somewhere).
+
+**2. The frame copy -- confirmed observational, not diagnostic, and
+matches sec 4.7's own worked example in shape.** `DECISION_FRAME`
+(`relaxation-evidence-detail.ts:142`) is a single named constant, byte-
+identical to sec 4.7's own text: "A rule you break most weeks stops
+meaning anything. Recommit to it, or move it to where you actually
+trade." -- confirmed by direct string comparison against the spec
+markdown, not approximated. The evidence statement above it
+(`buildRelaxationPromptDetail`, lines 203-206) generalises the spec's
+own worked example ("You have set a 1% risk cap and traded a median of
+2% for six weeks") to any adjustable operand via
+`operand.label.toLowerCase()` rather than hardcoding "risk cap" --
+read as a faithful generalisation, not a copy drift, since the pattern
+("You have set X to A and traded a median of B over the last six
+weeks.") preserves the exact same factual, non-judgmental structure the
+spec's own example uses. Confirmed no diagnosis-shaped language anywhere
+in this file or `RelaxationDecisionCard.tsx` -- no "you're avoiding your
+own rule," no severity-naming, just counts and a factual comparison.
+Button copy ("Keep {value}" / "Change to {value}") matches sec 5.1's own
+reference markup's "Keep 1%" / "Change to 2%" pattern exactly, generalised
+the same way. Confirmed the choice genuinely stays open, not leading:
+neither button's copy states or implies a recommendation, and the
+decision-frame sentence poses a question ("which one is true?") rather
+than an instruction.
+
+**3. Recommit vs decline vs defer -- read all three functions directly in
+`prompts-repository.ts`, confirmed genuinely distinct, not converged.**
+`markPromptRecommitted` (224-237): `state='accepted'`, `decided_at=now()`,
+`payload.resolution='recommit'`, `kind='relaxation'` in its WHERE clause,
+**no `prompt_history` write of any kind** -- confirmed by reading the
+full function body, nothing references that table. `markPromptAdjusted`
+(253-271): same `state='accepted'`/`decided_at` shape but
+`payload.resolution='adjust'` plus `newValue`/`newRendered`, also
+`kind='relaxation'`, also no `prompt_history` write -- the rule write
+itself happens separately, in `editRule`, called from `actions.ts` BEFORE
+this function runs (confirmed by reading `adjustRelaxationDecision`'s own
+call order, `actions.ts:728` then `:745`). `markPromptDeferred` (299-310)
+is the genuinely different one: `state='deferred'` ONLY -- explicitly
+does NOT set `decided_at` (confirmed absent from the SQL), remains
+`kind='graduation'`-scoped by design (no relaxation caller exists for it
+in this slice, confirmed by grep -- `actions.ts` never calls
+`markPromptDeferred` from either relaxation action). Decline handling
+(sec 4.5's `prompt_history.decline_count`/dormancy/mute) has no relaxation
+writer anywhere in this slice's diff -- confirmed by grep for
+`prompt_history` across every file this slice touches: zero hits outside
+the pre-existing graduation-decline path this slice does not touch. Three
+genuinely different database states, three genuinely different
+downstream behaviours (`decided_at` differentiates a real decision from a
+defer; `resolution` differentiates recommit from adjust; the total
+absence of any `prompt_history` write for either relaxation outcome is
+what makes ADR 0041's own "Consequences" claim -- a recommitted rule
+stays eligible next review -- literally true by construction, confirmed
+directly against `findRelaxationCandidates`' own header, which filters
+candidates from live `rules`/`rule_evaluations` state only, never from
+`review_prompts`/`prompt_history`).
+
+**4. Adjust's threshold derivation and the adherence-timeline annotation
+-- both confirmed genuine, independently.** `fetchMedianObserved`
+(`relaxation-evidence-detail.ts:61-74`) is a real
+`percentile_cont(0.5) within group (order by (observed::text)::numeric)`
+query, parameterised, scoped by `user_id`/`rule_id`/`server_day >=
+windowStart`, filtered to `result != 'not_applicable' and
+jsonb_typeof(observed) = 'number'` -- read directly, not assumed from the
+ADR's description; matches the tester's own independently-hand-computed
+2.1% case (that live test's own fixture construction and assertion were
+read directly, not re-run this gate, since the tester's own independent-
+SQL-cross-check methodology for that number is already sound and
+re-running it would only reproduce the identical result). `editRule`
+(`app/(app)/rules/actions.ts`) is called with this value unmodified
+(`actions.ts:728`) -- confirmed by reading `editRule`'s own body that it
+runs its full existing pipeline (own session re-derivation, own
+optimistic-concurrency guard, tighten-only, satisfiability, render) with
+no bypass or shortcut for this caller. **The annotation claim** --
+checked exactly as instructed, at `lib/rules/adherence-display.ts`, not
+assumed from the ADR's own "no such rendering UI exists yet" note:
+grepped that file directly for `rule_versions`/`created_at` -- zero hits.
+This confirms the ADR's own honesty on this point rather than
+contradicting it: the DATA the "you changed your risk cap on 3 March"
+annotation would need (a new `rule_versions` row with a real
+`created_at`, the old row correctly `superseded_at`-marked) is genuinely
+produced by `editRule`'s existing, unmodified pipeline -- confirmed
+directly, not just cited -- but there is **no rendering surface anywhere
+in this repo today** that reads `rule_versions` history for display on
+the adherence screen. This is an accurately-scoped, explicitly-flagged
+gap (ADR 0041's own "Consequences" section states it plainly: a future
+slice's job to render), not a false "done" claim -- sec 4.7's line
+("which annotates the adherence timeline") is satisfied at the DATA
+layer this slice owns, and the RENDERING half is correctly left unbuilt
+and undisguised rather than faked with a hardcoded string. Not a
+blocking gap for THIS slice's own stated scope (recommit/adjust/
+decline-vs-defer), since sec 4.7's line is naming a downstream
+consequence of the rule-version write this slice does perform, not a UI
+element this slice's own dispatch asked it to build.
+
+**5. Cross-kind dispatch and priority ordering -- confirmed against
+`ranking.ts` directly.** `rankAndCapPromptCandidates`
+(`lib/review/prompt-candidates/ranking.ts:199-212`) orders
+relaxation-ranked-candidates ahead of graduation-ranked-candidates in the
+literal array construction (`...rankRelaxationCandidates(...)` spread
+before `...rankGraduationCandidates(...)`), matching sec 4.3's table
+(rank 1 relaxation, rank 2 graduation) exactly. `fetchPendingDecisionPrompts`
+(`prompts-repository.ts:94-105`) reads `order by rank asc, created_at asc`
+-- since `rank` is assigned once, at write time, in this exact priority
+order (`ranking.ts:208-211`), a plain ascending read reproduces the
+cross-kind priority correctly without any additional interleaving logic
+in the read path, confirmed by reading both files together rather than
+either in isolation. `fetchNextDecision`'s own per-candidate loop
+(`actions.ts:239-276`) processes `pending` in that same rank order and
+dispatches per-kind inside the loop -- confirmed the graduation
+entitlement check (`canForUser(user.id, 'graduation')`) is scoped INSIDE
+the `if (candidate.kind === 'graduation')` branch, never applied to a
+relaxation candidate reached first. This matches the tester's own
+mixed-fixture live proof (item 6 in that gate's entry: relaxation rank 1
+returned first for a free user, graduation rank 2 correctly blocked with
+`plan_required` only once it became the next candidate) -- re-derived
+from the actual code here, not just re-stated from that proof.
+
+**6. No red/green, `.rq-num` on real numbers -- confirmed via fresh
+screenshot read (item 1 above covers this in the same pass) plus a
+targeted grep.** Grepped every new/changed file this slice touches
+(`RelaxationDecisionCard.tsx`, `actions.ts`, `relaxation-evidence-detail.ts`,
+`prompts-repository.ts`) for `red`/`green`/hex codes/`XP`/`currency` --
+zero hits. `.rq-num` is applied in `RelaxationDecisionCard.tsx` (line 83)
+to the index/total numbers only, matching this repo's own convention;
+confirmed visually in both fresh screenshot reads that the rule
+percentages and trade counts render in the tabular mono numeral style,
+consistent throughout.
+
+**7. PROGRESS.md chain consistency -- confirmed internally consistent and
+accurate.** Read the coder (line 28603), tester (line 28797), and
+security-reviewer (line 29053) dated 2026-09-13 entries in full,
+cross-checked against each other and against the actual current code:
+the coder's own claimed file list matches what exists on disk; the
+tester's claimed new test files (`relaxation-operand-map.test.ts`,
+`relaxation-evidence-schema.test.ts`,
+`decisions-relaxation-integration.live.test.ts`,
+`e2e/review-decisions-relaxation.independent-verify.spec.ts`) all exist;
+the security-reviewer's own item-by-item verdict references real line
+numbers in real files, re-spot-checked against the actual current
+`relaxation-evidence-detail.ts`/`actions.ts`/`prompts-repository.ts`
+content and found accurate. No stale claim, no gap between what a gate
+says it did and what the code shows was actually done. This entry is
+itself the fourth and final link in that same chain, written before any
+"Current task" synthesis, per the ledger-currency rule's own instruction
+that the raw dated record must exist the moment this gate finishes.
+
+**8. Documentation.** `docs/adr/0041` read in full -- all six decisions
+map to real, verifiable code (confirmed individually across items 1-5
+above and the earlier read of `prompts-repository.ts`/`actions.ts`), not
+a placeholder or a decision the code doesn't actually reflect.
+`docs/runbook.md`'s new entry ("Relaxation adjust found an eligible,
+adjustable rule with no numeric median," line 2152) read in full: names
+the exact log line to grep for, the exact preconditions that make it
+reachable, an honest "not alertable today, no alerting infra exists"
+caveat matching every other entry in this file, and a real
+"how to check" a human operator could actually run -- not a TODO, not
+boilerplate. Both artefacts are accurate and complete for this slice's
+own scope.
+
+**9. Standard non-negotiables.** No currency/P&L anywhere in this
+slice's UI or evidence strings (confirmed by direct read of both new
+component/detail files -- every quantity is a rule threshold or a trade
+count, never a currency amount). No XP/points anywhere (grepped, zero
+hits). No compound rule logic anywhere in this slice's diff -- `editRule`
+is called with one `newValue` for one existing rule's `value`, no
+AND/OR construction anywhere in `relaxation-operand-map.ts` or the
+action functions (confirmed by direct read and grep). Streak logic is
+untouched by this slice.
+
+**Verdict: PASS on all 9 items.** No blocking finding, no documentation
+gap, no design-ethics regression. This slice (Module 06 Slice 7, the
+Part 2 decision flow's RELAXATION half) is **cleared to commit and push
+to main** -- the orchestrating session should proceed with the commit
+immediately after this entry, per this project's Autonomy policy (no
+further human review gate).
