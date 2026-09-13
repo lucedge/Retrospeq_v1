@@ -1,6 +1,6 @@
 # Retrospeq visual rules — the distilled, authoritative set
 
-Source of authority: `retrospeq-design-system/brand/` (tokens, CSS, `docs/instrument.html`), `retrospeq-design-decisions.md` §8, `brief-developer-and-design.md` "For designers". This file restates them so a UI task needs one read. If this file and `brand/` disagree, `brand/` wins — fix this file.
+Source of authority: `retrospeq-design-system/brand/` (tokens, CSS, `docs/screens/*.html` — the 76-state mockup, `docs/inventory.md` — the backlog, `docs/guidelines.html` — the rules; `docs/instrument.html` is the superseded sketch), `retrospeq-design-decisions.md` §8, `brief-developer-and-design.md` "For designers". This file restates them so a UI task needs one read. If this file and `brand/` disagree, `brand/` wins — fix this file.
 
 ## Identity in one line
 
@@ -67,11 +67,13 @@ Icons: inline SVG, 24-unit viewBox, stroke 2 / round caps, 17–20px, `aria-hidd
 15. **Copy is sentence case** ("Close out the day", "Nothing to close out."), second person, active, specific labels, `…` not `...`, curly quotes, numerals for counts.
 16. **Read first, decide second.** Review Part 1 has nothing to tap; Part 2 is ≤ 3 decisions, one at a time.
 17. **Four tabs** Home · Trades · Rulebook · Performance, phone-width column (`max-w-[32rem]`) on every viewport, inside `app/(app)/AppShellNav.tsx`.
-18. **Every screen is built against its `instrument.html` counterpart**, using the marks where the mockup shows them. Rule-compliant but visibly unlike the mockup is not done.
+18. **Every screen is built against its frame in `brand/docs/screens/<batch>.html#<row>`** (row ids from `inventory.md`; pull one frame with `sed -n '/id="1.10"/,/class="cap"/p' …/screens/home-onboarding.html`). The frame's markup is real component classes — transcribe it. Rule-compliant but visibly unlike the frame is not done.
 19. **WCAG 2.2 AA** on every surface: 4.5:1 / 3:1, status never by colour alone, verification steps in live regions, full keyboard traversal on the strategy builder and rule editor, 44px targets.
 20. **Performance budgets** (00-foundation §8.1): pre-entry interactive < 1.5s on 4G; ambient < 800ms stale-while-revalidate; dashboard < 500ms; close-out < 1s; review < 2s; rule preview < 300ms.
 
-## The 17 mockup screens (`brand/docs/instrument.html`) → routes
+## Mockup → routes
+
+Authoritative frames: `brand/docs/screens/` — `home-onboarding` (rows 1.x), `trades` (2.x), `rulebook` (3.x), `review-performance` (4.x, 5.x), `account` (6.x); every row in `brand/docs/inventory.md` names its frame. The list below is the earlier `instrument.html` sketch numbering, kept only for cross-reference:
 
 01 Import → `/accounts/connect` · 02 The hook → `/onboarding/hook` · 03 Calibration → (Module 08, unbuilt) · 04–07 Home clear / position open / to close out / review ready → `/dashboard` · 08 Pre-entry capture → `/trades/manual-entry` · 09 Close out the day → `/trades/close-out` · 10 Review · the read → `/review` · 11 Decision · graduation, 12 Decision · relaxation → `/review/decisions` · 13 Review · closed → (unbuilt) · 14 Trades, 15 Trade · fills expanded → `/trades` · 16 Rulebook → `/rules` · 17 Performance → `/performance` (unbuilt).
 
