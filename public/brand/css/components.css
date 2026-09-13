@@ -121,11 +121,25 @@
 .rq-row__meta { width: 34px; flex-shrink: 0; font-family: var(--rq-font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); }
 .rq-row__end  { width: 40px; flex-shrink: 0; text-align: right; font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); color: var(--rq-ink-faint); }
 
-/* ---------- Tab bar ---------- */
-.rq-tabs { display: flex; padding: 7px 0 12px; background: var(--rq-surface); border-top: 1px solid var(--rq-line); }
-.rq-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--rq-ink-faint); }
-.rq-tab.on { color: var(--rq-accent-ink); }
-.rq-tab span { font-size: 8.5px; font-weight: var(--rq-weight-semi); }
+/* ---------- Tab bar ----------
+   Four tabs, fixed: Home · Trades · Rulebook · Performance (Module 08
+   §7.5). Sized for a real device, not the docs' scaled-down phone
+   frames: 44px touch target, 11px label, and room for the home
+   indicator via the safe-area inset. `aria-current="page"` is the
+   active state for real links; `.on` stays for static markup. */
+.rq-tabs {
+  display: flex;
+  padding: 6px 0 calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--rq-surface); border-top: 1px solid var(--rq-line);
+}
+.rq-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; min-height: 44px;
+  color: var(--rq-ink-faint); text-decoration: none;
+}
+.rq-tab:hover { color: var(--rq-ink-soft); }
+.rq-tab.on, .rq-tab[aria-current="page"] { color: var(--rq-accent-ink); }
+.rq-tab span { font-size: var(--rq-text-xs); font-weight: var(--rq-weight-semi); }
 
 /* ---------- Cost note ----------
    Amber-bordered, for a trade-off the user must weigh — NOT a warning

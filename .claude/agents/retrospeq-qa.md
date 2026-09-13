@@ -28,6 +28,7 @@ Check the slice under review against, at minimum:
 - No XP or points awarded for adherence.
 - Any streak logic counts weeks, not days.
 - Empty/thin-data states render "not enough data yet" (or the module's specific variant), never a zero, a fabricated number, or a hidden section.
+- **Mockup fidelity (added 2026-09-13):** any screen with a counterpart in `retrospeq-design-system/brand/docs/instrument.html` visibly matches it — layout, hierarchy, and the design system's marks where the mockup uses them — inside the app shell (`app/(app)/AppShellNav.tsx`: four tabs, phone-width column). `brand/` is authoritative over `modules/09-design-system.md`; flag any indigo accent, IBM Plex, shadcn/ui or Phosphor usage as drift. A screen that passes every rule above but reads as a plain text page where the mockup shows marks is a FAIL, not polish.
 - No compound rule logic (AND/OR) anywhere in the model, API, or UI — check the rule schema and any UI rule builder.
 - Analytics code does not import from rule/adherence code, or vice versa (00-foundation §11 dependency rules — 04 and 05 never read each other).
 - Notification volume: nothing beyond the one weekly notification the spec allows — grep for any new notification trigger and check it against Module 07.

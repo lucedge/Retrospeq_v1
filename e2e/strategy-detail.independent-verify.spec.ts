@@ -173,6 +173,8 @@ test.describe('Strategy-detail screen (Module 03 §5.1, /strategies/[id]) — in
     await page.goto(`/strategies/${strategyId}`);
     await expect(page.getByRole('heading', { name: "Owner's private strategy (iv-404)" })).toBeVisible();
     await expect(page.getByText('Win rate rises from 42% to 71% when Conviction is 4–5.')).toBeVisible();
+    // Sign-out lives on /settings since the 2026-09-13 app-shell change.
+    await page.goto('/settings');
     await page.getByRole('button', { name: 'Sign out' }).click();
     await page.waitForURL((url) => url.pathname.startsWith('/login') || url.pathname === '/', { timeout: 10_000 });
 

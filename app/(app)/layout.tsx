@@ -1,14 +1,14 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { signOut } from '../(auth)/actions';
+import { RulebookSubnav, SettingsLink, TabBar } from './AppShellNav';
 
 /**
- * Minimal authenticated shell for the app proper (as opposed to
- * app/(auth)/layout.tsx's signed-out card layout). This slice only
- * needs enough chrome to host the accounts screens — a full nav/tab bar
- * is a later module's job, not this one's (dispatch: "keep it minimal,
- * this slice is about the connect flow not general app chrome").
+ * Authenticated app shell (as opposed to app/(auth)/layout.tsx's
+ * signed-out card layout): top bar, one phone-width content column, and
+ * Module 08 §7.5's four-tab bar — see `AppShellNav.tsx`. Replaced the
+ * original minimal header-of-links chrome on 2026-09-13 (UI phase step
+ * 1, PROGRESS.md).
  *
  * Auth guard lives here, not in proxy.ts: proxy.ts's own job is only
  * session-cookie refresh (see that file's header comment) — route
@@ -60,59 +60,29 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-full flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-line px-6 py-4">
-        <Link href="/accounts" className="rq-h2">
-          Retrospeq
+    <div className="flex min-h-full flex-1 flex-col bg-bg">
+      {/* App shell — Module 08 §7.5 (four tabs, "Strategy lives inside
+          Rulebook") rendered to `retrospeq-design-system/brand/docs/
+          instrument.html`: one phone-width column, centred at every
+          viewport, bottom tab bar. Settings-type pages (accounts, plan,
+          security, privacy, sign-out) sit behind the top-right Settings
+          link rather than competing with the four tabs. The bottom
+          padding on <main> keeps content clear of the fixed tab bar. */}
+      <header className="mx-auto flex w-full max-w-[32rem] items-center justify-between px-5 pt-3">
+        <Link href="/dashboard" className="flex items-center gap-2 text-ink">
+          <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="11.25" fill="none" stroke="currentColor" strokeWidth="2.4" />
+            <circle cx="19.8" cy="19" r="3.3" fill="var(--rq-accent)" />
+          </svg>
+          <span className="text-md font-bold tracking-tight">Retrospeq</span>
         </Link>
-        <nav className="flex items-center gap-3">
-          {/* Module 08 (Onboarding & Home) §7.5's nav order: "Home ·
-              Trades · Rulebook · Performance." This dispatch adds Home
-              only — Rulebook/Performance stay their current `/rules`/
-              `/plan` labels, not yet renamed, since neither module fully
-              matches those tab concepts today. */}
-          <Link href="/dashboard" className="rq-sub underline">
-            Home
-          </Link>
-          <Link href="/trades" className="rq-sub underline">
-            Trades
-          </Link>
-          {/* Module 04 Slice 10e: before this link, `/rules` had no UI
-              entry point anywhere in this shell — a trader could reach it
-              only by typing the URL directly. */}
-          <Link href="/rules" className="rq-sub underline">
-            Rules
-          </Link>
-          {/* Module 03 (Field Registry & Strategy) strategy-builder UI
-              slice: before this link, `/strategies` had no UI entry point
-              anywhere in this shell — same gap Slice 10e's own `/rules`
-              link closed for Module 04. */}
-          <Link href="/strategies" className="rq-sub underline">
-            Strategies
-          </Link>
-          {/* Module 03 fields management screen: before this link, `/fields`
-              had no UI entry point anywhere in this shell — same gap the
-              `/strategies` link above closed for the strategy list. */}
-          <Link href="/fields" className="rq-sub underline">
-            Fields
-          </Link>
-          <Link href="/plan" className="rq-sub underline">
-            Plan
-          </Link>
-          <Link href="/security" className="rq-sub underline">
-            Security
-          </Link>
-          <Link href="/privacy" className="rq-sub underline">
-            Privacy
-          </Link>
-          <form action={signOut}>
-            <button type="submit" className="rq-btn rq-btn--ghost">
-              Sign out
-            </button>
-          </form>
-        </nav>
+        <SettingsLink />
       </header>
-      <main className="flex flex-1 flex-col p-6">{children}</main>
+      <main className="mx-auto flex w-full max-w-[32rem] flex-1 flex-col px-5 pt-4 pb-28">
+        <RulebookSubnav />
+        {children}
+      </main>
+      <TabBar />
     </div>
   );
 }

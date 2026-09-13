@@ -1,5 +1,7 @@
 # Module 09 — Design System
 
+> **SUPERSEDED for visual decisions (owner decision, 2026-09-13).** The authoritative design system is `retrospeq-design-system/brand/` — amber accent, its own type pairing, `.rq-*` components, no shadcn/ui — as wired into the app and shown in `brand/docs/instrument.html`. The indigo `#5B6EF5` accent, IBM Plex fonts, shadcn/ui and Phosphor choices below are **not** to be built. Non-conflicting rationale (§0 thesis-to-pixels, §10 checklist items that don't name a superseded token) still applies. See AGENTS.md "Source of truth".
+
 Cross-cutting visual and interaction language for every screen in §8. Written from `retrospeq-design-decisions.md` outward — every token and pattern below traces back to a specific locked decision, cited inline. Where this module is silent, defer to the decisions doc; it is the source of truth, this is its rendering.
 
 **Stack:** Next.js (App Router) PWA, Tailwind, shadcn/ui. Dark and light both first-class — see §9.

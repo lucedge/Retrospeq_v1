@@ -21,6 +21,12 @@ const nextConfig: NextConfig = {
   experimental: {
     cpus: 2,
   },
+  // The app shell's fixed bottom tab bar and top-corner controls leave no
+  // free corner at phone width: the default bottom-left dev badge sat on
+  // the Home tab and intercepted clicks (broke e2e/dashboard.spec.ts's
+  // Home-link test against `next dev`). Compile/runtime errors still
+  // surface with this off, per the Next.js devIndicators docs.
+  devIndicators: false,
 };
 
 export default nextConfig;
