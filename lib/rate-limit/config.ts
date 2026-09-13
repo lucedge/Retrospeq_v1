@@ -624,6 +624,35 @@ export const RATE_LIMITS = {
     ip: { limit: 15, windowSeconds: 3600 },
     email: { limit: 10, windowSeconds: 3600 },
   },
+
+  /**
+   * Module 06 (Review & Graduation) Slice 6 — `app/(app)/review/decisions/
+   * actions.ts`'s `acceptGraduationDecision`/`deferGraduationDecision`. Per
+   * the very recent `weeklyReview` scope's own precedent (2026-09-13
+   * security-review finding on this exact route tree, "no rate limiting
+   * anywhere in that chain") this repo is now explicit about NEVER shipping
+   * a new write path under `/review/**` without a scope from day one, not
+   * as a follow-up fix.
+   *
+   * Reuses `promoteRule`/`editRule`'s identical moderate budget (25/hr ip,
+   * 15/hr email) — the same "restructures/versions an existing record"
+   * reasoning class those two document applies here almost exactly:
+   * accepting a graduation decision creates a NEW rule (closer to
+   * `createRule`'s own class), but §2.2/§4.3's own hard 3-per-week
+   * DECISION cap means a real trader can structurally never need more than
+   * 3 accept-or-defer calls in a given week regardless of how generous this
+   * budget is — the number here exists only to stop a scripted flood
+   * against a single session, not to accommodate legitimate volume, which
+   * `editRule`'s budget already comfortably covers with room to spare.
+   * ONE scope for both accept and defer (not two separate ones): both
+   * actions operate on the exact same `review_prompts` row under the exact
+   * same 3-per-week ceiling, so splitting them would not change the real
+   * abuse surface, only double the bookkeeping.
+   */
+  reviewDecision: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

@@ -31,6 +31,8 @@ authority.
 
 ## Current task
 
+**AT A GLANCE (2026-09-13, CODER HANDOFF, MODULE 06 (REVIEW & GRADUATION) SLICE 6 -- PART 2 GRADUATION DECISION FLOW -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): coder work COMPLETE, self-checked live against a real seeded fixture and a real browser; NOT yet reviewed by tester/security-reviewer/qa, NOT committed.** New route `/review/decisions` (Server Component `page.tsx` + client `DecisionCard.tsx`, both `app/(app)/review/decisions/`), wired up from `/review`'s own "N decisions" button (previously shipped disabled by Slice 5, now real). GRADUATION KIND ONLY, per this slice's own explicit scope -- relaxation/promotion/retirement/detection decisions have no UI yet and are future slices reusing this same screen shape. Reads the existing pending `review_prompts` rows Slice 4 already writes (no ranking/eligibility logic touched); on accept, calls the EXISTING `createRule` Server Action (`app/(app)/rules/actions.ts`, extended with a new optional `origin` parameter, `'graduated'`/`'authored'`/etc., now a genuinely recognised field on its own `.strictObject` schema -- a first attempt that excluded `origin` from the parsed object instead of declaring it was caught as a real regression by this repo's own pre-existing Slice-2 security-review test suite, "no compound expression is representable," and fixed before handoff), then writes `finding_rule_links` (Module 05, decay-checking) and a NEW `field_usages(used_by='rule')` row (Module 03, closing a real, previously-flagged "will re-offer the same graduation forever" bug) via a real live-DB self-check: seeded a real `drv.risk_pct` finding, drove a real Chromium browser through login -> `/review/decisions` -> "Add the rule" click, and verified directly in Postgres that a real `rules` row (`origin='graduated'`, `severity='soft'`, `scope='strategy'`, rendered "Never risk more than 1% per trade.") plus the matching `finding_rule_links` and `field_usages` rows and the `review_prompts` state flip to `'accepted'` all landed correctly. Defer flow (`state='deferred'`, no `prompt_history` write per section 4.5's "no penalty") also verified live. **One real, structural, currently-blocking product gap found and NOT worked around**: a rule's `operand_id` is validated against a fixed static catalogue, but a finding's `field_id` is a per-user Module 03 field -- the two are different namespaces, a gap Module 03's OWN migration header already flagged independently. Only 5 specific `drv.*`-prefixed derived fields have a real operand-catalogue counterpart today; every custom field a trader actually defines (including section 4.6's OWN worked example, "conviction") honestly rejects with "This kind of finding can't become a rule yet." rather than faking a rule. Flagged in `NEEDS_YOUR_INPUT.md` as a genuine, currently-blocking architecture decision, not silently guessed at. A second real bug found and fixed during self-check: the client's own "fetch the next decision" state machine was PROVEN DEAD CODE by the live screenshot check (Next.js's own documented Server-Actions-plus-`revalidatePath` behavior already re-renders the whole route server-side inside the SAME request/response, before any client-side post-`await` state update can ever paint) -- removed rather than shipped as inert, misleading code; see `docs/adr/0040` for the full writeup of this and four other judgment calls (threshold derivation reusing `guided-front-door.ts`'s directional reasoning, the `field_usages` write, skipping `finding_rule_links` safely when `delta_win_rate` is null/non-positive rather than than fabricating a value, and the defer-state semantics). New `reviewDecision` rate-limit scope (`lib/rate-limit/config.ts`). `docs/runbook.md` gets one new entry (the `finding_rule_links` skip condition). Full `npx tsc --noEmit`, `npm run build`, and `npx eslint` all pass; the two live-DB test files touched by this slice's `origin` change (`lib/rules/__tests__/rules-repository.live.test.ts`, `app/(app)/rules/__tests__/actions.test.ts`) both still pass in full (113 tests combined). **No new automated test file was written for the new `/review/decisions` route or `lib/review/decisions/**` itself** -- that is `retrospeq-tester`'s own gate, not yet run. Do NOT mark Module 06 Slice 6 "done" until tester -> security-reviewer -> qa have each run and logged their own dated PASS/FAIL entry per the ledger-currency rule.**
+
 **AT A GLANCE (2026-09-13, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 5 -- WEEKLY REVIEW PART 1 UI -- supersedes every "AT A GLANCE" note below, all of which are now HISTORICAL): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full chain, two real fix cycles, all dated 2026-09-12/2026-09-13 (search "Module 06" and "Slice 5"): coder -> tester (found a real date-format bug, "Week of July 21" instead of the spec's day-first "Week of 21 July") -> coder-fix (locale corrected to en-GB, matching existing house-style precedent) -> security-reviewer (found a real gap: the compute-on-view path -- 4 parallel reads plus 2 transactional writes per request -- had zero rate limiting, the one page-load path in the repo without one, FAIL) -> coder-fix (new `weeklyReview` rate-limit scope, deliberately tighter than sibling read-only precedents given the real cost difference, routed through a new `app/(app)/review/actions.ts` matching `rules`/`strategies`' own established pattern) -> security-reviewer re-verification (PASS, confirmed via repo-wide grep that no bypass path to the underlying compute functions exists) -> qa (PASS). New route `/review` renders section 5.1's Part 1 read screen -- outcome (R-multiple, never celebrated), Consistency/Adherence/Findings panels (findings capped at 3, reusing Module 03's exact `.finding` markup), and an honestly-disabled "N decisions"/"Week closed" button (Part 2/3 don't exist yet). **The real architecture answer to the missing-scheduler gap**: since no cron/scheduled-job infra is deployed, this screen computes and materializes a review synchronously on first view rather than assuming a background job already ran -- documented in `docs/adr/0039`, with the `completed_at` freeze (once a trader marks a review done, it's never silently recomputed/overwritten) proven live by the tester. **This closes Module 06 Slice 5.** Still unbuilt: Part 2 (decisions -- accept/decline/defer, needs `prompt_history` writes), Part 3 (close), deferral/backlog, the monthly trend view, section 4.8's 4-week prompt expiry, and the production scheduler that would eventually replace this slice's own compute-on-view mitigation. Full coder -> tester -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11/2026-09-12 Decision-log entries, search "Module 06" and "Slice 4"). Ranks section 4.3's five candidate kinds (Relaxation > Graduation > Detection > Promotion > Retirement, magnitude within kind, single-detection cap, 3-per-review cap), filters by section 4.5's dormancy/mute rules against `prompt_history`, and writes the ranked result into `review_prompts` -- the module's first real write to that table. **Closes a hard, explicitly-tracked precondition from Slice 3's own security review**: `graduation-candidates.ts`/`detection-candidates.ts` previously skipped the plan/cohort `canRender` gate, ruled safe to defer only until something actually consumed those lists -- this slice is that consumer, and the tester proved live, in both directions, that a plan-gated or kill-switched candidate is correctly excluded from the final written output. One real behavioral property confirmed intentional, not an accidental side effect: a high-priority kind with 3+ qualifying candidates can consume the entire cap before a lower-priority kind ever competes -- this is a literal, correct reading of section 4.3's two-step "rank by kind, then by magnitude, then cap" algorithm, independently concurred by tester, security-reviewer, and qa. **This closes Module 06 Slice 4.** Still unbuilt and honestly tracked (docs/adr/0038's Consequences section, docs/runbook.md): section 4.8's 4-week pending-prompt expiry, any accept/decline UI (so `prompt_history` still has zero writers), and the production scheduler that would actually invoke this whole pipeline periodically. Module 06 remains a large, multi-slice module -- still unbuilt beyond the above: all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view. Full coder -> tester (9 new seeded live-DB integration tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 3"). Pure, read-only candidate computation for all six section 4.4 prompt kinds (Graduation, Relaxation, Promotion, Retirement-decay, Retirement-condition, Detection) -- no ranking, no 3-per-week cap, no `review_prompts` writes, no UI, all deliberately deferred to later slices. The load-bearing piece: findings/detections get a brand-new database row id on every recompute (supersede-then-insert), so `subject_id` is instead a fixed-namespace UUID v5 derived from stable identity -- the only thing that makes section 4.5's "a muted subject never reappears" guarantee survive a routine recompute, proven live by the tester against a real forced recompute, not just asserted. One real, non-blocking gap found and explicitly ruled on rather than silently dropped: `graduation-candidates.ts`/`detection-candidates.ts` don't yet apply the `canRender` plan/cohort gate `weekly-findings.ts` (Slice 2) already does -- security-reviewer confirmed via repo-wide grep that ZERO `app/` consumers of any prompt-candidates or weekly-findings code exist yet anywhere, so nothing is currently reachable/exploitable, and made this a hard tracked precondition (documented in that dated entry) for whichever future slice gives these candidates their first real consumer. **This closes Module 06 Slice 3.** Still unbuilt: ranking + the 3-per-week cap (section 4.3), all decision UI, `review_prompts` writes, deferral/backlog, the monthly trend view, and the scheduler gap already flagged in NEEDS_YOUR_INPUT.md.
 
 **AT A GLANCE (2026-09-11, QA FINAL GATE, MODULE 06 (REVIEW & GRADUATION) SLICE 2 -- WEEKLY REVIEW PART 1 READ-PAYLOAD ASSEMBLY -- HISTORICAL, superseded above): PASSES the final QA gate, committed and pushed by the orchestrating session immediately after.** Full coder -> tester (43 new tests) -> security-reviewer -> qa chain, all PASS (see the dated 2026-09-11 Decision-log entries, search "Module 06" and "Slice 2"). New `lib/review/` module composes four already-built modules' data -- Module 02 outcome (R-multiple only, never celebrated), Module 04 adherence, Module 05 findings (a genuinely new cross-strategy aggregator, capped at 3, ranked by actionability), Module 07 streak -- into the weekly review's Part 1 "read" payload, materialized into the already-existing `reviews.read_payload` column. Backend-only: no UI, no prompt computation (`review_prompts` stays unused), and deliberately no scheduler -- this repo has no deployed cron/scheduled-job infrastructure, so rather than invent a fake trigger, the pure assembly + materialization write was built standalone and the real gap was flagged honestly in `NEEDS_YOUR_INPUT.md`, per AGENTS.md's "never fake it, always flag it" rule. The multi-week (`covers_weeks > 1`) rollup was proven live to be a genuine sum, not a relabeling, and the findings cap was confirmed to stay fixed at 3 regardless of how many weeks a period covers. **A recurring process gap surfaced and was fixed at the source during this slice's own review chain**: the mandatory service-role allowlist test had already gone stale twice today for OTHER files (both fixed via separate hotfix commits, `e6f6af7`/`b3e1c9d`) -- the security-reviewer's own agent definition was updated mid-session (`8bdb5e3`) to require it to self-add any new `withServiceRoleConnection` call site to the allowlist as part of finishing its review, and this slice's own security-reviewer dispatch was the first to follow that updated checklist, correctly self-adding `lib/review/reviews-repository.ts`'s entry rather than leaving it for yet another after-the-fact catch. **This closes Module 06 Slice 2.** Module 06 remains a large, multi-slice module -- still unbuilt: prompt candidate computation/ranking/the 3-per-week cap (section 4.3-4.7), all decision UI (graduation/relaxation/promotion/retirement), deferral/backlog, the monthly trend view, and the scheduler that would actually invoke this slice's own assembly function periodically once deployed infra exists.
@@ -9014,6 +9016,158 @@ the owner — never fake it, always flag it."
 ## Decision log
 
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
+
+- 2026-09-13 -- ORCHESTRATOR, process change: commit per-gate-pass, not
+  only once at the end of a slice's full coder -> tester -> security-
+  reviewer -> qa chain. Owner-requested directly (this machine's VS
+  Code/session has crashed and restarted mid-chain repeatedly this
+  build -- see [[host-memory-pressure-vscode-crashes]] memory entry --
+  and hours of multi-gate work sitting uncommitted is real risk even
+  though the underlying files themselves survive a session crash,
+  since the owner's own stated preference is fewer, smaller windows of
+  uncommitted work, not just "the files are technically safe"). From
+  now on: after tester PASS, commit; after security-reviewer PASS (or
+  a security-reviewer-required fix cycle's own final re-verification
+  PASS), commit again; after qa PASS, final commit. This does NOT lower
+  this repo's own "not marked done until qa passes" bar -- PROGRESS.md's
+  AT A GLANCE/Phase-status framing still only calls a slice DONE after
+  qa, and an interim commit's own message will say so plainly (e.g.
+  "not yet qa-reviewed") -- it only means the same total set of commits
+  a slice always produced arrives spread across the chain instead of
+  squashed into one commit at the very end. Every commit still only
+  ever contains code that has passed at least the coder's own self-
+  check and (from the tester-pass commit onward) real independent
+  verification -- this is strictly more frequent checkpointing of the
+  exact same quality bar, not a relaxation of it. Applied starting with
+  Module 06 Slice 6 (coder -> tester -> two real fix cycles ->
+  security-reviewer PASS already complete at the time of this note;
+  committing now rather than waiting on the qa gate already in flight).
+
+- 2026-09-13 -- CODER (retrospeq-coder), FIX for the one real gap the
+  same-day `retrospeq-tester` gate found in Module 06 Slice 6
+  (`## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- TESTER
+  GATE` entry above/below in this same log): `lib/review/decisions/
+  graduation-operand-map.ts`'s `resolveOperandForField` treated
+  `drv.order_type` as a fifth working field alongside `risk_pct`/
+  `hold_seconds`/`day_of_week`/`instrument`, but `order_type`'s own
+  `lib/rules/operand-catalogue.ts` entry is `computableToday: false` (no
+  `order_type` column exists anywhere in Module 02's schema). Before this
+  fix, accepting a graduation prompt on `drv.order_type` would have
+  created a real `rules` row that could never actually evaluate --
+  strictly worse than this same file's own honest "can't become a rule
+  yet" rejection, since it looks like success.
+
+  **Fix, and why this shape over a one-line exclusion**: rather than a
+  one-off `if (fieldId === 'drv.order_type') return null` special case,
+  `resolveOperandForField` now checks `operand.computableToday` generically
+  for ALL five mapped fields after resolving via
+  `DERIVED_FIELD_TO_OPERAND_ID` -- one `if (!operand.computableToday)
+  return null` after the existing lookup, no new control flow, no new
+  parameter. Chosen over the narrower exclusion because the failure mode
+  this bug represents ("a mapped field's catalogue entry silently stops
+  being evaluable") is not specific to `order_type` -- nothing prevents a
+  future, honest downgrade of `risk_pct`/`hold_seconds`/`day_of_week`/
+  `instrument`'s own `computableToday` (e.g. if a fact-assembly
+  regression were ever found and the entry corrected), and a one-off
+  exclusion would not catch that; the generic check does, automatically,
+  with no second bug report required. `drv.order_type` now falls through
+  to the IDENTICAL rejection path (`GRADUATION_FIELD_UNSUPPORTED`, "This
+  kind of finding can't become a rule yet.") already used for every
+  out-of-scope custom field (e.g. "conviction") -- confirmed by reading
+  `app/(app)/review/decisions/actions.ts`'s existing `if (!operand)`
+  branch, which needed no changes at all since it already treats any
+  `null` from `resolveOperandForField` as this one honest outcome.
+
+  **Verification**: `lib/review/decisions/__tests__/graduation-operand-
+  map.test.ts` updated -- the old "GENUINE GAP, FLAGGED NOT FIXED" test
+  (which asserted `drv.order_type` DID resolve, documenting the bug) is
+  replaced with a test asserting it now resolves to `null`, plus a new
+  test explicitly asserting all four remaining fields still resolve with
+  `computableToday: true` (the "doesn't break the other 4" check this fix
+  was explicitly asked to prove). Full pass, real runs, not assumed:
+  - `graduation-operand-map.test.ts` + `app/(app)/review/decisions/
+    __tests__/actions.test.ts`: 44/44 pass.
+  - `lib/review/decisions/__tests__/decisions-read-path.live.test.ts` +
+    `app/(app)/review/decisions/__tests__/decisions-integration.live
+    .test.ts` (real writes/reads against the shared dev Supabase project,
+    ADR 0002) rerun in full: 12/12 pass, including the real `drv.risk_pct`
+    accept-with-real-writes scenario and the custom-field/defer/cross-
+    user-isolation scenarios -- none of these exercised `order_type`
+    before or after, and all still pass unchanged.
+  - `tsc --noEmit`: clean. `eslint` (scoped to the two touched files):
+    clean. `npm run check:import-boundaries`: clean (104 modules, 266
+    dependencies, no violations).
+  - A full combined `lib/review lib/rules app/(app)/review app/(app)/rules`
+    run was ALSO attempted (both default multi-worker and
+    `--pool=forks --poolOptions.forks.singleFork=true`) as a broader
+    regression sweep, per this fix's own instruction to check "everything
+    else touching this file." The default-pool attempt hit this machine's
+    known standing memory-pressure infra gap (`Fatal process out of
+    memory: Zone`, consistent with prior sessions' documented ~5-6GB
+    free-RAM ceiling under multi-worker load). Two single-fork retries
+    were run instead -- one scoped to `lib/rules` only, one the full
+    combined set -- and BOTH eventually completed as background tasks
+    (941s and 1659s respectively; they were not intentionally run
+    concurrently, but their runtimes did overlap for part of that window,
+    an avoidable overlap noted for future sessions rather than repeated):
+    - `lib/rules`-only: 44/47 files, 580/587 tests passed.
+    - Full combined set: **73/76 files, 923/927 tests passed.**
+    Both runs' only failures are the SAME three files every time --
+    `adherence-repository.live.test.ts`, `severity-lifecycle.live.test.ts`,
+    `severity-lifecycle.independent-verification.live.test.ts` (Module 04
+    Slices 6/7) -- which have ZERO import relationship to `graduation-
+    operand-map.ts`/`resolveOperandForField` (confirmed by the same
+    import grep used throughout this fix). The failure signature differs
+    slightly between the two runs (plain 30s/150s test timeouts in the
+    combined run; timeouts PLUS a Postgres "deadlock detected" and a
+    cascade of "current transaction is aborted" in the run that
+    genuinely overlapped with the combined run's tail end) but both
+    point the same direction: these three files' own live-DB
+    concurrency/promotion tests are slow and/or contend for locks on
+    shared tables (`rules`/`rule_evaluations`/`trades`/
+    `adherence_weekly`) against this shared dev Supabase project (ADR
+    0002) under current conditions, independent of whether another
+    vitest process happens to be running at the same time -- not
+    something this fix's own change (a pure read of `computableToday`
+    inside `resolveOperandForField`) could plausibly cause or worsen.
+    Every file this fix actually relates to within `lib/rules` --
+    `operand-catalogue.test.ts` (15/15), `editable-operands.test.ts`
+    (8/8), `validate-operand-op-value.test.ts` (33/33), `cross-trade-
+    operand-values.test.ts` (57/57) -- and every file under `lib/review`/
+    `app/(app)/rules` (including `rules/actions.test.ts`, 102/102, which
+    covers `createRule`'s `origin` handling this fix's caller depends on)
+    passed cleanly in both runs. Flagged here per this repo's own "flag
+    it, don't paper over it" convention rather than silently omitted, but
+    NOT logged as a new regression introduced by this fix -- if these
+    three files' own flakiness is worth investigating on its own, that is
+    a separate, pre-existing Module 04 Slice 6/7 concern for whichever
+    session picks it up next, not part of this fix's scope or blocking
+    its handoff.
+
+  **Does this close the tester's finding?** Yes -- the one real, tester-
+  found defect (a rule that would be created but never evaluate) no
+  longer occurs; `drv.order_type` now produces the identical honest
+  outcome as any other unsupported field, proven by a direct test
+  assertion, not just code inspection.
+
+  **Status for security-reviewer**: this fix is ready to be picked up
+  alongside the rest of Slice 6. It does NOT touch, and does not resolve,
+  ADR 0040 decision 7's separately-flagged `origin` bypass gap
+  (`createRule` accepting a caller-supplied `origin: 'graduated'` with no
+  gate on which caller may use it) -- that remains exactly as flagged,
+  for `retrospeq-security-reviewer` to assess on its own merits, not
+  something this fix silently resolved or narrowed.
+
+  Docs updated alongside the code: `docs/adr/0040-graduation-decision-
+  operand-threshold-and-progression.md` (decision 1's "five supported
+  fields" framing corrected to "four," with a dated correction note
+  explaining why, plus the Consequences section updated to match) and
+  `NEEDS_YOUR_INPUT.md`'s existing Module 06 entry (both the "what's
+  stalled" and "what was built" paragraphs corrected from "five" to
+  "four," with the `order_type` finding/fix summarised inline). No new
+  `docs/runbook.md` entry -- this fix does not introduce or change an
+  alerting condition; it corrects a resolution boundary that already had
+  a documented, unchanged rejection path.
 
 - 2026-09-11 -- ORCHESTRATOR (hotfix, second occurrence of this exact
   gap today), `lib/supabase/__tests__/service-role-inventory.test.ts`'s
@@ -27082,3 +27236,1155 @@ their `__tests__`), `lib/review/current-period.ts` (and its test),
 `docs/runbook.md`, `NEEDS_YOUR_INPUT.md`, `e2e/review-weekly-read.spec.ts`,
 and this file, with no further human review gate before doing so, per
 this project's Autonomy policy.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- CODER: Part 2 decision flow, GRADUATION ONLY. Self-checked live; NOT reviewed by tester/security-reviewer/qa yet, NOT committed.
+
+Built the Part 2 decision flow per section 4.2/4.6/5.1's `review--decision`
+reference markup, GRADUATION ONLY -- not relaxation/promotion/retirement/
+detection (future slices reusing this screen's shape), not Part 3 (close).
+
+**What was built:**
+- `app/(app)/review/decisions/page.tsx` (Server Component) + `DecisionCard.tsx`
+  (Client Component) -- the new route, reached from `/review`'s own
+  "N decisions" button (`app/(app)/review/page.tsx`, previously shipped
+  disabled by Slice 5, now wired for real via a plain `<Link>`).
+- `app/(app)/review/decisions/actions.ts` -- `fetchNextGraduationDecision`
+  (read: resolves the current review via the SAME `determineCurrentWeeklyReviewPeriod`
+  logic `/review` uses, reads the earliest pending `kind='graduation'`
+  `review_prompts` row, builds its render detail), `acceptGraduationDecision`
+  (the full section 4.6 write path), `deferGraduationDecision` (section 4.5's
+  "no penalty" defer). All three gated by a new `reviewDecision` rate-limit
+  scope (`lib/rate-limit/config.ts`) and the `graduation` Pro-only entitlement
+  capability (checked at both the read and the accept action, matching
+  `/review/page.tsx`'s own forward-declared plan for this exact gate).
+- `lib/review/decisions/graduation-operand-map.ts` -- resolves a finding's
+  `field_id` to a rule `operand_id` for the narrow, documented set of `drv.*`
+  fields that have one (five entries, cross-referenced from Module 03's own
+  migration comment, not invented), and derives a `{op, value}` rule body
+  from the finding's real `segment` boundary, reusing `guided-front-door.ts`'s
+  own `operand.direction` reasoning (Module 04 Slice 10a precedent, as this
+  slice's own dispatch pointed at).
+- `lib/review/decisions/graduation-evidence-detail.ts` -- builds the
+  statement/meta/cost/hint for rendering, reusing `buildFindingPayloadFromRow`/
+  `describeSegmentValue` (newly exported from `findings-payload.ts`) rather
+  than re-deriving finding-statement synthesis.
+- `lib/review/decisions/graduation-evidence-schema.ts` -- a Zod boundary
+  around the `review_prompts.payload` jsonb for graduation rows (defense in
+  depth on a server-written-but-still-worth-validating column).
+- `lib/review/decisions/prompts-repository.ts` -- the decision screen's own
+  `review_prompts` reads/writes, real owner RLS via `withUserConnection`
+  (unlike Slice 4's `review-prompts-repository.ts`, which is the scheduled-
+  job `service_role` write half) -- `fetchPendingGraduationPrompts`,
+  `fetchGraduationDecisionCounts` (the "Decision N of M" denominator),
+  `fetchPromptById`, `markPromptAccepted` (guarded `WHERE state='pending'`,
+  merges `ruleId`/`ruleRendered` into the existing payload for section 9's
+  `PROMPT_ALREADY_DECIDED` idempotent-replay case), `markPromptDeferred`.
+- `lib/analytics/findings-repository.ts` -- new `fetchActiveFindingForFieldTuple`
+  (the live finding row + real `id`/`computed_at`, needed because
+  `review_prompts.subject_id` stores a stable-but-synthetic id, never the
+  live `findings.id` a `finding_rule_links` FK needs).
+- `lib/fields/fields-repository.ts` -- new `insertRuleFieldUsage`, the first
+  writer of `field_usages(used_by='rule')` anywhere in this repo. Closes a
+  real, previously-flagged gap: without it, `findGraduationCandidates`'s own
+  "no existing rule on that field" eligibility check would never see the
+  just-created rule, and the SAME finding would be re-offered for graduation
+  on every subsequent `/review` view. Verified live this does NOT happen
+  after a real accept.
+- `lib/rules/rules-repository.ts` / `app/(app)/rules/actions.ts` -- `createRule`
+  extended with an optional `origin` parameter (defaults to `'authored'`,
+  every existing caller unaffected), reused DIRECTLY per this slice's own
+  dispatch instruction ("don't reimplement rule creation") rather than a
+  parallel insert path.
+
+**A real regression found and fixed during this slice's OWN self-check,
+before any tester touched it**: the first version of the `origin` change
+excluded `origin` from the object handed to `createRuleInputSchema.safeParse`
+(to dodge the `.strictObject` "unrecognised key" rejection without touching
+the schema) -- this silently defeated that same protection for every OTHER
+unexpected field too. Running this repo's own PRE-EXISTING test suite
+(`app/(app)/rules/__tests__/actions.test.ts`) caught it immediately: the
+Slice-2 security-review test "no compound expression is representable"
+started failing because a `conditions`/`and`/`or` payload was no longer
+being explicitly rejected. Fixed by declaring `origin` as a genuinely
+recognised, enum-validated, optional field on the schema instead. Full
+detail in `docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`
+decision 7 -- including a flagged, NOT-yet-closed residual gap for
+security-reviewer: nothing stops a trader calling `createRule` directly
+with `origin: 'graduated'`, bypassing `acceptGraduationDecision`'s own
+Pro-gate and evidence checks (narrow blast radius, not a privilege
+escalation, but a real gap).
+
+**A second real bug found and fixed during the live screenshot self-check**:
+the first version of `DecisionCard.tsx` managed its own client-side
+"fetch the next decision" state machine after every accept/defer. A real
+seeded fixture + real Chromium run proved this dead code -- Next.js's own
+documented Server Actions behavior (`revalidatePath` inside an action
+re-renders the CURRENT route server-side in the SAME request/response,
+before the client's own post-`await` code can run) meant the component was
+already unmounted and replaced by `page.tsx`'s own fresh server render by
+the time any client-side "load next"/"show a done state" logic could ever
+paint. Removed the dead client state machine; progression to the next
+decision (or to the honest "Nothing to decide right now." terminal state)
+now happens entirely via Next's own automatic revalidation. Full detail in
+`docs/adr/0040` decision 6, including the one accepted consequence (no
+transient "Added the rule: ..." confirmation message is possible with this
+architecture).
+
+**Live self-check performed** (real shared dev Supabase project, ADR 0002;
+throwaway seed+Playwright scripts under `tmp/`, deleted after use, along
+with every test user/fixture row and this session's own accumulated
+`rate_limit_hits` rows it generated):
+1. A real `drv.risk_pct` confident finding, real pending `review_prompts`
+   row -> decision screen renders the correct statement/meta/cost/hint/
+   "Decision 1 of 1" -> clicked "Add the rule" -> verified DIRECTLY in
+   Postgres: a real `rules` row (`origin='graduated'`, `severity='soft'`,
+   `scope='strategy'`, `rendered='Never risk more than 1% per trade.'`), a
+   real `finding_rule_links` row (`delta_at_graduation=0.29`,
+   `trades_at_graduation=40`), a real `field_usages` row
+   (`used_by='rule'`), and the `review_prompts` row flipped to
+   `state='accepted'`, `decided_at` set, `payload` merged with
+   `ruleId`/`ruleRendered`. Screen correctly lands on "Nothing to decide
+   right now."
+2. A real confident finding on a CUSTOM (non-`drv.*`) field ("Conviction,"
+   the spec's own worked example) -> screen renders the full evidence/cost/
+   hint honestly, shows "This kind of finding can't become a rule yet."
+   instead of an Accept button, "Not yet" still available -> clicked defer
+   -> verified `review_prompts.state = 'deferred'`, `decided_at` still null
+   (no `prompt_history` write, per section 4.5).
+3. A free-tier user with an otherwise-identical eligible prompt -> screen
+   shows "Turning a finding into a rule is a Pro feature." with a single
+   `.rq-btn--ghost` (no primary button at all, correctly -- there is no
+   action to offer), never the decision content.
+
+Design-system self-check: exactly one `.rq-btn` primary when Accept is
+offered ("Add the rule"), zero or one `.rq-btn--ghost` otherwise, no
+`.rq-btn--equal` (correctly reserved for a genuinely symmetric choice like
+relaxation's future recommit/adjust pair, not graduation's accept/defer);
+`.rq-cost` (an ALREADY-SHIPPED design-system component, not invented) used
+for the explore/exploit cost line; `.rq-num` on every number (Decision N of
+M, trade counts); no red/green anywhere (amber/orange accent only, matching
+the rest of this app).
+
+**Verification run**: `npx tsc --noEmit` clean; `npm run build` green
+(`/review/decisions` registered); `npx eslint` clean on every touched file
+(including the `lib/analytics -> lib/rules` import-boundary check --
+`lib/review/decisions/**` is unrestricted, only `lib/analytics/**` is
+boundary-checked, confirmed no violation either way); `lib/rules/__tests__/rules-repository.live.test.ts`
+(11 tests) and `app/(app)/rules/__tests__/actions.test.ts` (102 tests) both
+pass in full against the real live DB, re-run AFTER the `origin` regression
+fix above, not just before it.
+
+**No new automated test file was written for `/review/decisions` or
+`lib/review/decisions/**` by this coder session** -- per this repo's own
+role division (retrospeq-tester owns unit/property/RLS/integration/E2E),
+that gate has not run yet. `lib/supabase/__tests__/review-graduation-schema.rls.test.ts`
+(Slice 1) already covers RLS on the underlying `review_prompts` table
+itself; no NEW table was created by this slice (only new columns/writers
+against existing ones), so no new RLS surface exists to test, but the
+tester should still confirm this directly rather than take this note's
+word for it.
+
+**Genuine, currently-blocking product/architecture gap found, NOT worked
+around, flagged in `NEEDS_YOUR_INPUT.md`**: a rule's `operand_id` is
+validated against a fixed static catalogue; a finding's `field_id` is a
+per-user Module 03 field. These are different namespaces. Only the five
+`drv.*` derived fields with a pre-existing bare-operand counterpart
+(`risk_pct`, `hold_seconds`, `day_of_week`, `order_type`, `instrument`) can
+become a rule today. Every custom/`captured` field a trader actually
+defines -- including section 4.6's OWN worked example, "conviction" --
+correctly and honestly rejects rather than faking a rule. This is not a
+new gap: `20260902010000_field_registry_schema.sql`'s own migration header
+already named it, independently, months before this slice existed.
+
+**Documentation**: `docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`
+(seven judgment calls, in full); one new `docs/runbook.md` entry (the
+`finding_rule_links` skip-on-non-positive-delta condition); one new
+`NEEDS_YOUR_INPUT.md` entry (the operand/field-registry namespace gap).
+
+**Do NOT mark Module 06 Slice 6 "done" in this file's Module-status
+sections.** Per the ledger-currency rule, tester, security-reviewer, and qa
+must each run and write their OWN dated PASS/FAIL entry here before this
+slice is committed. This coder entry is a report of what was built and
+self-checked, not a review-gate pass.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- TESTER GATE: PASS. Ready for security-reviewer next.
+
+Full independent test coverage of the Part 2 graduation decision flow
+(`app/(app)/review/decisions/**`, `lib/review/decisions/**`), against the
+real shared dev/test Supabase project (ADR 0002) -- no mock standing in
+for Postgres anywhere a live assertion is claimed. Read `docs/adr/0040`
+in full and `06-review-and-graduation.md` sections 4.2/4.5/4.6/5.1 before
+writing anything, per this dispatch's own instruction. Six new permanent
+test files (0 existed before this gate), 96 new tests total, all passing:
+
+- `lib/review/decisions/__tests__/graduation-operand-map.test.ts` (15
+  tests, pure/no-DB) -- adversarial coverage of `resolveOperandForField`
+  (all 5 supported `drv.*` fields resolve correctly; the spec's own
+  "conviction" example, a raw uuid-shaped custom field, an empty string,
+  and the two migration-excluded `drv.session`/`drv.direction` fields all
+  correctly resolve to `null`) and `deriveRuleInputFromSegment` (every
+  direction/type combination, the boolean is_true/is_false branch, a
+  shape-mismatch adversarial case returning `null` rather than crashing,
+  and a loop asserting every returned op is genuinely phrased on its
+  operand). **One genuine, real gap found and asserted directly, not
+  previously called out in ADR 0040's own text**: `drv.order_type`
+  resolves to a real operand (`order_type`) whose own catalogue entry is
+  `computableToday: false` -- a rule graduated on this one field (of the
+  five) would be created successfully by `createRule` (which does not
+  gate on `computableToday`) but could never actually evaluate, since no
+  `order_type` column exists anywhere in Module 02's schema. Narrow blast
+  radius in practice (no real upstream data source populates `drv.order_type`
+  findings today either, per the same migration's own header), but a real,
+  previously-undocumented edge of the honesty boundary -- flagged here,
+  not silently absorbed into the "5 supported fields" framing.
+- `lib/review/decisions/__tests__/graduation-evidence-schema.test.ts` (7
+  tests, pure) -- well-formed/post-acceptance/extra-key/missing-field/
+  malformed-uuid/null-metric coverage of `graduationEvidenceSchema`.
+- `lib/review/decisions/__tests__/decisions-read-path.live.test.ts` (7
+  tests, live DB) -- `fetchPendingGraduationPrompts`/
+  `fetchGraduationDecisionCounts` (rank ordering, mixed-state counting),
+  `fetchPromptById` (cross-user null, nonexistent-id null),
+  `fetchCurrentReviewIdForDecisions` (no-review null), and
+  `buildGraduationPromptDetail` across all four of its real branches
+  (supported field, custom field with the evidence/cost still shown per
+  §4.6, the finding-vanished §9 `PROMPT_SUBJECT_GONE` case, and --
+  **found missing initially, added** -- the confidence-drifted-since-
+  materialisation case, distinct from "vanished entirely").
+- `app/(app)/review/decisions/__tests__/actions.test.ts` (28 tests,
+  mocked-dependency unit, matching this repo's own established
+  `rules/__tests__/actions.test.ts` pattern) -- rate-limit-is-the-first-
+  check on all three actions (proven by asserting zero downstream calls
+  on a rate-limited rejection, not just that the scope string exists),
+  the Pro-only `graduation` gate on both read and accept (closing the
+  "call the action directly" bypass), the custom-field honesty boundary
+  (zero calls to `createRule`/`insertRuleFieldUsage`/
+  `createFindingRuleLink`/`markPromptAccepted` on rejection), the happy
+  path's exact write sequence, the non-positive/null `delta_win_rate`
+  skip (rule still succeeds, link skipped, warned), `createRule`'s own
+  rejections (cap, tighten-only) surfaced verbatim with no second gate,
+  `GRADUATION_FINDING_GONE` (vanished and drifted-confidence), the full
+  idempotent-replay family (already-accepted replay, terminal-state-no-
+  ruleId honest rejection, and the real double-submit-race-lost path
+  that retires the just-created duplicate rule and replays the winner),
+  input validation and not-found/wrong-kind handling for both actions,
+  and defer's own no-penalty/idempotent/plan-independent behaviour.
+- `app/(app)/review/decisions/__tests__/page.test.ts` (8 tests, mocked
+  render, matching `/review/__tests__/page.test.ts`'s established
+  pattern) -- every one of the 5 render branches
+  (session-expired/plan_required/no_review/none_pending/rate-limited/
+  ready-canAccept/ready-blocked), with a direct DOM-count assertion that
+  exactly one un-suffixed `.rq-btn` renders in the canAccept branch and
+  zero in the blocked branch.
+- `app/(app)/review/decisions/__tests__/decisions-integration.live.test.ts`
+  (5 tests, live DB, real writes, `createRule`/`insertRuleFieldUsage`/
+  `createFindingRuleLink`/every `prompts-repository.ts` function run for
+  real -- only `createClient`/`getClientIp`/`enforceRateLimit`/
+  `revalidatePath` mocked, matching `fields/__tests__/lifecycle-actions
+  .live.test.ts`'s own established live-Server-Action-test posture) --
+  this is the load-bearing file for the dispatch's own adversarial asks:
+  1. **ACCEPT, real writes**: a `drv.risk_pct` finding accepted through
+     the real action produces a real `rules` row
+     (`origin='graduated'`,`severity='soft'`,`scope='strategy'`), a real
+     `finding_rule_links` row with the correct `delta_at_graduation`, a
+     real `field_usages` row, and the `review_prompts` row flips to
+     `accepted` with `ruleId`/`ruleRendered` merged into its payload --
+     ALL asserted directly against Postgres, not the action's own return
+     value alone.
+  2. **THE RE-PROMPT-BUG FIX, cross-slice, proven both directions in the
+     SAME fixture**: `findGraduationCandidates` (Slice 3, unmodified)
+     includes the field BEFORE accept and excludes it immediately AFTER
+     -- the exact cross-slice integration this dispatch called out as
+     "easy to miss," now covered by a real assertion, not inferred from
+     reading the two files' code.
+  3. **REJECT, zero writes anywhere**: a custom "conviction"-style field
+     rejects with the honest `GRADUATION_FIELD_UNSUPPORTED` message, and
+     I directly counted zero rows in `rules`/`finding_rule_links`/
+     `field_usages` for that user afterward, plus confirmed the
+     `review_prompts` row's `state`/`decided_at`/`payload` are byte-for-
+     byte unchanged from before the call -- not just "no crash."
+  4. **DEFER, real re-eligibility through the full pipeline**: `state`
+     flips to `deferred`, `decided_at` stays null, zero `prompt_history`
+     rows exist afterward, and -- the part that actually proves
+     "no residual exclusion," not just "no history row" -- a genuinely
+     fresh `computeAndWriteReviewPrompts` run (Slice 3/4's real
+     eligibility+ranking pipeline, unmodified) against a NEW review
+     period re-surfaces the exact same subject. (Needed one fixture fix:
+     `computeAndWriteReviewPrompts` applies Slice 4's `canRender` gate,
+     which fails closed on a missing `analytic_config` row for a made-up
+     analytic id -- seeded one, matching `review-prompts.live.test.ts`'s
+     own established convention, once I traced the first failed attempt
+     to that gate rather than to defer's own logic.)
+  5. **THE FREE-TIER CAP SCENARIO IS STRUCTURALLY UNREACHABLE TODAY --
+     verified directly, not assumed.** `graduation` requires Pro
+     (`canForUser(..., 'graduation').allowed === false` for a free user,
+     confirmed live); a Pro user's `rules.create` cap is `null`
+     (unlimited, confirmed live via `canForUser`). There is therefore no
+     real plan combination in which `acceptGraduationDecision`'s
+     `createRule` call could ever observe
+     `RuleCreateCapExceededError` with the capability table as it stands
+     today. This is a genuine finding about the CURRENT system, not a
+     test I couldn't write -- the pass-through logic itself (createRule's
+     rejection surfaced verbatim, no second gate) IS independently
+     verified at the code level via a mock in `actions.test.ts` (item 4
+     of the dispatch's own ask), so the code path is proven correct even
+     though it cannot currently fire in production. Flagging this
+     explicitly rather than silently declaring dispatch item 5 "done" --
+     the orchestrator/security-reviewer should treat this as a structural
+     fact about the entitlement table, not a gap in this test.
+  6. **CROSS-USER ISOLATION**: user B's `acceptGraduationDecision`/
+     `deferGraduationDecision` against user A's real prompt id both
+     return `REVIEW_PROMPT_NOT_FOUND` (this repo's own established
+     "not-found, not a distinguishable cross-user signal" posture), the
+     prompt is provably untouched afterward, and the legitimate owner can
+     still accept it right after -- proving the rejection is scoped
+     correctly, not a blanket lock.
+- `e2e/review-decisions-graduation.spec.ts` (3 tests, real Chromium
+  against a real `next dev` server, real DB fixtures/cleanup) -- CORE
+  FLOW (login -> `/review/decisions` -> real evidence rendered -> click
+  "Add the rule" -> lands on "Nothing to decide right now." -> real
+  `rules`/`review_prompts` rows verified in Postgres) plus TWO distinct
+  failure/edge paths per 00-foundation §9.4's "core flow + at least one
+  failure path" bar: the custom-field honest rejection (screen renders
+  fully, defer still works, real DB confirms `deferred`/no
+  `prompt_history`), and the free-tier Pro-gate (`plan_required`, the
+  screen never reaches the decision content at all). **One real,
+  environment-specific fixture bug found and fixed while writing this
+  file**: a first version hardcoded `period_start`/`period_end` to a
+  fixed 2026-09-07/13 date, which only worked in a mocked context where
+  "now" is whatever the test says -- against the REAL server,
+  `determineCurrentWeeklyReviewPeriod` computes the period from the
+  actual current date, so the fixture had to compute the real "most
+  recently ended ISO week" the same way `review-weekly-read.spec.ts`
+  (Slice 5's own E2E file) already does, not invent its own hardcoded
+  window. Also hit this machine's own documented host-memory-pressure
+  hazard directly: the FIRST `next dev` run (default heap) crashed with
+  a V8 OOM mid-suite; restarting with `NODE_OPTIONS=--max-old-space-size=3072`
+  and running one Playwright test at a time (`-g`, `--workers=1`,
+  `--timeout=90000` -- Turbopack recompiles took up to ~10s per action
+  under this machine's real memory pressure, not a code-side slowness)
+  made every test pass reliably, including a full sequential 3-test run
+  together afterward. Screenshots captured fresh THIS gate (not reused
+  from the coder's own throwaway self-check, which was already deleted):
+  `tmp/dev-screenshots/review-decisions-graduation-{populated,none-pending,unsupported-field,plan-required}.png`.
+  **Design-system self-check against all four, by direct visual
+  inspection (`Read` on each PNG), not just DOM-count assertions**: no
+  red/green anywhere in any of the four (amber/cream `.rq-cost` box,
+  orange `.rq-btn` accent, ink-on-paper everywhere else); exactly one
+  primary `.rq-btn` ("Add the rule") in the populated/canAccept state,
+  exactly one primary `.rq-btn` ("Back to your review" / "Back to your
+  review") in the none-pending and plan-required states, ZERO primary
+  buttons in the unsupported-field state (correctly -- there is no action
+  to offer, only "Not yet"); `.rq-num` tabular numerals on "1 of 1"; the
+  cost line is genuinely field-specific in both populated screenshots --
+  "Risk % outside "0.5-1 percent"" vs. "Conviction outside "high"" -- not
+  a generic template (closes dispatch item 8 by direct visual evidence,
+  not just a `.toContain(fieldName)` assertion).
+
+**Coverage** (`npx vitest run --coverage`, scoped to
+`lib/review/decisions/**` + `app/(app)/review/decisions/**`, all 6 new
+test files, 68 tests): **90.82% lines overall** (comfortably clears
+00-foundation §9.1's 70% floor). `lib/review/decisions/` (the pure
+logic + repository layer): **98.97% lines**. `app/(app)/review/decisions/`
+(the Server Actions + UI): **85.93% lines** -- `actions.ts` 86.38%,
+`page.tsx` 100%, `DecisionCard.tsx` 72.13% (the uncovered lines are the
+client component's OWN `handleDefer` error-branch and the rendered
+error-message JSX -- this repo has no React Testing Library / no
+interaction-simulation tool for client components anywhere, an
+established, repo-wide convention gap this slice does not introduce and
+this gate does not attempt to invent new tooling to close; the
+EQUIVALENT accept-path error branch IS covered, and both error paths are
+exercised for real by the mocked `actions.test.ts` at the Server Action
+level one layer down). This module is not one of 00-foundation §9.1's
+three named 90%-floor engines (grouping/rule-evaluation/statistics) --
+the applicable bar here is the 70% overall floor, cleared with headroom.
+
+**Property-based tests (00-foundation §9.2)**: NOT applicable as a
+NEW obligation for this slice -- this slice writes no new grouping or
+rule-EVALUATION logic (it calls Module 04's existing, already-property-
+tested `createRule`/`insertRuleAndVersion` unmodified). The one relevant
+existing property from §7.2 of this module's own spec ("Accepting a
+graduation always produces exactly one rule and one `finding_rule_links`
+row") is verified directly and deterministically in the live integration
+test above (item 1), which is a stronger, single-fixture proof than a
+property run would add here given `createRule`'s own already-established
+property coverage.
+
+**RLS**: `review_prompts` itself is already covered at 100% (all tables)
+by `lib/supabase/__tests__/review-graduation-schema.rls.test.ts` (Slice
+1) -- confirmed by reading that file's own table list, not taken on the
+coder's word. No new TABLE was created by this slice (only new columns/
+writers against `review_prompts`/`rules`/`finding_rule_links`/
+`field_usages`, all pre-existing with their own already-tested RLS), so
+there is no new RLS SURFACE requiring a new policy test. Cross-user
+isolation at the APPLICATION layer (the layer that actually matters for
+THIS slice's new functions, since `prompts-repository.ts` uses
+`withUserConnection`/real owner RLS already) is independently verified
+above, live, not assumed.
+
+**Golden fixtures (00-foundation §9.3)**: not applicable -- this slice
+touches zero grouping-engine code.
+
+**Standard checks**: `npx tsc --noEmit` clean (found and fixed one real
+issue in my OWN new test file first -- `RateLimitExceededError`'s
+constructor takes 3 args, not 2; a genuine bug in the test, not the
+production code, caught by tsc before it ever ran). `npx eslint` clean
+on every new/touched file in this slice (`lib/review/decisions/**`,
+`app/(app)/review/decisions/**`, the new e2e spec) -- the repo-wide
+`npx eslint .` run surfaces only PRE-EXISTING warnings/2 errors in
+unrelated `tmp/*.mjs`/`tmp/*.ts` scratch files this slice never touched.
+`npm run check:import-boundaries` clean (104 modules, 266 dependencies,
+zero violations -- `lib/review/decisions/**` correctly sits outside the
+`lib/analytics` boundary this check enforces, confirmed rather than
+assumed). `npm run build` clean, `/review/decisions` registered as a
+real dynamic route. Regression-checked the specific existing suites this
+slice's shared-file changes touch (not the full repo suite, see below):
+`app/(app)/rules/__tests__/actions.test.ts` (102 tests, the `origin`
+schema-field addition), `app/(app)/review/__tests__/{format,page}.test.ts`
+(9+8 tests, the "N decisions" button wiring) -- all pass, zero
+regressions.
+
+**What I could NOT run, and why (infra/environment, not skipped by
+choice)**: a full-repo `vitest run` across every suite touching
+`lib/analytics/findings-payload.ts`/`findings-repository.ts`/
+`lib/fields/fields-repository.ts` hit this machine's own documented
+host-memory-pressure limit (a real V8 `FATAL ERROR: ... JavaScript heap
+out of memory` crash, twice, matching this session's own standing
+memory-pressure note) even under `--pool=threads
+--poolOptions.threads.singleThread`. Given those three files' actual
+diffs are each purely ADDITIVE (a new exported function or an existing
+private function gaining an `export` keyword -- verified by reading each
+diff in full, zero existing function bodies changed), and
+`lib/fields/__tests__/`'s coverage of the touched file is 100% live-DB
+suites (slow, not something to force through under active memory
+pressure just to re-prove unrelated pre-existing behaviour), I judged
+this an acceptable, explicitly-flagged gap rather than silently skipping
+it -- security-reviewer or qa should re-run
+`lib/fields/__tests__/fields-repository*.live.test.ts` and
+`lib/analytics/__tests__/*` at least once on a machine/session with more
+headroom before this slice is called fully done, since I did not
+personally confirm zero regressions there beyond reading the diffs.
+
+**Residual gaps flagged, not resolved by this gate (matching this
+slice's own ADR 0040 and PROGRESS.md's own framing -- not new news, but
+restated here since a gate's job includes confirming what's still open,
+not just what passed)**:
+- `docs/adr/0040` decision 7's own residual gap (an authenticated trader
+  can call `createRule` directly with `origin: 'graduated'`, bypassing
+  this flow's own Pro-gate/evidence-check) is UNCHANGED by this gate --
+  explicitly the security-reviewer's call next, not mine to rule on.
+- The `drv.order_type` `computableToday: false` finding above (a rule
+  CAN be created for it, but can never evaluate) -- narrow, but real; the
+  broader field/operand-namespace gap it's a symptom of is already
+  tracked in `NEEDS_YOUR_INPUT.md`, not duplicated here.
+- `DecisionCard.tsx`'s defer-error/render-error branches have no
+  permanent test coverage (see coverage section above) -- a pre-existing,
+  repo-wide tooling gap for client components, not unique to this slice.
+
+**Verdict: PASS. This slice is ready for `retrospeq-security-reviewer`
+next** -- ADR 0040's own decision 7 residual gap (the `origin` bypass) is
+the one item I'd specifically flag for that gate's attention, alongside
+the standard credential/RLS/injection-surface sweep.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- SECURITY REVIEW: PASS, with an explicit BLOCKING ruling on ADR 0040 decision 7's `origin` bypass gap. Not cleared for qa/commit until that one item is closed.
+
+Read `00-foundation.md` sec 4 and Module 01 sec 7.2 in full, plus
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`
+in full (including its 2026-09-13 order_type/computableToday correction),
+and both prior dated 2026-09-13 PROGRESS.md entries for this slice
+(CODER, TESTER GATE) before starting. Confirmed independently -- not
+taken on either's word -- that the `computableToday` fix described in
+ADR 0040 decision 1's correction is actually live in
+`lib/review/decisions/graduation-operand-map.ts:157-163`
+(`resolveOperandForField` now checks `!operand.computableToday` and
+returns `null`) -- the fix is real, not just documented. Note for the
+ledger-currency record: I found only two 2026-09-13 entries for this
+slice in PROGRESS.md (CODER at line 27187, TESTER GATE at line 27357),
+not three -- the "coder-fix" ADR 0040 itself refers to is real and live
+in the code (confirmed above) but its own dated PROGRESS.md entry does
+not appear to have been written as a separate ledger record. Flagging
+this as a minor ledger-currency gap for the orchestrator to close
+(the fix itself is not in question -- it's verified live in this review),
+not something I am treating as blocking this gate.
+
+**PRIMARY TASK -- ADR 0040 decision 7's `origin` bypass. Independently
+verified the code, then went beyond the coder's own characterization to
+check every plausible downstream consequence, not just accept "narrow
+blast radius" on the coder's word.**
+
+Confirmed the mechanics first: `createRule` (`app/(app)/rules/actions.ts`,
+a `'use server'`-exported, network-reachable Server Action) accepts
+`origin` as a genuinely declared, enum-validated, optional field on
+`createRuleInputSchema`'s own `.strictObject` (lines 129-147), defaulting
+to `'authored'` only when omitted. Any authenticated trader can call this
+action directly (it is a public RPC entry point, not an internal-only
+function) with `{ ..., origin: 'graduated' }` for any rule of their own
+choosing, with no gate anywhere checking who the caller is. This matches
+the coder's own description exactly -- confirmed by reading the schema,
+`createRule`'s body (lines 283-438), and `insertRuleAndVersion`
+(`lib/rules/rules-repository.ts:246-369`), which passes `input.origin ??
+'authored'` straight into the INSERT with no additional check.
+
+Then checked every place `rules.origin` (or any faked-provenance signal)
+could plausibly be TRUSTED downstream, to see if the coder's "no real
+consequence" claim actually holds or was a shrug:
+- **Decay checking** (`lib/analytics/decay-engine/*`): keys off
+  `finding_rule_links`, never `rules.origin` (confirmed by grep -- zero
+  hits for `origin` in `decay-engine.ts`/`decay-engine/repository.ts`
+  beyond doc comments). A rule with a faked `origin: 'graduated'` but no
+  real `finding_rule_links` row (which only `acceptGraduationDecision`
+  writes, via `createFindingRuleLink`, never `createRule` itself) is
+  simply never decay-checked -- same as any hand-authored rule.
+- **Graduation-candidate eligibility**
+  (`lib/review/prompt-candidates/graduation-candidates.ts:81-94`): the
+  "no existing rule on that field" gate reads `field_usages(used_by =
+  'rule')` joined to `rules.state = 'active'` -- never `rules.origin`. A
+  faked-origin rule created directly via `createRule` writes no
+  `field_usages` row either (only `insertRuleFieldUsage`, called
+  exclusively from `acceptGraduationDecision`, writes that table for
+  `used_by='rule'`), so it has zero effect on future graduation
+  eligibility for that field.
+- **Firm-rule lock** (`retrospeq-design-decisions.md`'s "Locked. No
+  editing, no relaxation" for v1.1 firm rules): gated by `scope =
+  'account'` (`app/(app)/rules/actions.ts:524-531,1322-1326`), never by
+  `origin = 'firm'`. Faking `origin: 'firm'` grants nothing (and the
+  lock is a restriction, not a privilege, so there is no incentive to
+  fake it anyway).
+- **Severity**: hardcoded `'soft'` in `insertRuleAndVersion` regardless of
+  `origin` (Module 04 sec 2.1, "every rule created soft, regardless of
+  origin") -- confirmed at `rules-repository.ts:360` (`select $1, 1, $2,
+  $3, 'soft', $6, ...`, the origin param is `$6`, severity is the literal
+  `'soft'`, not derived from it).
+- **UI display**: grepped `app/(app)/rules/RuleList.tsx` and every other
+  file under `app/(app)/rules/` for `graduated`/`Origin`/`provenance` --
+  zero hits. `origin` is written but never rendered anywhere in this
+  repo today; a trader cannot even see their own rule's claimed
+  provenance, let alone anyone else's.
+- **Cross-user/entitlement**: `origin` carries no scope/ownership
+  semantics and does not touch `rules.create`/`rules.hard`/`graduation`
+  entitlement checks anywhere -- confirmed by reading `canForUser` call
+  sites in `app/(app)/rules/actions.ts`, none of which branch on
+  `origin`.
+
+**Ruling: this IS a real, currently-live gap, and I am treating it as
+BLOCKING -- not deferring it -- despite confirming the coder's blast-
+radius analysis is accurate for every consequence I could find today.**
+Reasoning, stated plainly since the dispatch asked for an explicit
+ruling, not a shrug:
+
+1. **This is not comparable to the Slice 3 `canRender` gap this same
+   module's security review deferred on 2026-09-11.** That gap was ruled
+   deferrable specifically because the vulnerable code path had ZERO live
+   consumers anywhere in `app/**` -- it was structurally unreachable, and
+   correctly resolving it required a real, not-yet-decided product
+   judgment call (which `Surface` value to use). Neither condition holds
+   here: `createRule` has been a live, network-reachable Server Action
+   since Module 04 Slice 2 (2026-08-19), reachable by any authenticated
+   trader today, and the fix does not require any new product decision --
+   it is a mechanical refactor with an obvious, uncontroversial shape (see
+   below).
+2. **"No live consequence today" is a fact about the current codebase,
+   not a durable property of it.** `origin` is a brand-new, one-write-site
+   column (this slice is the first caller to ever pass a non-`'authored'`
+   value) sitting on a rule row that will exist for the life of that rule.
+   The exact failure mode this project's own AGENTS.md repeatedly warns
+   about -- "drift accumulates silently" -- applies directly: a future
+   slice (a "Graduated from evidence" UI badge, a decay-engine
+   optimisation that queries `WHERE origin = 'graduated'` directly instead
+   of joining `finding_rule_links`, a v1.1 firm-rules slice that checks
+   `origin = 'firm'` instead of `scope = 'account'`) could easily start
+   trusting this column as an authoritative signal, at which point a rule
+   any trader could already fake today becomes a real, backdated
+   vulnerability with no clear moment anyone would think to re-check the
+   write path that created it. Closing the gap now, while the fix is
+   trivial, is cheaper than relying on every future author to remember
+   this residual note.
+3. **The fix is genuinely cheap and requires no new design decision,
+   unlike the Slice 3 precedent.** `createRule`'s own validation pipeline
+   does not need to change at all -- only which callers may supply a
+   non-`'authored'` `origin`. Concretely: remove `origin` from
+   `createRuleInputSchema`/`CreateRuleInput` (the public, client-reachable
+   contract) so the exported Server Action always creates `'authored'`
+   rules, and extract the current function body into an internal
+   (non-`'use server'`-exported, plain module-level) implementation that
+   still accepts `origin`, called by both the public `createRule` action
+   (hardcoding `origin: 'authored'`) and directly, in-process, by
+   `acceptGraduationDecision` (passing `'graduated'`). This is an
+   in-process function call within the same server bundle -- no network
+   boundary is crossed, so no new Server Action or RPC surface is created,
+   and 100% of `createRule`'s validation pipeline (operand whitelist, tier
+   gating, entitlement, tighten-only, satisfiability, render) is still
+   reused verbatim, honouring this slice's own dispatch instruction not to
+   reimplement rule creation. This does not touch
+   `app/(app)/review/decisions/actions.ts`'s own call site shape in any
+   way that matters -- it already imports `createRule` from
+   `../../rules/actions` as a plain function reference (see that file's
+   own comment at lines 26-37 on why a cross-route Server Action import is
+   already this repo's established pattern); it would simply import the
+   renamed internal function instead.
+4. **This repo has already independently established the exact principle
+   at stake, for a structurally identical class of field.** This review's
+   own standing checklist item ("nothing trusts a client-supplied
+   plan/tier field") and this file's own precedent elsewhere (`severity`
+   hardcoded server-side regardless of input, `capLimit`/`scopeId`
+   ownership resolved server-side, never from a client-suppliable value)
+   all reflect the same underlying rule: a field that represents a
+   system-of-record fact about HOW something came to exist should never
+   be settable by the same client whose authority it might later be used
+   to distinguish. `origin` is exactly that kind of field by its own
+   `CreateRuleInput.origin` doc comment's own framing ("internal-only
+   parameter"). Leaving the enforcement of "internal-only" entirely to
+   convention (a doc comment, not a code boundary) is the same category of
+   gap this project's security bar exists to catch, even though today's
+   blast radius happens to be narrow.
+
+**This is a blocking finding. Fix required before this slice is cleared
+for `retrospeq-qa`/commit**: restrict `origin: 'graduated'` (and every
+other non-`'authored'` value) to `acceptGraduationDecision`'s own internal
+call path, per the mechanical refactor described in reasoning point 3
+above. Re-run `app/(app)/rules/__tests__/actions.test.ts` (102 tests) and
+`app/(app)/review/decisions/__tests__/{actions,decisions-integration.live}.test.ts`
+after the fix -- both suites currently exercise `origin` through the
+now-to-be-removed public schema path and will need a small, mechanical
+update to call the new internal entry point instead where they test
+`'graduated'`/other non-`'authored'` origins.
+
+**Other checks -- all independently verified, not taken on the tester's
+word:**
+
+1. **Write-path integrity for the accept flow -- PASS.** Traced
+   `acceptGraduationDecision` end to end
+   (`app/(app)/review/decisions/actions.ts:242-372`). The created `rules`
+   row comes from `createRule({..., scope: 'strategy', scopeId:
+   evidence.strategyId, origin: 'graduated'})`, where `evidence` was
+   parsed from a `review_prompts` row fetched via `fetchPromptById(user.id,
+   parsedId.data)` -- real owner-scoped read (`prompts-repository.ts:147-159`,
+   `withUserConnection` + `where id = $1 and user_id = $2`). The
+   `finding_rule_links` row (`createFindingRuleLink`, `lib/analytics/
+   decay-engine/repository.ts:77-92`) and `field_usages` row
+   (`insertRuleFieldUsage`, `lib/fields/fields-repository.ts:1695-1704`)
+   are both written with `userId` = the accepting user, and
+   `field_usages`' own composite FK (`foreign key (user_id, field_id)
+   references retrospeq.fields (user_id, id)`,
+   `20260902010000_field_registry_schema.sql:450`) makes a cross-user
+   `field_id`/`user_id` mismatch fail at the database level even if
+   application logic somehow passed one -- confirmed by reading that
+   migration directly, not assumed. No function in this write path
+   accepts a foreign id without the same call also being scoped by the
+   caller's own `userId`.
+2. **Honest-rejection path -- PASS, confirmed by code trace matching the
+   tester's own live-DB proof.** Both `resolveOperandForField` returning
+   `null` (unsupported field, including the now-fixed `order_type` case)
+   and `deriveRuleInputFromSegment` returning `null` cause
+   `acceptGraduationDecision` to `return` immediately with
+   `GRADUATION_FIELD_UNSUPPORTED`, structurally before `createRule`,
+   `insertRuleFieldUsage`, `createFindingRuleLink`, or `markPromptAccepted`
+   are ever called (`actions.ts:276-299`) -- there is no code path between
+   that early return and any write. Matches the tester's own
+   `decisions-integration.live.test.ts` item 3 (zero rows in
+   `rules`/`finding_rule_links`/`field_usages`, byte-for-byte unchanged
+   `review_prompts` row).
+3. **Defer path -- PASS.** `markPromptDeferred`
+   (`prompts-repository.ts:213-224`) sets only `state = 'deferred'` via a
+   guarded `where ... and state = 'pending'` update, leaves `decided_at`
+   null, and touches no other table -- no `prompt_history` write exists
+   anywhere in this slice's diff (confirmed by grep for `prompt_history`
+   across `lib/review/decisions/**`/`app/(app)/review/decisions/**`: zero
+   hits). Matches sec 4.5 verbatim.
+4. **Rate limiting -- PASS, independently re-read, not just trusted from
+   the tester's report.** All three actions
+   (`fetchNextGraduationDecision`/`acceptGraduationDecision`/
+   `deferGraduationDecision`) call `requireSessionAndRateLimit
+   ('reviewDecision')` as their literal first line (`actions.ts:132,
+   243-244, 395-396`), before any Zod parse, entitlement check, or DB
+   read. `reviewDecision`'s own config entry
+   (`lib/rate-limit/config.ts:648-654`, 25/hr ip, 15/hr email) exists and
+   is the one and only scope string used across all three actions.
+5. **Cross-user isolation -- PASS on every new function in
+   `lib/review/decisions/**`**, confirmed by reading each query directly:
+   `fetchPendingGraduationPrompts`/`fetchGraduationDecisionCounts`/
+   `fetchPromptById` (`prompts-repository.ts`) all use `withUserConnection`
+   + an explicit `user_id = $n`/`$2` predicate in the SQL itself (not RLS
+   alone); `fetchCurrentReviewIdForDecisions` delegates to
+   `determineCurrentWeeklyReviewPeriod(userId, ...)` and
+   `fetchWeeklyReviewByPeriodStart(userId, ...)`, both already
+   user-scoped (Slice 2/5's own reviewed code, unmodified here);
+   `resolveOperandForField`/`deriveRuleInputFromSegment`
+   (`graduation-operand-map.ts`) are pure, DB-free functions with no user
+   context at all -- no isolation surface to violate.
+6. **Free-tier gating -- PASS, no double standard.**
+   `fetchNextGraduationDecision` and `acceptGraduationDecision` both call
+   `canForUser(user.id, 'graduation')` (`capability-table.ts:46`, `free:
+   false, pro: true`) before doing anything else of substance;
+   `acceptGraduationDecision`'s own internal `createRule` call additionally
+   re-runs `rules.create`'s own entitlement check unmodified (Module 04's
+   existing pipeline, not bypassed or duplicated with a looser check).
+   `deferGraduationDecision` has no entitlement check, which I confirmed
+   is not a double standard: it performs no privileged write (a plain
+   state flip on the caller's own already-existing row, sec 4.5's
+   explicit "no penalty"), and a free-tier trader cannot discover a real
+   `promptId` to defer in the first place, since `fetchNextGraduationDecision`
+   -- the only path that ever hands a `promptId`-bearing detail to a
+   client -- returns `plan_required` before disclosing anything for a
+   free-tier user. No practical bypass exists.
+7. **Injection/parameterization sweep -- PASS.** Every SQL statement in
+   `lib/review/decisions/**` uses only `$1`/`$2`/`$3`/`$4` bind parameters
+   (`prompts-repository.ts`, `insertRuleFieldUsage`,
+   `createFindingRuleLink`, `fetchActiveFindingForFieldTuple` all
+   re-checked directly); zero string interpolation into SQL text anywhere
+   in this slice's diff. `resolveOperandForField` validates `fieldId`
+   against a static, hand-authored 5-entry map before ever touching
+   `getOperand` (the same static operand catalogue Module 04's write path
+   already validates against) -- no operand id reaches `createRule`
+   without passing through `getOperand`'s own catalogue lookup twice
+   (once here, once inside `validateOperandOpValue`). No `eval`/`new
+   Function` anywhere (grepped `lib/review/decisions/**` and
+   `app/(app)/review/decisions/**` directly -- zero hits). No compound
+   rule expression (`and`/`or`) is constructed anywhere in this slice --
+   `deriveRuleInputFromSegment` only ever returns a single `{op, value}`
+   pair.
+8. **`withServiceRoleConnection` inventory -- checked, no new call site.**
+   `grep -rn "withServiceRoleConnection" lib/review/decisions
+   app/(app)/review/decisions lib/fields/fields-repository.ts
+   lib/analytics/findings-repository.ts` shows: (a) `insertRuleFieldUsage`
+   and every function in `prompts-repository.ts`/`decisions/actions.ts`
+   use `withUserConnection` exclusively, confirmed by direct read; (b) the
+   one real service-role user this slice touches, `createFindingRuleLink`
+   (`lib/analytics/decay-engine/repository.ts`), pre-dates this slice
+   (added in commit `24c0fa5`, "Module 05: decay checking") and is already
+   present in `service-role-inventory.test.ts`'s allowlist (line 327,
+   with its own dated comment) -- this slice is a new CALLER of an
+   already-allowlisted, already-reviewed function, not a new call site, so
+   no allowlist edit is needed here; (c) `lib/fields/fields-
+   repository.ts`'s pre-existing (unrelated) `withServiceRoleConnection`
+   use is likewise already allowlisted (line 252). Re-ran the allowlist
+   test myself (host memory-pressure workaround per this session's own
+   standing note: `NODE_OPTIONS=--max-old-space-size=3072 npx vitest run
+   lib/supabase/__tests__/service-role-inventory.test.ts --pool=threads
+   --poolOptions.threads.singleThread`) -- 3/3 tests pass, confirmed
+   directly, not assumed from a prior gate's result.
+
+**Standard non-negotiables -- PASS.** No currency P&L anywhere in this
+slice's new files (grep for `$`/currency formatting in
+`graduation-evidence-detail.ts`/`DecisionCard.tsx` -- only R-multiple/
+count/percent formatting). No XP/points. Rule evaluations are not touched
+by this slice at all (no freeze/recompute logic here). No compound rules
+introduced (item 7 above). No red/green anywhere in the two new
+screenshots re-inspected (`tmp/dev-screenshots/review-decisions-
+graduation-{populated,unsupported-field}.png`, both still present from
+the tester's own gate) -- amber/orange/ink only.
+
+**Verdict: PASS on every checklist item except one.** ADR 0040 decision
+7's `origin` bypass is a genuine, currently-live gap this review is
+ruling BLOCKING, for the reasons stated above -- narrow blast radius
+today does not, by itself, make it deferrable, given the fix is cheap,
+uncontroversial, and closes a class of gap (a forgeable system-of-record
+field with no server-side authority check) this project has already
+treated as a hard line everywhere else it appears (entitlement/tier,
+severity, ownership). **This slice is NOT cleared for `retrospeq-qa` or
+commit until the `origin` restriction described above is implemented and
+re-verified.** Every other item -- write-path integrity, the honest-
+rejection path, defer semantics, rate limiting, cross-user isolation,
+free-tier gating, injection surface, and the service-role inventory -- is
+independently confirmed PASS and does not need to be re-reviewed once the
+one blocking item is fixed, unless the fix itself touches code outside
+`app/(app)/rules/actions.ts`'s `origin` handling and
+`acceptGraduationDecision`'s own call site.
+
+Files reviewed this gate: `app/(app)/rules/actions.ts`,
+`lib/rules/rules-repository.ts`, `app/(app)/review/decisions/actions.ts`,
+`app/(app)/review/decisions/page.tsx`, `app/(app)/review/decisions/
+DecisionCard.tsx`, `lib/review/decisions/{graduation-operand-map,
+graduation-evidence-schema,graduation-evidence-detail,prompts-
+repository}.ts`, `lib/analytics/decay-engine/repository.ts`,
+`lib/analytics/findings-repository.ts`, `lib/fields/fields-repository.ts`,
+`lib/rate-limit/config.ts`, `lib/entitlements/capability-table.ts`,
+`lib/supabase/__tests__/service-role-inventory.test.ts`,
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`.
+No production code changed by this gate -- review only; the fix above is
+for the next coder dispatch to implement, not this entry.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- FIX-DISPATCH: `createRule` `origin` bypass closed. Ready for `retrospeq-security-reviewer` re-verification, NOT for `retrospeq-qa`/commit yet.
+
+Read this same day's "SECURITY REVIEW: PASS, with an explicit BLOCKING
+ruling on ADR 0040 decision 7's `origin` bypass gap" entry above in full,
+plus `docs/adr/0040` decision 7 (both the original judgment call and this
+fix's own dated resolution note, added as part of this same dispatch)
+before touching any code.
+
+**Fix implemented exactly per the reviewer's own specified approach --
+no alternative design substituted.**
+
+1. **`origin` removed from the PUBLIC contract entirely.**
+   `createRuleInputSchema`/`CreateRuleInput`
+   (`app/(app)/rules/actions.ts`) no longer declare `origin` at all -- not
+   as an optional field, not stripped-but-accepted, gone. A trader-facing
+   rule-creation form has no legitimate reason to ever set it, so there is
+   no PUBLIC input shape to protect against a forged value for -- the
+   field simply does not parse into anything on this schema.
+2. **New module: `lib/rules/create-rule-internal.ts`, exporting
+   `createRuleInternal(userId, input)`.** Carries the FULL create-rule
+   pipeline (operand whitelist -> tier gating -> `rules.create`
+   entitlement -> tighten-only -> satisfiability -> render -> save) moved
+   VERBATIM out of `app/(app)/rules/actions.ts`'s old `createRule` body --
+   not reimplemented, not simplified, not reordered. `origin` is a
+   required parameter here (`'authored' | 'graduated' | 'detected' | 'ai'
+   | 'firm'`), but this module carries no `'use server'` directive
+   anywhere (file-level or inline), so per Next.js's own documented
+   semantics (`node_modules/next/dist/docs/01-app/03-api-reference/01-
+   directives/use-server.md`: a file-level `'use server'` "indicate[s]
+   that all functions in the file are server-side" -- i.e. every export
+   becomes an independently network-reachable Server Function/Action) it
+   has no Server Action ID and cannot be invoked by a client at all,
+   regardless of caller identity. It is reachable only by another
+   server-side module importing it and calling it in-process.
+3. **Placement judgment call, documented rather than silently decided**:
+   the reviewer offered two placement options ("the same file, or
+   `rules-repository.ts`"). Neither was used as-is: the same file was
+   ruled out because of the file-level `'use server'` semantics in point 2
+   above (a second export there would STILL have been a public Server
+   Action, closing nothing); `rules-repository.ts` was ruled out because
+   that file's own header explicitly documents staying "free of any
+   entitlement-table knowledge, same separation `severity-lifecycle-
+   repository.ts`'s own header establishes" -- and this pipeline's
+   `canForUser('rules.create')` step is real entitlement-table knowledge,
+   so folding it in would have broken a boundary that file already
+   documents on purpose. A third, narrow option (new module) closes the
+   gap without violating either constraint. Both `RuleActionResult`/
+   `RuleActionState` (previously declared in `actions.ts`) moved to this
+   new lib file as their canonical definition -- `actions.ts` now
+   `import`s and re-exports them unchanged, so all four existing importers
+   of these two types (`EditRuleControl.tsx`, `RuleEditor.tsx`,
+   `GuidedFrontDoor.tsx`, `app/(app)/review/actions.ts`) needed zero
+   changes of their own; this direction (lib defines, app re-exports) also
+   respects this repo's own "nothing under `lib/**` ever imports from
+   `app/**`" convention the reviewer's own gate independently confirmed
+   held before this fix.
+4. **Public `createRule` is now a thin wrapper**: session -> rate limit ->
+   Zod-parse the origin-free schema -> `createRuleInternal(user.id, {
+   operandId, op, value, scope, scopeId, origin: 'authored' })`. `origin`
+   is a literal in this call, never derived from `input` -- there is
+   nothing in `CreateRuleInput` to derive it from. Zero changes to the
+   validation pipeline itself for any other field, per the dispatch's own
+   explicit requirement.
+5. **`acceptGraduationDecision`
+   (`app/(app)/review/decisions/actions.ts`) now imports and calls
+   `createRuleInternal` DIRECTLY** (`@/lib/rules/create-rule-internal`,
+   not `../../rules/actions`'s `createRule`), passing `origin: 'graduated'`
+   -- the one and only caller in this repo permitted to pass a
+   non-`'authored'` value, and it can only do so because it is
+   server-side code making an in-process call, not a network request.
+
+**Re-verification -- every test file the reviewer named, plus the
+production build, all re-run for real, not assumed:**
+
+- `app/(app)/rules/__tests__/actions.test.ts`: **102/102 PASS,
+  unchanged** -- including the Slice-2 security-review test
+  ("unrecognised top-level fields (and/or/conditions/rules) are REJECTED
+  outright by the Zod schema (.strict())..."), which needed NO edits at
+  all and still exercises the exact same compound-rule-expression
+  smuggling shape. This file needed zero test-code changes because its
+  mocks target module specifiers (`@/lib/rules/rules-repository`,
+  `@/lib/entitlements/service`, `next/cache`, etc.) that
+  `create-rule-internal.ts` imports from identically -- Vitest's
+  `vi.mock` intercepts by resolved module specifier, not by which file
+  does the importing, so the existing mocks kept working transparently
+  once the pipeline moved.
+- `app/(app)/review/decisions/__tests__/actions.test.ts`: **28/28 PASS**
+  after a small, mechanical update (the reviewer's own dispatch
+  anticipated this): `vi.mock('../../../rules/actions', ...)` replaced
+  with `vi.mock('@/lib/rules/create-rule-internal', ...)`, the mock
+  variable renamed `createRuleMock` -> `createRuleInternalMock` for
+  clarity, and the one assertion that checks the create call's arguments
+  updated from `toHaveBeenCalledWith(expect.objectContaining({...}))` to
+  `toHaveBeenCalledWith(USER_ID, expect.objectContaining({...}))` --
+  `createRuleInternal` takes `(userId, input)`, not `(input)` alone. No
+  other test in this file needed changes.
+- `app/(app)/review/decisions/__tests__/decisions-integration.live.test.ts`
+  (real writes against the shared dev Supabase project, ADR 0002):
+  **5/5 PASS, unchanged assertions** -- the ACCEPT/REJECT/DEFER/
+  entitlement-structural/cross-user-isolation scenarios all still produce
+  identical real `rules`/`finding_rule_links`/`field_usages` rows end to
+  end, confirming the moved pipeline behaves identically in practice, not
+  just in mocked unit tests.
+- `lib/rules/__tests__/rules-repository.live.test.ts`: **11/11 PASS,
+  unaffected** -- `insertRuleAndVersion` itself was never touched by this
+  fix (it already accepted an `origin` parameter as a repository-layer
+  concern, unrelated to the Server-Action-reachability gap).
+- `npx tsc --noEmit`: clean. `npx eslint` (scoped to every file this fix
+  touched: `app/(app)/rules/actions.ts`, `app/(app)/review/decisions/
+  actions.ts`, `lib/rules/create-rule-internal.ts`, and all four touched
+  test files): clean. `npm run check:import-boundaries`: clean (104
+  modules, 266 dependencies, no violations -- this fix does not touch
+  `lib/analytics/**` at all, so this was a non-regression check, not an
+  expected-to-catch-anything one). `npm run build`: clean, `/review/
+  decisions` and `/rules` both still compile and are listed as dynamic
+  routes in the build output.
+
+**`docs/adr/0040` decision 7 updated with a dated resolution note** (not
+left reading as still-open) plus a matching strike-through update to its
+own Consequences-section bullet. Both point back to this PROGRESS.md entry
+and to `lib/rules/create-rule-internal.ts`'s own header for the fuller
+technical reasoning.
+
+**Bookkeeping item the reviewer flagged (order_type/computableToday
+PROGRESS.md entry) -- checked, confirmed genuinely present and dated**:
+it exists at this file's own Decision log, dated 2026-09-13, beginning
+"CODER (retrospeq-coder), FIX for the one real gap the same-day
+`retrospeq-tester` gate found in Module 06 Slice 6" (search that exact
+phrase, or `computableToday` -- it is one of several dozen hits, since
+this is a large, append-only file and that phrase also appears in older,
+unrelated Module 04 Slice 3 entries about the `operand_distributions`
+preview engine's own `computableToday: true` scoping). The reviewer's own
+characterization was accurate: this entry sits in the Decision log at a
+position earlier in the file than the two Slice 6 "CODER"/"TESTER GATE"
+entries the reviewer found nearby each other, because this ledger's
+entries are appended over time and this particular fix (2026-09-13,
+same-day as the tester gate that found it) happened to land in a batch
+positioned earlier in the file's own growth than the Slice 6 entries
+being reviewed. The entry itself is complete and dated, not missing --
+purely a findability/ordering artifact of a large append-only file, no
+content is actually absent. No action taken beyond confirming and noting
+this, per the reviewer's own framing ("not blocking").
+
+**Does this close the security-reviewer's blocking finding?** The fix
+described above implements exactly what the reviewer specified, and every
+test surface the reviewer named (plus the production build) has been
+re-run and passes. **This fix is NOT self-certifying, however** -- per
+this repo's own standing rule that a security BLOCKED finding needs the
+SAME reviewing authority's own sign-off on the remediation, not the
+fixing coder's own say-so, this slice is going back to
+`retrospeq-security-reviewer` for re-verification next, exactly as it did
+for Slice 5's own rate-limiting BLOCKING finding earlier this same day
+(see that day's "SECURITY REVIEW: FAIL" -> "FIX-DISPATCH" ->
+"SECURITY RE-VERIFICATION: PASS" sequence above for the precedent this
+entry is following). **Do NOT route this slice to `retrospeq-qa` or
+commit until `retrospeq-security-reviewer` has logged its own dated
+re-verification PASS.** No commit was made as part of this dispatch, per
+this dispatch's own explicit instruction.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 6 -- SECURITY RE-VERIFICATION: PASS. Origin bypass gap CLOSED. Cleared for retrospeq-qa and commit.
+
+Read this same day's SECURITY REVIEW entry (my own prior BLOCKED finding)
+and the immediately-following FIX-DISPATCH entry in full, plus
+docs/adr/0040 decision 7's dated resolution note, before re-checking
+anything. Did not take either the fix-dispatch's or the ADR's own
+characterization at face value -- independently re-derived every claim
+below from the actual code, actual doc, and actual test runs.
+
+**1. `lib/rules/create-rule-internal.ts` genuinely carries no `'use server'`
+directive anywhere -- confirmed by reading the full file, not grepping for
+the string alone (a grep miss cannot rule out a directive hidden in an
+unusual spot; a full read can).** Line 1 is `import 'server-only';` (a
+plain module-scoping marker, not a Server Function directive -- it only
+prevents this module from ever being pulled into a client bundle, it does
+not register anything as an RPC), and no line anywhere in the file's 289
+lines contains `'use server'`, file-level or inline. Independently
+re-read `node_modules/next/dist/docs/01-app/03-api-reference/01-directives/use-server.md`
+myself rather than trusting the coder's or my own prior citation: "The
+`use server` directive designates a function or file to be executed on
+the server side... It can be used at the top of a file to indicate that
+all functions in the file are server-side, or inline at the top of a
+function to mark the function as a Server Function." The converse holds
+structurally: a function is a React/Next.js Server Function -- and
+therefore gets an action ID a client bundle can invoke -- only if `'use
+server'` appears either at that function's own top or at its containing
+file's top. `create-rule-internal.ts` has neither. A plain exported
+async function with no such directive, in a module marked `server-only`,
+is reachable exclusively by another server-side module's in-process
+import -- there is no mechanism (documented or implied) by which the
+Next.js build could assign it a client-invokable action ID. This
+confirms the coder's claim structurally, not just by citation-matching.
+
+**2. `app/(app)/rules/actions.ts`'s current `createRule` -- confirmed.**
+`createRuleInputSchema` (lines 127-142) is a `z.strictObject` with exactly
+five keys (`operandId`, `op`, `value`, `scope`, `scopeId`) -- `origin`
+does not appear anywhere on it, not as an optional/ignored field. Because
+this is `.strictObject` (not a plain `.object`), a client attempting to
+smuggle `{ ..., origin: 'graduated' }` through this Server Action does
+not get it silently stripped -- the whole parse fails via `.safeParse`'s
+`success: false` branch (line 249-252), returning `fieldErrors` and
+reaching zero further pipeline code, matching this same file's own
+Slice-2 "reject unknown keys" precedent applied here for the first time
+to this exact field. `CreateRuleInput` (lines 144-150) likewise declares
+no `origin` property. The wrapper (lines 245-257) calls
+`createRuleInternal(user.id, { operandId, op, value, scope, scopeId,
+origin: 'authored' })` -- `'authored'` is a literal string in this call
+site, not `input.origin` or any other client-derived expression; there is
+nothing in `CreateRuleInput`'s own type for a caller to even attempt to
+override it with, so this is not merely "ignored if supplied," it is
+structurally absent from what the client can ever cause this function to
+receive.
+
+**3. Repo-wide grep for `createRuleInternal` -- confirmed only the
+expected two live call sites.** `grep -rn "createRuleInternal"` across the
+whole repo returns exactly seven files: the definition itself
+(`lib/rules/create-rule-internal.ts`), its two real callers
+(`app/(app)/rules/actions.ts`'s `createRule` wrapper,
+`app/(app)/review/decisions/actions.ts`'s `acceptGraduationDecision`),
+two test files that reference it only via `vi.mock(...)` (confirmed by
+reading both -- `app/(app)/review/decisions/__tests__/actions.test.ts`
+mocks the module path and asserts call shape, never imports/calls the
+real function; `decisions-integration.live.test.ts`'s only mention is in
+a doc comment), `docs/adr/0040`, and `PROGRESS.md` itself (this ledger).
+No third production call site exists anywhere. No bypass was
+accidentally introduced.
+
+**4. `app/(app)/rules/__tests__/actions.test.ts`'s Slice-2
+compound-rule-expression-smuggling security test -- exists, unchanged,
+and re-run by me directly: 102/102 PASS.** Confirmed the specific test
+("unrecognised top-level fields (and/or/conditions/rules) are REJECTED
+outright by the Zod schema (.strict())...", line 348, plus the four
+adjacent compound-shape-smuggling tests at lines 313, 331, 386, 398, 410)
+is present, untouched by this fix (the fix touched only the `origin`
+field, never the `.strictObject`'s general unknown-key rejection
+mechanism), and green:
+`npx vitest run "app/(app)/rules/__tests__/actions.test.ts"` -> **102
+passed (102)**. The four `stderr` blocks in the run output are expected
+`console.error` calls from unrelated error-mapping assertions
+(`fetchAmbientState`/`fetchAdherenceDisplay`/`fetchRulesList`/
+`fetchRuleForEdit` read-failure tests intentionally logging before
+asserting a retryable error state), not failures -- confirmed by reading
+the summary line (`102 passed (102)`) and the individual test names in
+the output, not just skimming for red text.
+
+**5. `acceptGraduationDecision`'s call into `createRuleInternal` --
+confirmed it still enforces the real Pro-gated/evidence-checked flow, and
+that the fix did not silently strip anything.** Re-read
+`app/(app)/review/decisions/actions.ts` lines 263-393 end to end:
+`acceptGraduationDecision` still (a) checks `canForUser(user.id,
+'graduation')` before doing anything (line 272 -- unchanged), (b) fetches
+and validates prompt ownership/state/kind via `fetchPromptById` +
+`prompt.state !== 'pending'` idempotent-replay handling (lines 279-286 --
+unchanged), (c) re-validates the evidence payload shape via
+`graduationEvidenceSchema` (lines 288-295 -- unchanged), (d) resolves the
+operand against the static catalogue and re-fetches the LIVE finding
+before trusting it (lines 297-313 -- unchanged), (e) derives the rule
+input from the segment (lines 315-320 -- unchanged), and only THEN calls
+`createRuleInternal(user.id, { ..., origin: 'graduated' })` (lines
+322-329), whose own body (`create-rule-internal.ts` lines 156-288) still
+runs the FULL six-step pipeline (operand whitelist ->
+`validateOperandOpValue`; tier gating -> `checkTierAvailable`; entitlement
+-> `canForUser(userId, 'rules.create')`; tighten-only for
+`scope==='strategy'` -> `checkTightenOnly`; satisfiability for
+`scope==='global'` -> `checkSatisfiability`; render+save ->
+`renderSentence` + `insertRuleAndVersion`) with no step skipped,
+reordered, or loosened relative to the pre-fix version -- confirmed by
+diffing this body against my own prior review's line-by-line trace of the
+pre-fix `createRule` (my 2026-09-13 "SECURITY REVIEW: PASS...BLOCKING"
+entry, "Write-path integrity for the accept flow" item). Went further
+than trusting the "moved verbatim" claim: re-ran the actual live-DB
+integration suite for this exact flow myself --
+`npx vitest run "app/(app)/review/decisions/__tests__/decisions-integration.live.test.ts"`
+-> **5/5 PASS** against the real shared dev Supabase project (ADR 0002),
+including the ACCEPT scenario (real `rules`/`finding_rule_links`/
+`field_usages` rows created and asserted directly in Postgres), the
+REJECT scenario (zero rows written for an unsupported field), the DEFER
+scenario, the "Pro user has unlimited `rules.create` quota" structural
+finding (unchanged, pre-existing, not something this fix touched), and
+cross-user isolation. This is real end-to-end proof the pipeline still
+behaves identically post-refactor, not just a code-shape argument.
+
+**6. Re-checked (not re-derived) the other items from my original
+BLOCKED gate -- none disturbed by this narrow fix:**
+- **Write-path integrity / honest-rejection / defer semantics**: all
+  upstream of `createRuleInternal`'s call site in `acceptGraduationDecision`
+  and untouched by this fix's diff (confirmed via the fix-dispatch's own
+  stated diff scope: only `app/(app)/rules/actions.ts`,
+  `app/(app)/review/decisions/actions.ts`, and the new
+  `lib/rules/create-rule-internal.ts` changed). Re-confirmed live via the
+  same 5/5 integration-test run in item 5 above (ACCEPT/REJECT/DEFER
+  scenarios all still pass with identical assertions).
+- **Rate limiting**: `requireSessionAndRateLimit('reviewDecision')` is
+  still the literal first line of `acceptGraduationDecision`/
+  `deferGraduationDecision`/`fetchNextGraduationDecision`
+  (`app/(app)/review/decisions/actions.ts` -- re-read, unchanged from my
+  original gate); `createRule`'s own `requireSessionAndRateLimit('createRule')`
+  is likewise still its first line (`app/(app)/rules/actions.ts:246`,
+  unchanged).
+- **Free-tier gating**: `canForUser(user.id, 'graduation')` still gates
+  `acceptGraduationDecision` before any write (line 272);
+  `createRuleInternal` still re-runs `canForUser(userId, 'rules.create')`
+  itself (`create-rule-internal.ts:191`) regardless of which caller
+  invoked it -- no double standard introduced between the public and
+  internal paths.
+- **Injection sweep**: re-grepped `lib/rules/create-rule-internal.ts` and
+  the diff hunks of both `actions.ts` files for string-built SQL,
+  `eval`, `new Function` -- zero hits; all repository calls
+  (`fetchAccountSyncTiers`, `fetchActiveGlobalRuleVersionsForOperand`,
+  `insertRuleAndVersion`) are unchanged, parameterized functions moved
+  verbatim, not rewritten.
+- **Service-role allowlist**: neither `create-rule-internal.ts` nor
+  either `actions.ts` file calls `withServiceRoleConnection` anywhere
+  (grepped directly -- the one hit across all three files is a
+  doc-comment mention of `withUserConnection`, an unrelated user-scoped
+  connection helper). This fix introduces no new service-role call site,
+  so no allowlist edit is required. Ran the allowlist test myself
+  anyway, fresh, not assumed from my prior gate:
+  `NODE_OPTIONS=--max-old-space-size=3072 npx vitest run
+  lib/supabase/__tests__/service-role-inventory.test.ts --pool=threads
+  --poolOptions.threads.singleThread` -> **3/3 PASS**.
+- **Cross-user isolation**: unaffected -- every query this fix's diff
+  touches (`fetchAccountSyncTiers`, `fetchActiveGlobalRuleVersionsForOperand`,
+  `insertRuleAndVersion`, `fetchPromptById`, `fetchActiveFindingForFieldTuple`)
+  is unchanged repository code, already scoped by `user_id` at the SQL
+  level (confirmed in my original gate); this fix only changed which
+  in-process function calls them and from where. Re-ran
+  `lib/rules/__tests__/rules-repository.live.test.ts` myself for good
+  measure (unaffected by this fix, since `insertRuleAndVersion` itself
+  was never touched) -> **11/11 PASS** against the real dev DB.
+- **Standard non-negotiables** (no currency P&L, no XP, no compound
+  rules, no red/green): this fix touches no UI, no color, no XP/streak
+  logic, and introduces no new rule-expression shape -- not re-derived,
+  confirmed not applicable to this diff.
+
+**Additional independent checks beyond the task's own list:**
+- `npx tsc --noEmit`: clean, zero errors.
+- `npx eslint` on all five touched files (`app/(app)/rules/actions.ts`,
+  `app/(app)/review/decisions/actions.ts`,
+  `lib/rules/create-rule-internal.ts`, and both touched test files):
+  clean, zero errors/warnings.
+- `npm run check:import-boundaries`: clean, "no dependency violations
+  found (104 modules, 266 dependencies cruised)" -- this fix does not
+  touch `lib/analytics/**`, so this is a non-regression confirmation, not
+  an expected-to-catch-anything check.
+- Grepped every `.tsx` file under `app/` for the literal string `origin`
+  outside of test files -- the only hits are unrelated local variables
+  (`originalRuleId`, `originalName` in `RuleList.tsx`/`FieldsList.tsx`,
+  a doc-comment "original" in `EditRuleControl.tsx`/`GroupingChip.tsx`/
+  `page.tsx`) -- confirming no client component anywhere references or
+  attempts to set a rule's `origin`.
+- `docs/adr/0040` decision 7 carries a dated 2026-09-13 resolution note
+  (confirmed by reading it in full) that accurately describes this exact
+  fix, with a correct strikethrough update to its own Consequences-section
+  bullet -- not left reading as still-open.
+
+**Verdict: PASS. The `origin` bypass gap described in my original
+BLOCKED finding is genuinely closed, verified independently and
+structurally (Next.js's own documented `'use server'` semantics,
+re-derived from the doc myself, not citation-matched), not just by
+re-reading the fix-dispatch's own narrative.** Every test surface named
+in my original blocking finding has been re-run by me directly, including
+the two live-DB suites, and all pass: `app/(app)/rules/__tests__/actions.test.ts`
+(102/102), `app/(app)/review/decisions/__tests__/actions.test.ts` (28/28),
+`app/(app)/review/decisions/__tests__/decisions-integration.live.test.ts`
+(5/5, real DB), `lib/rules/__tests__/rules-repository.live.test.ts`
+(11/11, real DB), `lib/supabase/__tests__/service-role-inventory.test.ts`
+(3/3). `tsc`, `eslint`, `check:import-boundaries` all clean. No other
+checklist item from my original gate was disturbed by this fix's narrow
+diff scope.
+
+**This slice (Module 06 Slice 6, Part 2 graduation decision flow) is
+CLEARED for `retrospeq-qa` and for commit.** No further security-reviewer
+action needed on this finding. `docs/adr/0040` decision 7's own
+Consequences-section note is accurate and current as of this entry.
+
+Files reviewed this gate (re-verification only, no production code
+changed by this entry): `lib/rules/create-rule-internal.ts`,
+`app/(app)/rules/actions.ts`, `app/(app)/review/decisions/actions.ts`,
+`node_modules/next/dist/docs/01-app/03-api-reference/01-directives/use-server.md`,
+`app/(app)/rules/__tests__/actions.test.ts`,
+`app/(app)/review/decisions/__tests__/actions.test.ts`,
+`app/(app)/review/decisions/__tests__/decisions-integration.live.test.ts`,
+`lib/rules/__tests__/rules-repository.live.test.ts`,
+`lib/supabase/__tests__/service-role-inventory.test.ts`,
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`.

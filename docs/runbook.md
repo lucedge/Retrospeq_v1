@@ -2111,3 +2111,40 @@ outside this slice's own tests yet (no scheduler, no UI, no
 `review_prompts` write path) — this per-rule error path exists to contain
 a failure mode that becomes reachable only once a future slice wires
 ranking/persistence on top of this one.
+
+## Graduation accept skipped the `finding_rule_links` write — the accepted rule will never be decay-checked
+
+**Source:** Module 06 (Review & Graduation) Slice 6 (2026-09-13),
+`app/(app)/review/decisions/actions.ts`'s `acceptGraduationDecision`. See
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`
+decision 4 for the full reasoning this entry only operationalises.
+
+**What this means operationally:** Module 05's `evaluateDecayCheck`
+(`lib/analytics/decay-engine/decay-engine.ts`) throws if
+`finding_rule_links.delta_at_graduation` is ever non-positive — by design,
+treating that as a data-integrity bug in whatever wrote the link, not a
+value to compute against. A finding can legitimately clear §4.3's
+confidence bar via an avg-R effect rather than a win-rate one, in which
+case `findings.delta_win_rate` is `null`. Rather than writing a
+`finding_rule_links` row with a fabricated substitute value (which would
+plant a bug for a future scheduled decay-check run to trip over),
+`acceptGraduationDecision` skips this ONE write when
+`liveRow.deltaWinRate` is not a positive number — the rule itself is still
+created, `field_usages` is still written, and the trader's own accept
+still succeeds. Only decay-checking for this specific rule never runs.
+
+**How to check:** grep application logs for `[review/decisions:
+acceptGraduationDecision] skipped finding_rule_links write`. The message
+names the finding id and the rule id the skip applies to.
+
+**Is this alertable?** A single occurrence is expected, honest behaviour
+for a real, valid product case (an avg-R-only-confident finding) — not a
+bug. A RECURRING pattern across MANY distinct graduated rules for the same
+user (or product-wide) would suggest either an unexpectedly large share of
+graduations are avg-R-only (worth product attention — decay-checking is a
+core part of §4.6's "the graduation loop," so a large blind spot in it is
+a real gap) or a genuine bug elsewhere writing `delta_win_rate` as null
+when it shouldn't be. No alert is wired for this today (this repo has no
+alerting infrastructure at all yet, matching every other runbook entry's
+own standing caveat) — this is the manual "how to check" a human would
+run.

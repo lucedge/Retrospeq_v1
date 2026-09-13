@@ -120,7 +120,17 @@ function signedR(x: number): string {
  * without misrepresenting it (e.g. calling a rating field's baseline
  * "conviction 1–2" when it may also include "conviction 3" trades).
  */
-function describeSegmentValue(segment: SegmentDescriptor, config: FindingFieldConfig): string {
+/**
+ * Exported (Module 06 Slice 6) — the graduation-acceptance decision screen
+ * needs the exact same "how do we describe this segment in plain English"
+ * logic to build its own cost line ("You will stop collecting data on
+ * conviction 1–3 ..."), and this file's own established "the rest of the
+ * strategy is deliberately never named more specifically than that" honesty
+ * posture is exactly what that cost line needs too — reused directly
+ * rather than re-derived, per AGENTS.md's "extend or reuse... this matters
+ * more than it sounds."
+ */
+export function describeSegmentValue(segment: SegmentDescriptor, config: FindingFieldConfig): string {
   if (segment.op === 'eq') {
     if (typeof segment.value === 'boolean') return segment.value ? 'Yes' : 'No';
     return String(segment.value);

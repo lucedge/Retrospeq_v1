@@ -242,6 +242,27 @@ export interface InsertRuleInput {
    * `limit === null` short-circuit.
    */
   capLimit: number | null;
+  /**
+   * Module 06 (Review & Graduation) Slice 6 addition — `rules.origin`'s
+   * own CHECK constraint (`20260823020000_rulebook_schema.sql`) has always
+   * allowed `'authored' | 'graduated' | 'detected' | 'ai' | 'firm'`, but
+   * every caller of this function until now (`createRule`, `app/(app)/rules/
+   * actions.ts`) only ever produced `'authored'` — this file's own header
+   * comment on `insertRuleAndVersion` said so explicitly ("this pipeline
+   * only ever produces the 'authored' origin ... origins belong to modules
+   * that don't exist yet"). Module 06's own graduation-acceptance flow
+   * (§4.6: "Module 04 creates a rule with `origin = 'graduated'`") is the
+   * first of those modules to exist. Optional, defaulting to `'authored'`
+   * INSIDE this function (not at each call site) — deliberately, so every
+   * existing test/call site that predates this field (there are several,
+   * all still legitimately authoring `'authored'` rules) keeps compiling
+   * and behaving exactly as before without being touched. `severity` stays
+   * hardcoded `'soft'` below regardless of origin, per Module 04 §2.1's own
+   * "every rule created soft, regardless of origin" — NOT threaded through
+   * as a parameter, because there is no origin (this one included) that is
+   * ever allowed to start hard.
+   */
+  origin?: 'authored' | 'graduated' | 'detected' | 'ai' | 'firm';
 }
 
 export interface InsertedRule {
@@ -279,12 +300,13 @@ export class RuleCreateCapExceededError extends Error {
  * §5.1's "save as rule + rule_version 1, severity = soft" — one
  * transaction (`withUserConnection` wraps a single BEGIN/COMMIT/ROLLBACK
  * per call, `lib/supabase/direct.ts`), so a failure on either INSERT
- * leaves neither row behind. `severity` is always `'soft'` and `origin`
- * is always `'authored'` — Module 04 §2.1: "Every rule created soft,
- * regardless of origin" — this pipeline only ever produces the
- * `'authored'` origin (§2.1's other origins — graduated/detected/ai/firm
- * — belong to modules that don't exist yet, per the schema migration's
- * own comment), never a caller-supplied value for either column.
+ * leaves neither row behind. `severity` is always `'soft'` — Module 04
+ * §2.1: "Every rule created soft, regardless of origin." `origin` is
+ * `input.origin` (see `InsertRuleInput.origin`'s own doc comment) — until
+ * Module 06 Slice 6 every real caller only ever passed `'authored'` (the
+ * other four origins belonged to modules that didn't exist yet); Module
+ * 06's graduation-acceptance flow is the first caller to pass
+ * `'graduated'`.
  *
  * CONCURRENCY FIX (2026-08-29, `retrospeq-tester` independent verification
  * pass over Slice 10b, `e2e/rules-general-editor.independent-verify.spec.ts`'s
@@ -335,7 +357,7 @@ export async function insertRuleAndVersion(input: InsertRuleInput): Promise<Inse
     const ruleRes = await client.query<{ id: string }>(
       `insert into retrospeq.rules
          (user_id, current_version, scope, scope_id, severity, origin, evaluation, state)
-       select $1, 1, $2, $3, 'soft', 'authored', $4, 'active'
+       select $1, 1, $2, $3, 'soft', $6, $4, 'active'
         where $5::int is null or (
           select count(*)
             from retrospeq.rules r2
@@ -343,7 +365,7 @@ export async function insertRuleAndVersion(input: InsertRuleInput): Promise<Inse
              and r2.state = 'active'
         ) < $5
        returning id`,
-      [input.userId, input.scope, input.scopeId, input.evaluation, input.capLimit],
+      [input.userId, input.scope, input.scopeId, input.evaluation, input.capLimit, input.origin ?? 'authored'],
     );
     if ((ruleRes.rowCount ?? 0) !== 1) {
       throw new RuleCreateCapExceededError(input.userId, input.capLimit);

@@ -253,6 +253,72 @@ remaining stories are picked up).
 
 ---
 
+## A rule can only be authored against a fixed, hand-coded operand list — Module 03's own per-user field registry has no way to become a rule, and Module 06's graduation loop's own worked example (§4.6, "conviction") hits this wall today
+
+**What's needed:** A product decision on how (or whether) a trader's own
+Module 03 field-registry field — a custom `captured`/`strategy_var` field
+like "conviction," or a `derived` field with no matching operand — should
+ever become an authorable Module 04 rule, and if so, how `rule_versions
+.operand_id`'s "validated against the static catalogue" invariant
+(§8.3, `lib/rules/operand-catalogue.ts`) accommodates a per-user, dynamic
+id instead of a fixed, code-versioned one.
+
+**Why an agent can't resolve this alone:** this is exactly the kind of
+"genuinely ambiguous product decision the spec doesn't answer" AGENTS.md
+says to flag rather than guess at. `20260902010000_field_registry_schema
+.sql`'s own migration header already found and named this same gap
+independently back in Module 03 ("Module 04's remaining strategy-scoped
+rule stories 1.5-1.7 ... currently blocked on this module existing at
+all") — it is not new, and guessing at an answer now (e.g. silently
+treating any `fields.id` as a valid dynamic `operand_id`) would weaken a
+real security/correctness invariant (§8.3: "Unknown operand_id rejected
+at write and at evaluate," `operand_id` "validated against a static
+catalogue") without a decision that it's the right tradeoff. Plausible
+shapes an owner might pick between: (a) extend the operand catalogue to
+accept a dynamically-registered, per-user operand namespace alongside the
+fixed one; (b) build a translation/alias layer mapping specific field
+shapes to existing catalogue entries (this repo already has a narrow,
+five-entry version of this for `drv.*` fields — see docs/adr/0040); (c)
+decide custom fields are deliberately never rule-eligible, and §4.6's own
+worked example is aspirational/needs a spec correction.
+
+**What's stalled, concretely:** Module 06 Slice 6's graduation-decision
+accept flow (`app/(app)/review/decisions/actions.ts`) is fully built,
+tested, and screenshot-verified against a real seeded fixture and a real
+live DB — but it can only successfully create a rule for **four**
+specific `drv.*`-prefixed derived fields that happen to have a
+pre-existing, actually-computable bare-operand counterpart (`risk_pct`,
+`hold_seconds`, `day_of_week`, `instrument`). A fifth field,
+`drv.order_type`, names a real operand-catalogue entry too, but that
+entry's own `computableToday` is `false` (no `order_type` column exists
+anywhere in Module 02's schema) — a `retrospeq-tester` gate (2026-09-13)
+caught that the resolver originally ignored this and would have let a
+rule be created against it that could never actually evaluate; fixed the
+same day so `drv.order_type` now correctly falls through to the same
+honest rejection as any other unsupported field (see
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`'s
+2026-09-13 correction). For every other field — every custom field a
+trader actually defines for their own strategy, which is the realistic
+common case, and includes the spec's own "conviction" example verbatim —
+accepting a graduation prompt correctly and honestly rejects with "This
+kind of finding can't become a rule yet." rather than crashing or faking
+success. The full evidence/cost/hint prompt still displays correctly
+regardless; only the write is blocked.
+
+**What was built in the meantime:** `lib/review/decisions/graduation-
+operand-map.ts`'s `resolveOperandForField`/`deriveRuleInputFromSegment`
+— a real, honest, narrowly-scoped mapping for the four fields that
+genuinely have a computable-today operand counterpart, returning `null`
+(never a guess, and never an operand that exists but can't actually be
+evaluated) for everything else, with the caller surfacing that `null` as
+a clear, non-retryable, honestly-worded rejection. See
+`docs/adr/0040-graduation-decision-operand-threshold-and-progression.md`
+decision 1 (and its 2026-09-13 correction) for the full reasoning, and
+this same ADR for four other, smaller judgment calls made alongside this
+one.
+
+---
+
 _(`SUPABASE_DB_URL` was supplied 2026-08-20 and connection/migration verification is done, see PROGRESS.md decision log. The `retrospeq` schema is real.)_
 
 One still-open, non-blocking item whenever convenient: the "Exposed schemas" dashboard toggle (Project Settings → API → add `retrospeq`) — only needed for the app's own client-side/REST access at runtime (e.g. `.from()`/`.rpc()` calls), not for anything happening right now. `lib/rate-limit/limiter.ts` (added 2026-08-20) works around this by using a direct Postgres connection instead, so this is not blocking that either.

@@ -1634,3 +1634,71 @@ export async function fetchFieldsForManagement(userId: string): Promise<ManagedF
     }));
   });
 }
+
+// ---------------------------------------------------------------------
+// insertRuleFieldUsage — Module 06 (Review & Graduation) Slice 6.
+// ---------------------------------------------------------------------
+
+/**
+ * `field_usages(used_by = 'rule')` has had precisely zero writers anywhere
+ * in this repo until now — `rebuildFieldUsagesForStrategy`
+ * (`strategy-repository.ts`) only ever writes `used_by = 'strategy'`, and
+ * `lib/review/prompt-candidates/graduation-candidates.ts`'s own header
+ * already named this exact gap explicitly: "a full graduation write path
+ * would also need to write a `field_usages(used_by='rule')` row the same
+ * way strategy-save already does for `used_by='strategy'`." This IS that
+ * write path (`lib/review/decisions/accept-graduation.ts`, Module 06
+ * Slice 6) — called once, immediately after a graduated rule is created,
+ * so `findGraduationCandidates`'s own "no existing rule on that field"
+ * eligibility check (which reads exactly this table) correctly stops
+ * re-offering graduation on a field the trader already graduated, instead
+ * of re-prompting the SAME finding on every subsequent `/review` view (a
+ * real, active bug this write closes, not a nice-to-have).
+ *
+ * Deliberately NOT `rebuildFieldUsagesForStrategy`'s own heavy multi-field,
+ * per-field-advisory-locked, delete-then-reinsert machinery — that
+ * function's entire complexity (see its own header) exists to handle a
+ * STRATEGY's mutable field SET changing out from under a concurrent
+ * archive. A graduated rule references exactly ONE fixed field, written
+ * exactly ONCE, never rebuilt/edited afterward (a rule is retired, not
+ * re-pointed at a different field) — there is no analogous "set changed"
+ * race for this call to defend against, only the ordinary "the field was
+ * archived/hard-deleted between resolving it and this insert" race every
+ * other write in this file already treats as a real, if rare, possibility.
+ *
+ * `on conflict do nothing`: the composite PK is `(field_id, used_by,
+ * used_by_id)`, and `used_by_id` (the new rule's own freshly-minted id)
+ * can never collide with a PRE-EXISTING row for a DIFFERENT rule — this
+ * guards only against an accidental duplicate call for the SAME rule
+ * (e.g. a retried Server Action after a network blip on the response),
+ * making this insert safely idempotent rather than throwing on a harmless
+ * re-run.
+ *
+ * A foreign-key violation (the field was hard-deleted between
+ * `resolveOperandForField`/the live-finding read and this call — a real
+ * but narrow race, structurally identical in shape to `rebuildFieldUsagesForStrategy`'s
+ * own "field archived mid-transaction" case) is NOT caught here — it
+ * propagates to the caller as an ordinary thrown error, which
+ * `acceptGraduationDecision`'s own catch-all maps to a generic, honest
+ * "something went wrong" response rather than a fabricated success. The
+ * rule itself has already been created by this point (this function is
+ * deliberately the LAST write in the accept sequence, after `createRule`
+ * and `createFindingRuleLink`) — a failure here does not roll back the
+ * rule, matching this repo's own established "best-effort secondary
+ * write, not a rollback-worthy invariant" posture for the analogous
+ * `finding_rule_links` write (`decay-engine/repository.ts`'s own header:
+ * "Module 05 writes the `finding_rule_links` row that enables decay
+ * checking" — a lost `field_usages` row would only mean this ONE field
+ * could theoretically be offered for graduation again, not that the
+ * trader's newly-created rule stops working).
+ */
+export async function insertRuleFieldUsage(userId: string, fieldId: string, ruleId: string): Promise<void> {
+  await withUserConnection(userId, async (client) => {
+    await client.query(
+      `insert into retrospeq.field_usages (field_id, user_id, used_by, used_by_id)
+       values ($1, $2, 'rule', $3)
+       on conflict do nothing`,
+      [fieldId, userId, ruleId],
+    );
+  });
+}

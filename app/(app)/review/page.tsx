@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import type { WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
 import type { FindingPayload } from '@/lib/analytics/findings-payload';
@@ -7,14 +8,18 @@ import { fetchWeeklyReviewRead } from './actions';
 
 /**
  * Module 06 (Review & Graduation) §4.2/§5.1 — the weekly review's PART 1
- * "the read" screen ONLY (`/review`). Not Part 2 (decisions — accept/
- * decline/defer), not Part 3 (close), not deferral/backlog, not the
- * monthly trend view (§4.9) — all separate future slices, per this
- * slice's own dispatch scope. Route naming, the compute-on-view
+ * "the read" screen ONLY (`/review`). Not Part 3 (close), not deferral/
+ * backlog beyond what Slice 6 needed, not the monthly trend view (§4.9) —
+ * all separate future slices. Route naming, the compute-on-view
  * materialisation strategy, and the current-period selection algorithm
  * are all documented in full in `docs/adr/0039-weekly-review-compute-on-
  * view-and-current-period.md` — read that file before changing any of the
  * three.
+ *
+ * **Part 2 (decisions)**: Slice 6 wired the "N decisions" button below to
+ * `/review/decisions` for real — see that route's own `actions.ts` header
+ * for its GRADUATION-ONLY scope (relaxation/promotion/retirement/detection
+ * decisions have no UI yet).
  *
  * **Entitlement**: `lib/entitlements/capability-table.ts` has no
  * capability named for reviews or this screen specifically — `streak`
@@ -150,10 +155,30 @@ export default async function WeeklyReviewPage() {
       <FindingsPanel findings={findings} />
 
       <div className="flex flex-col gap-2">
-        <button type="button" className="rq-btn" disabled aria-disabled="true" title="Decisions and closing out this review aren't available yet.">
-          {pendingCount > 0 ? `${pendingCount} ${pendingCount === 1 ? 'decision' : 'decisions'}` : 'Week closed'}
-        </button>
-        <p className="rq-sub">Decisions and closing out this review aren&apos;t available yet.</p>
+        {pendingCount > 0 ? (
+          <>
+            {/* Module 06 Slice 6: wired for real — Slice 5 shipped this
+                disabled ("Decisions and closing out this review aren't
+                available yet"). Links to `/review/decisions`, which
+                currently only renders GRADUATION-kind decisions (see that
+                route's own `actions.ts` header) — a pending count that
+                happens to be entirely relaxation/promotion/retirement/
+                detection prompts (no UI yet for any of those) lands on
+                that screen's own honest "Nothing to decide right now"
+                state rather than a broken/empty one. */}
+            <Link href="/review/decisions" className="rq-btn">
+              {pendingCount} {pendingCount === 1 ? 'decision' : 'decisions'}
+            </Link>
+            <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
+          </>
+        ) : (
+          <>
+            <button type="button" className="rq-btn" disabled aria-disabled="true" title="Closing out this review isn't available yet.">
+              Week closed
+            </button>
+            <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
+          </>
+        )}
       </div>
     </section>
   );

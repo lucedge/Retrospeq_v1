@@ -8,7 +8,6 @@ import { getClientIp } from '@/lib/rate-limit/http';
 import { RateLimitExceededError } from '@/lib/rate-limit/errors';
 import type { RateLimitScope } from '@/lib/rate-limit/config';
 import { canForUser } from '@/lib/entitlements/service';
-import { ruleCreateLimitMessage } from '@/lib/entitlements/messages';
 import type { OperandCatalogueEntry, RuleOperator } from '@/lib/rules/operand-catalogue';
 import {
   UnknownOperandError,
@@ -21,7 +20,6 @@ import { TightenOnlyViolationError, checkTightenOnly } from '@/lib/rules/validat
 import { UnsatisfiableRuleError, checkSatisfiability } from '@/lib/rules/validate-satisfiability';
 import { RenderSentenceError, renderSentence } from '@/lib/rules/render-sentence';
 import {
-  RuleCreateCapExceededError,
   RuleEditConflictError,
   RuleNotEditableError,
   RuleNotFoundError,
@@ -29,10 +27,20 @@ import {
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
   fetchRulesForUser,
-  insertRuleAndVersion,
   applyRuleEdit,
   type RuleListItem,
 } from '@/lib/rules/rules-repository';
+// Security review finding, Module 06 (Review & Graduation) Slice 6
+// (PROGRESS.md, dated 2026-09-13, "ADR 0040 decision 7's `origin` bypass" —
+// BLOCKING). `createRuleInternal` carries the create-rule pipeline's actual
+// implementation, including the `origin` parameter; see that file's own
+// header for exactly why it lives in a plain (non-`'use server'`) module
+// rather than as a second export in THIS file. `RuleActionResult`/
+// `RuleActionState` are re-exported from there below, unchanged in shape,
+// so every existing importer of these two types from this file
+// (`EditRuleControl.tsx`, `RuleEditor.tsx`, `GuidedFrontDoor.tsx`,
+// `app/(app)/review/actions.ts`) keeps compiling with no changes of its own.
+import { createRuleInternal, type RuleActionResult, type RuleActionState } from '@/lib/rules/create-rule-internal';
 import { preview, type PreviewResult } from '@/lib/rules/preview';
 import {
   checkPromotionEligibilityForUser,
@@ -54,6 +62,8 @@ import {
 } from '@/lib/rules/rule-overrides-repository';
 import { AmbientAccountNotFoundError, getAmbientAccountState, type AmbientAccountState } from '@/lib/rules/ambient-state';
 import { getAdherenceDisplayForUser, type AdherenceDisplay } from '@/lib/rules/adherence-display';
+
+export type { RuleActionResult, RuleActionState };
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.1's authoring pipeline — the
@@ -83,24 +93,6 @@ import { getAdherenceDisplayForUser, type AdherenceDisplay } from '@/lib/rules/a
  * reasoned omission, just above `editRule`'s own definition.
  */
 
-export interface RuleActionResult {
-  id: string;
-  operandId: string;
-  op: RuleOperator;
-  value: unknown;
-  rendered: string;
-  scope: 'global' | 'strategy';
-  scopeId: string | null;
-  version: number;
-}
-
-export interface RuleActionState {
-  fieldErrors?: Partial<Record<string, string[]>>;
-  error?: { code: string; user_message: string; retryable: boolean };
-  success?: boolean;
-  rule?: RuleActionResult;
-}
-
 const ruleOperatorSchema = z.enum(['lte', 'gte', 'eq', 'neq', 'in', 'not_in', 'between', 'is_true', 'is_false']);
 
 // Security review finding (Module 04 Slice 2): `.strict()` here rejects
@@ -110,6 +102,28 @@ const ruleOperatorSchema = z.enum(['lte', 'gte', 'eq', 'neq', 'in', 'not_in', 'b
 // v4.4.3) strips unknown keys by default instead of failing the parse —
 // a schema drift that would let a caller smuggle an extra field into a
 // Server Action input undetected.
+//
+// `origin` DELIBERATELY DOES NOT APPEAR ON THIS SCHEMA (nor on
+// `CreateRuleInput` below) — history, since a reader diffing this file
+// against Module 06 Slice 6's own commit will otherwise wonder where it
+// went: that slice briefly declared `origin` here as a genuinely
+// recognised, enum-validated, optional field (so `acceptGraduationDecision`
+// could reuse this SAME public `createRule` Server Action to write
+// `origin: 'graduated'`). `retrospeq-security-reviewer`'s dated 2026-09-13
+// gate (PROGRESS.md, "ADR 0040 decision 7's `origin` bypass") ruled that
+// BLOCKING: `createRule` is a network-reachable Server Action, so declaring
+// `origin` here — however strictly typed — let any authenticated trader
+// call it directly with `{ ..., origin: 'graduated' }` for a rule of their
+// own choosing, bypassing `acceptGraduationDecision`'s own Pro-gated,
+// evidence-checked flow entirely. Fixed by removing `origin` from this
+// PUBLIC contract altogether (a trader-facing rule-creation form has no
+// legitimate reason to ever set it) and moving the origin-accepting
+// implementation to `lib/rules/create-rule-internal.ts`'s
+// `createRuleInternal` — a plain, non-`'use server'` module only reachable
+// by an in-process import, never as a Server Action of its own. See that
+// file's own header and `docs/adr/0040` decision 7's resolution note for
+// the full reasoning. This schema's `.strictObject` protection against
+// every OTHER unrecognised key is unchanged by this fix.
 const createRuleInputSchema = z
   .strictObject({
     operandId: z.string().min(1, 'Choose a rule type.'),
@@ -218,7 +232,14 @@ function structuralValidationErrorState(err: unknown): RuleActionState {
 }
 
 // ---------------------------------------------------------------------
-// createRule — Module 04 §5.1, this slice's dispatch item 7
+// createRule — Module 04 §5.1. Thin Server Action wrapper: session ->
+// rate limit -> Zod-parse the PUBLIC contract (no `origin` field — see
+// `createRuleInputSchema`'s own comment above for why) -> delegate the
+// entire validation-and-write pipeline to `createRuleInternal`
+// (`lib/rules/create-rule-internal.ts`), always with `origin: 'authored'`
+// hardcoded, never derived from `input` (there is nothing in
+// `CreateRuleInput` to derive it from — the field does not exist on this
+// public type at all).
 // ---------------------------------------------------------------------
 
 export async function createRule(input: CreateRuleInput): Promise<RuleActionState> {
@@ -232,141 +253,7 @@ export async function createRule(input: CreateRuleInput): Promise<RuleActionStat
   const { operandId, op, value, scope } = parsed.data;
   const scopeId = parsed.data.scopeId ?? null;
 
-  // Step 6 — operand_id whitelist, op-for-type, phrasing-renderability,
-  // and declared-bounds validation, FIRST, per this slice's own
-  // dispatch ("operand_id whitelist ... before ANY other logic touches
-  // it") and §8.3 ("Unknown operand_id rejected at write and at
-  // evaluate").
-  let operand: OperandCatalogueEntry;
-  try {
-    operand = validateOperandOpValue(operandId, op, value);
-  } catch (err) {
-    return structuralValidationErrorState(err);
-  }
-
-  // Step 4 — tier gating (§4.1: "Tier gating is not cosmetic").
-  try {
-    const syncTiers = await fetchAccountSyncTiers(user.id);
-    checkTierAvailable(operandId, operand.tier, syncTiers);
-  } catch (err) {
-    if (err instanceof OperandUnavailableError) {
-      return {
-        error: {
-          code: err.code,
-          user_message: `None of your connected accounts report enough data for "${operand.label}" yet — we won't offer this rule again until one does.`,
-          retryable: false,
-        },
-      };
-    }
-    throw err;
-  }
-
-  // Step 5 — entitlement (free tier: 3 rules, §4.3 of Module 01). This is
-  // a fast, friendly pre-check for the common (non-racing) case only —
-  // `entitlement.limit` is threaded through to `insertRuleAndVersion`
-  // below as `capLimit`, whose OWN guarded INSERT is the real,
-  // race-proof, invariant-enforcing backstop (see that function's header,
-  // "CONCURRENCY FIX (2026-08-29...)", for why this two-step shape is
-  // deliberate, matching `promoteRuleSeverity`'s established precedent).
-  const entitlement = await canForUser(user.id, 'rules.create');
-  if (!entitlement.allowed) {
-    return {
-      error: {
-        code: 'ENTITLEMENT_LIMIT',
-        user_message:
-          entitlement.limit !== null
-            ? ruleCreateLimitMessage(entitlement.used ?? entitlement.limit, entitlement.limit)
-            : "You've reached your rule limit.",
-        retryable: false,
-      },
-    };
-  }
-
-  // Step 2 — tighten-only, scope='strategy' only.
-  if (scope === 'strategy') {
-    try {
-      const activeGlobalRules = await fetchActiveGlobalRuleVersionsForOperand(user.id, operandId);
-      checkTightenOnly({ operandId, op, value }, activeGlobalRules);
-    } catch (err) {
-      if (err instanceof TightenOnlyViolationError) {
-        return {
-          error: {
-            code: err.code,
-            user_message: `Your rulebook already governs "${operand.label}" with "${err.globalRendered}" — a strategy rule can be stricter than that, not looser.`,
-            retryable: false,
-          },
-        };
-      }
-      throw err;
-    }
-  }
-
-  // Step 3 — satisfiability, scope='global' only.
-  if (scope === 'global') {
-    try {
-      const existingGlobalRules = await fetchActiveGlobalRuleVersionsForOperand(user.id, operandId);
-      checkSatisfiability({ operandId, op, value }, existingGlobalRules);
-    } catch (err) {
-      if (err instanceof UnsatisfiableRuleError) {
-        return {
-          error: {
-            code: err.code,
-            user_message: `This rule can never be satisfied together with your existing rule "${err.conflictingRendered}".`,
-            retryable: false,
-          },
-        };
-      }
-      throw err;
-    }
-  }
-
-  // Render, then save — §5.1's final two pipeline steps.
-  let rendered: string;
-  try {
-    rendered = renderSentence(operandId, op, value);
-  } catch (err) {
-    return structuralValidationErrorState(err);
-  }
-
-  try {
-    const inserted = await insertRuleAndVersion({
-      userId: user.id,
-      operandId,
-      op,
-      value,
-      scope,
-      scopeId,
-      evaluation: operand.evaluation,
-      rendered,
-      capLimit: entitlement.limit,
-    });
-    revalidatePath('/rules');
-    return {
-      success: true,
-      rule: { id: inserted.ruleId, operandId, op, value, rendered, scope, scopeId, version: inserted.version },
-    };
-  } catch (err) {
-    // Lost the race against the SAME cap the pre-check above just passed
-    // non-atomically — see `insertRuleAndVersion`'s own header
-    // ("CONCURRENCY FIX (2026-08-29...)") for exactly how a concurrent
-    // caller reaches this. Mapped to the SAME `ENTITLEMENT_LIMIT` shape
-    // (and the same `ruleCreateLimitMessage` copy) as the early pre-check
-    // above, not a generic internal error — a trader who loses this race
-    // should see the honest "you've reached your rule limit" message.
-    if (err instanceof RuleCreateCapExceededError && err.capLimit !== null) {
-      return {
-        error: {
-          code: 'ENTITLEMENT_LIMIT',
-          user_message: ruleCreateLimitMessage(err.capLimit, err.capLimit),
-          retryable: false,
-        },
-      };
-    }
-    console.error('[rules/actions:createRule] insert failed:', err);
-    return {
-      error: { code: 'RULE_CREATE_INTERNAL', user_message: 'Something went wrong saving your rule. Please try again.', retryable: true },
-    };
-  }
+  return createRuleInternal(user.id, { operandId, op, value, scope, scopeId, origin: 'authored' });
 }
 
 // ---------------------------------------------------------------------

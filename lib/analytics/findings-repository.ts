@@ -116,6 +116,78 @@ interface FindingDbRowWithStrategy extends FindingDbRow {
  * is excluded here defensively, the same posture as the field-id exclusion,
  * rather than assumed impossible.
  */
+/** `FindingRow` plus the real, live `findings.id` and `computed_at` — the
+ *  two columns Module 06 Slice 6's graduation-acceptance flow needs that
+ *  neither `fetchActiveFindingsForStrategy` nor `fetchActiveFindingsForUser`
+ *  expose (both were built for a screen that only ever RENDERS a finding,
+ *  never writes a reference back to it). See `lib/review/decisions/
+ *  accept-graduation.ts`'s own header for why the live `id` — not the
+ *  stable-but-synthetic subject id `review_prompts.subject_id` stores
+ *  (`lib/review/prompt-candidates/stable-subject-id.ts`) — is required
+ *  here: `finding_rule_links.finding_id` is a real FK into this table. */
+export interface FindingRowWithId extends FindingRow {
+  id: string;
+  computedAt: string;
+}
+
+interface FindingDbRowWithId extends FindingDbRow {
+  id: string;
+  computed_at: string;
+}
+
+/**
+ * Module 06 (Review & Graduation) Slice 6 — the ONE live finding row
+ * (`state = 'active'`) for an exact `(strategyId, fieldId)` tuple, at
+ * graduation-accept time. `strategy_id`/`field_id` can legitimately have
+ * MORE than one active row (one per segment, e.g. several `pick_one`
+ * options) — same shape `pickRepresentativeFinding` (`findings-payload.ts`)
+ * already resolves for the strategy-detail screen and `findings-repository.ts`'s
+ * own graduation-candidates.ts reuses (`selectGraduationCandidates`'s own
+ * "largest n" tie-break) — reused verbatim here rather than re-invented, via
+ * the same `ORDER BY ... LIMIT 1` shape a fresh ranked-and-capped SQL query
+ * expresses more simply than round-tripping through `pickRepresentativeFinding`
+ * for a single tuple. Returns `null` when no active row exists for this
+ * tuple any more (§9 `PROMPT_SUBJECT_GONE` territory — the finding was
+ * superseded/decayed/its field or strategy hard-deleted between the review
+ * being materialised and the trader accepting it) — the caller's own
+ * responsibility to surface that honestly, never this function's.
+ */
+export async function fetchActiveFindingForFieldTuple(
+  userId: string,
+  strategyId: string,
+  fieldId: string,
+): Promise<FindingRowWithId | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<FindingDbRowWithId>(
+      `select id, computed_at, analytic_id, field_id, segment, n, win_rate, avg_r, baseline_n,
+              baseline_win_rate, baseline_avg_r, delta_win_rate, delta_avg_r, confidence
+         from retrospeq.findings
+        where user_id = $1 and strategy_id = $2 and field_id = $3 and state = 'active'
+        order by n desc, computed_at desc
+        limit 1`,
+      [userId, strategyId, fieldId],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      computedAt: row.computed_at,
+      analyticId: row.analytic_id,
+      fieldId: row.field_id as string,
+      segment: row.segment,
+      n: row.n,
+      winRate: toNumberOrNull(row.win_rate),
+      avgR: toNumberOrNull(row.avg_r),
+      baselineN: row.baseline_n,
+      baselineWinRate: toNumberOrNull(row.baseline_win_rate),
+      baselineAvgR: toNumberOrNull(row.baseline_avg_r),
+      deltaWinRate: toNumberOrNull(row.delta_win_rate),
+      deltaAvgR: toNumberOrNull(row.delta_avg_r),
+      confidence: row.confidence,
+    };
+  });
+}
+
 export async function fetchActiveFindingsForUser(userId: string): Promise<FindingRowWithStrategy[]> {
   return withUserConnection(userId, async (client) => {
     const res = await client.query<FindingDbRowWithStrategy>(
