@@ -44,6 +44,7 @@ import {
 import { canForUser } from '@/lib/entitlements/service';
 import { accountConnectLimitMessage } from '@/lib/entitlements/messages';
 import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
+import { ensureDefaultStrategyForUser } from '@/lib/onboarding/default-strategy';
 
 /**
  * Module 01 stories 2.x — the Server Action layer wiring `lib/broker/connect.ts`'s
@@ -409,6 +410,15 @@ async function connectManualAccount(userId: string): Promise<AccountActionState>
   // identical call above.
   await advanceOnboardingStageBestEffort(userId, 'history_imported', { path: 'manual' }).catch((err) => {
     console.error('[connectManualAccount] onboarding stage advance failed unexpectedly:', err);
+  });
+
+  // Module 08 (Onboarding & Home) §5.4 -- the silent default strategy,
+  // wired alongside (not inside) the `advanceOnboardingStageBestEffort`
+  // call directly above, on this SAME "manual account created" moment.
+  // Idempotent and never-throwing (see its own header) — `.catch()` here
+  // is a structural guard only, same reasoning as the call above.
+  await ensureDefaultStrategyForUser(userId, 'manual').catch((err) => {
+    console.error('[connectManualAccount] ensureDefaultStrategyForUser failed unexpectedly:', err);
   });
 
   revalidatePath('/accounts');

@@ -29,6 +29,7 @@ import { matchArmEvent, type ArmDirection, type CandidateEntryFill } from './arm
 import { lockPreEntryCaptures } from './trade-captures';
 import { recomputeOperandDistributionsForUser } from '@/lib/rules/distributions-repository';
 import { advanceOnboardingStageBestEffort } from '@/lib/onboarding/onboarding-state-repository';
+import { ensureDefaultStrategyForUser } from '@/lib/onboarding/default-strategy';
 import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
 import { runDecayChecksForUser } from '@/lib/analytics/decay-engine/repository';
 import { recomputeDetectionsForUser } from '@/lib/analytics/detection-engine/repository';
@@ -1183,6 +1184,26 @@ export async function runSync(
     // trusting the callee's contract silently.
     console.error(
       `[sync] onboarding_state advance failed unexpectedly after sync for user ${account.user_id} (syncRunId ${result.syncRunId}):`,
+      err,
+    );
+  }
+
+  // Module 08 (Onboarding & Home) §5.4 -- the silent default strategy:
+  // "Create one strategy automatically, named after the instrument class
+  // ... Logging works immediately from derived data. The streak starts day
+  // one." `ensureDefaultStrategyForUser` is itself idempotent and
+  // never-throwing (see its own header) -- called alongside, not inside,
+  // the `advanceOnboardingStageBestEffort` call directly above, on the
+  // SAME "first successful sync" moment, using this account's own already-
+  // known `platform` column (never anything derived from imported trade
+  // content -- §5.4's own "no auto-created strategies from clustering").
+  try {
+    await ensureDefaultStrategyForUser(account.user_id, account.platform as Platform);
+  } catch (err) {
+    // `ensureDefaultStrategyForUser` itself never throws -- structural
+    // guard only, matching the identical pattern immediately above.
+    console.error(
+      `[sync] ensureDefaultStrategyForUser failed unexpectedly after sync for user ${account.user_id} (syncRunId ${result.syncRunId}):`,
       err,
     );
   }

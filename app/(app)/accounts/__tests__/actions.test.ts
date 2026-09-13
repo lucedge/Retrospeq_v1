@@ -130,6 +130,18 @@ const { advanceOnboardingStageBestEffortMock } = vi.hoisted(() => ({
 vi.mock('@/lib/onboarding/onboarding-state-repository', () => ({
   advanceOnboardingStageBestEffort: advanceOnboardingStageBestEffortMock,
 }));
+// Module 08 §5.4 -- the silent default strategy. Mocked for the same
+// reason as `advanceOnboardingStageBestEffort` immediately above: this
+// file asserts exactly what `connectManualAccount` passes through, without
+// needing a live `strategies` row — live behaviour of
+// `ensureDefaultStrategyForUser` itself is
+// `lib/onboarding/__tests__/default-strategy.live.test.ts`'s job.
+const { ensureDefaultStrategyForUserMock } = vi.hoisted(() => ({
+  ensureDefaultStrategyForUserMock: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/onboarding/default-strategy', () => ({
+  ensureDefaultStrategyForUser: ensureDefaultStrategyForUserMock,
+}));
 vi.mock('server-only', () => ({}));
 
 const { connectAccount, disconnectAccount, updateAccountSettings } = await import('../actions');
@@ -184,6 +196,7 @@ beforeEach(() => {
   }));
   canForUserMock.mockReset().mockResolvedValue({ allowed: true, reason: 'ok', limit: 1, used: 0 });
   advanceOnboardingStageBestEffortMock.mockReset().mockResolvedValue(undefined);
+  ensureDefaultStrategyForUserMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe('connectAccount', () => {
@@ -248,6 +261,28 @@ describe('connectAccount', () => {
     errorSpy.mockRestore();
   });
 
+  it('Module 08 §5.4: a manual connect wires ensureDefaultStrategyForUser with this user and the "manual" platform, alongside the onboarding-stage advance', async () => {
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.success).toBe(true);
+    expect(ensureDefaultStrategyForUserMock).toHaveBeenCalledWith(FAKE_USER.id, 'manual');
+  });
+
+  it('Module 08 §5.4: a failing ensureDefaultStrategyForUser never turns a successful manual connect into a reported failure', async () => {
+    // `ensureDefaultStrategyForUser`'s REAL contract is "never throws" —
+    // same defensive-`.catch()` proof as the onboarding-stage-advance test
+    // immediately above, for this call site's OWN `.catch()`.
+    ensureDefaultStrategyForUserMock.mockRejectedValueOnce(new Error('should never happen, but just in case'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await connectAccount(undefined, formData({ platform: 'manual' }));
+
+    expect(result.success).toBe(true);
+    expect(insertTradingAccountMock).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('credentialed happy path: fixture adapter succeeds, writes both rows, never leaks the plaintext credential', async () => {
     const result = await connectAccount(
       undefined,
@@ -300,6 +335,20 @@ describe('connectAccount', () => {
     );
 
     expect(advanceOnboardingStageBestEffortMock).not.toHaveBeenCalled();
+  });
+
+  it('Module 08 §5.4: a credentialed connect (account_connected, not history_imported) does NOT call ensureDefaultStrategyForUser — that only fires on manual connect and on the first successful sync', async () => {
+    await connectAccount(
+      undefined,
+      formData({
+        platform: 'mt5',
+        server: 'ICMarketsSC-Live02',
+        login: '12345',
+        credential: 'a-real-investor-password',
+      }),
+    );
+
+    expect(ensureDefaultStrategyForUserMock).not.toHaveBeenCalled();
   });
 
   // Independent verification (Slice 08b QA dispatch, 2026-09-01): the

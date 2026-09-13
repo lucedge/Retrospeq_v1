@@ -119,3 +119,40 @@ export function isCryptoPlatform(platform: Platform): boolean {
  */
 export const ACCOUNT_KINDS = ['personal', 'prop', 'demo'] as const;
 export type AccountKind = (typeof ACCOUNT_KINDS)[number];
+
+/**
+ * Module 08 (Onboarding & Home) §5.4 — "Create one strategy automatically,
+ * named after the instrument class ('Forex', 'Crypto')." Used by
+ * `lib/onboarding/default-strategy.ts`'s `ensureDefaultStrategyForUser` to
+ * name a trader's silent default strategy at the exact moment it's
+ * created, from the account's own already-known `platform` column — not
+ * anything inferred from imported trade content (§5.4's own "no
+ * auto-created strategies from clustering imported history").
+ *
+ * RECONCILIATION (logged in PROGRESS.md's decision log, 2026-09-14, this
+ * slice): §5.4 names only two literal examples, "Forex" and "Crypto" —
+ * both map cleanly onto this module's existing platform groupings
+ * (`isCredentialedPlatform`'s MT-style/exchange-style split above,
+ * `isCryptoPlatform`'s crypto set). `manual` has no fixed instrument class
+ * of its own to name — the SAME reasoning `isCryptoPlatform`'s own header
+ * above already gives for excluding `manual` from its crypto set applies
+ * here too: a self-entered manual account could be forex, crypto,
+ * futures, or anything else, and this function genuinely cannot know
+ * which. `'Trading'` is a generic, honest name (never a false claim about
+ * instrument class) a manual trader will recognise as "the one strategy
+ * every logged trade starts under" — not a literal spec mapping, a
+ * reconciliation call for the one platform value §5.4 doesn't address.
+ */
+export function defaultStrategyNameForPlatform(platform: Platform): string {
+  switch (platform) {
+    case 'mt4':
+    case 'mt5':
+    case 'ctrader':
+      return 'Forex';
+    case 'binance':
+    case 'bybit':
+      return 'Crypto';
+    case 'manual':
+      return 'Trading';
+  }
+}

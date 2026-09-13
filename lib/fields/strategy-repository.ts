@@ -73,12 +73,21 @@ import {
  * (`lib/entitlements/capability-table.ts`) — a PLAN exclusion per
  * `resolve.ts`, not a quota that happens to be full — so a free user can
  * never successfully call `createStrategy`/`editStrategy` for a
- * user-initiated strategy. The ONE exception is Module 08's own future
- * "silent, auto-created" default strategy (§1, §8's own onboarding flow):
- * `createStrategy(..., { isDefaultStrategy: true })` BYPASSES the
- * entitlement check entirely, because that row is created BY THE SYSTEM,
- * not by a user-initiated "create a strategy" action this capability is
- * meant to gate. `editStrategy` has no equivalent bypass — see
+ * user-initiated strategy. The ONE exception is Module 08's own "silent,
+ * auto-created" default strategy (§1, §5.4's own onboarding flow, wired
+ * up for real 2026-09-14 by `lib/onboarding/default-strategy.ts`'s
+ * `ensureDefaultStrategyForUser`): `createStrategy(..., {
+ * isDefaultStrategy: true })` BYPASSES the ENTITLEMENT check entirely,
+ * because that row is created BY THE SYSTEM, not by a user-initiated
+ * "create a strategy" action this capability is meant to gate. It does
+ * NOT bypass ownership/uniqueness correctness, though: `insertStrategyAndVersion`'s
+ * own guarded INSERT (see that function's header) independently verifies
+ * this user has ZERO pre-existing strategies of any state before letting
+ * an `isDefaultStrategy: true` row through, throwing
+ * `DefaultStrategyAlreadyExistsError` otherwise — closing
+ * `docs/infra-gaps.md`'s `isDefaultStrategy` gap, found by
+ * retrospeq-security-reviewer 2026-09-04 back when no caller anywhere set
+ * this flag yet. `editStrategy` has no equivalent bypass — see
  * `docs/adr/0018-strategy-edit-reuses-strategy-create-entitlement.md` for
  * why edit reuses the SAME capability as create (there is no dedicated
  * `strategy.edit` capability in Module 01 §4.3's table) and why that
@@ -394,6 +403,33 @@ export class StrategyCreateCapExceededError extends Error {
   }
 }
 
+/**
+ * §9-shaped: thrown when `insertStrategyAndVersion`'s own guarded INSERT
+ * (see that function's header) returns zero rows for an `isDefaultStrategy:
+ * true` call — this user already has at least one strategy (any state,
+ * default or not). Closes `docs/infra-gaps.md`'s `isDefaultStrategy`
+ * gap (found by retrospeq-security-reviewer 2026-09-04, closed here
+ * 2026-09-14 wiring up Module 08 §5.4): the caller-supplied
+ * `isDefaultStrategy: true` no longer bypasses every check unconditionally
+ * — it still bypasses the ENTITLEMENT check (`createStrategy`'s own
+ * `canForUser` pre-check, intentionally, per this file's header), but the
+ * atomic write itself now always re-verifies "does this user genuinely
+ * have zero pre-existing strategies" before letting the row through.
+ * `ensureDefaultStrategyForUser` (`lib/onboarding/default-strategy.ts`)
+ * catches this and treats it as benign/idempotent — a real, expected
+ * outcome of the genuine two-connection race that function's own header
+ * documents, never a bug.
+ */
+export class DefaultStrategyAlreadyExistsError extends Error {
+  readonly code = 'DEFAULT_STRATEGY_ALREADY_EXISTS' as const;
+  constructor(readonly userId: string) {
+    super(
+      `User ${userId} already has at least one strategy (any state) -- refusing to create a second "silent default" strategy for them (Module 08 §5.4). insertStrategyAndVersion's own guarded INSERT rejected this create rather than creating an inappropriate first "default" for a user who already has other strategies.`,
+    );
+    this.name = 'DefaultStrategyAlreadyExistsError';
+  }
+}
+
 // ---------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------
@@ -617,8 +653,9 @@ export interface InsertStrategyInput {
   name: string;
   fields: ProposedStrategyField[];
   triggers: ProposedTrigger[];
-  /** Module 08's own future silent-default-strategy bypass — see this
-   *  file's own header. */
+  /** Module 08's own silent-default-strategy path — see this file's own
+   *  header, and `insertStrategyAndVersion`'s own header for the atomic
+   *  zero-pre-existing-strategies check this flag no longer bypasses. */
   isDefaultStrategy: boolean;
   /** The caller's OWN `strategy.create` entitlement cap
    *  (`canForUser(userId, 'strategy.create').limit`), never re-derived or
@@ -639,55 +676,87 @@ export interface InsertedStrategy {
  * `strategies` — `pg_advisory_xact_lock(hashtext(user_id))` first (the
  * SAME concurrency-fix technique `insertRuleAndVersion`'s own header
  * documents in full, "CONCURRENCY FIX (2026-08-29)"), then a correlated
- * `count(*)` guard folded into the INSERT's own WHERE clause so the cap
- * check and the write are atomic, not two separate round trips; (b) the
+ * guard folded into the INSERT's own WHERE clause so the check and the
+ * write are atomic, not two separate round trips; (b) the
  * `strategy_versions` row for version 1; (c) `field_usages` rebuilt for
  * this brand-new strategy (nothing to delete yet, but reuses the same
  * shared helper `applyStrategyEditVersion` uses, rather than a parallel
  * insert-only version of it).
  *
- * The guarded INSERT's WHERE clause has TWO independent escape hatches,
- * either of which lets the row through: `$3 = true` (this IS Module 08's
- * own default-strategy bypass — the cap never applies to it, regardless
- * of `capLimit`'s value) OR `$4::int is null or (correlated count) <
- * $4` (the normal cap-guard, identical shape to `insertRuleAndVersion`'s
- * own `$5::int is null or (...) < $5`). `strategies_one_default_per_user`
- * (`20260902020000_strategy_default_uniqueness.sql`) is the separate,
- * DB-level backstop against a SECOND default ever being created — this
- * function's own bypass only concerns the QUANTITY cap, not uniqueness.
+ * The guarded INSERT's WHERE clause has TWO MUTUALLY EXCLUSIVE branches
+ * (`$3 = true and (...)` / `$3 = false and (...)` — never both, unlike the
+ * old `$3 = true or (...)` shape this replaced):
+ *
+ * - `$3 = true` (Module 08's own default-strategy path): the row is only
+ *   let through when `not exists (select 1 from strategies s2 where
+ *   s2.user_id = $1)` — i.e. this user has ZERO pre-existing strategies of
+ *   ANY state (active or archived, default or not). CLOSES
+ *   `docs/infra-gaps.md`'s `isDefaultStrategy` gap (found by
+ *   retrospeq-security-reviewer 2026-09-04): before this, `$3 = true`
+ *   alone satisfied the WHERE clause unconditionally, and
+ *   `strategies_one_default_per_user` (the partial unique index on
+ *   `is_default = true`, `20260902020000_strategy_default_uniqueness.sql`)
+ *   only ever blocked a SECOND default — it does nothing to stop an
+ *   inappropriate FIRST "default" being created for a user who already has
+ *   other, non-default strategies. That index remains in place as the
+ *   genuinely race-proof backstop against a second `is_default = true` row
+ *   ever committing (belt-and-suspenders, in case this function is ever
+ *   bypassed or a future bug loosens its own check); THIS explicit
+ *   `not exists` clause is the new, deliberate correctness check for the
+ *   broader "already has ANY strategy" invariant the index alone cannot
+ *   express. Both checks run INSIDE the same `pg_advisory_xact_lock`
+ *   acquired above, keyed on `user_id` — the advisory lock is what makes
+ *   the `not exists` sub-select race-safe against a second, genuinely
+ *   concurrent call for the SAME user (e.g. two accounts syncing at once):
+ *   whichever call acquires the lock first runs its `not exists` check and
+ *   commits (or the whole transaction rolls back) before the second call's
+ *   own lock-wait ever returns, so the second call's `not exists` check
+ *   always sees the first call's real, committed result, never a stale
+ *   snapshot. Two DIFFERENT users' calls never contend with each other at
+ *   all (per-user lock key).
+ * - `$3 = false` (the normal, user-initiated create path): unchanged
+ *   behaviour, `$4::int is null or (correlated count) < $4` — the ordinary
+ *   cap-guard, identical shape to `insertRuleAndVersion`'s own `$5::int is
+ *   null or (...) < $5`.
  */
 export async function insertStrategyAndVersion(input: InsertStrategyInput): Promise<InsertedStrategy> {
   return withUserConnection(input.userId, async (client) => {
-    // Serializes concurrent creates for the SAME user before the
-    // count-guarded INSERT below runs — identical technique and
-    // reasoning to `insertRuleAndVersion`'s own first statement.
+    // Serializes concurrent creates for the SAME user before the guarded
+    // INSERT below runs — identical technique and reasoning to
+    // `insertRuleAndVersion`'s own first statement. For the
+    // `isDefaultStrategy` path this lock is what makes the INSERT's own
+    // `not exists` check below race-safe — see this function's own header.
     await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [input.userId]);
 
     const strategyRes = await client.query<{ id: string }>(
       `insert into retrospeq.strategies (user_id, name, current_version, is_default, state)
        select $1, $2, 1, $3, 'active'
-        where $3 = true or $4::int is null or (
-          select count(*)
-            from retrospeq.strategies s2
-           where s2.user_id = $1
-             and s2.state = 'active'
-             and s2.is_default = false
-        ) < $4
+        where (
+          $3 = true and not exists (
+            select 1 from retrospeq.strategies s2 where s2.user_id = $1
+          )
+        ) or (
+          $3 = false and ($4::int is null or (
+            select count(*)
+              from retrospeq.strategies s2
+             where s2.user_id = $1
+               and s2.state = 'active'
+               and s2.is_default = false
+          ) < $4)
+        )
        returning id`,
       [input.userId, input.name, input.isDefaultStrategy, input.capLimit],
     );
     if ((strategyRes.rowCount ?? 0) !== 1) {
       if (input.isDefaultStrategy) {
-        // `$3 = true` always satisfies the guard's WHERE clause on its
-        // own -- zero rows here despite that is a different failure
-        // entirely (e.g. `strategies_one_default_per_user` rejecting a
-        // second default, which raises a real unique-violation exception
-        // rather than returning zero rows) -- should be structurally
-        // impossible to reach this branch, matching this repo's
-        // "should be structurally impossible" throw convention elsewhere.
-        throw new Error(
-          `insertStrategyAndVersion: the guarded INSERT for a default strategy (userId=${input.userId}) affected ${strategyRes.rowCount} rows -- structurally impossible given "$3 = true" always satisfies the guard's WHERE clause; investigate.`,
-        );
+        // Zero rows here means the `not exists` check above genuinely
+        // found at least one pre-existing strategy for this user (any
+        // state) — the EXPECTED rejection this whole guard exists to
+        // produce, not a structurally-impossible condition. Callers
+        // (`ensureDefaultStrategyForUser`, `lib/onboarding/
+        // default-strategy.ts`) treat this as benign/idempotent, never a
+        // bug to surface to the trader.
+        throw new DefaultStrategyAlreadyExistsError(input.userId);
       }
       throw new StrategyCreateCapExceededError(input.userId, input.capLimit);
     }
@@ -720,9 +789,10 @@ export interface CreateStrategyInput {
   name: string;
   fields: ProposedStrategyField[];
   triggers: ProposedTrigger[];
-  /** Defaults to `false`. Set to `true` ONLY by Module 08's own future
-   *  onboarding flow, creating a free user's silent default strategy —
-   *  see this file's own header. */
+  /** Defaults to `false`. Set to `true` ONLY by Module 08's own onboarding
+   *  flow (`lib/onboarding/default-strategy.ts`'s
+   *  `ensureDefaultStrategyForUser`), creating a trader's silent default
+   *  strategy — see this file's own header. */
   isDefaultStrategy?: boolean;
 }
 
@@ -918,7 +988,7 @@ export interface EditStrategyResult {
  * shape `docs/runbook.md`'s own manual-cleanup query already identifies:
  * owned by `userId`, `current_version = 1`, that version's own `fields`/
  * `triggers` JSONB snapshot both empty, and NOT `is_default` (Module 08's
- * future silent default strategy is the one legitimate reason a version-1,
+ * silent default strategy is the one legitimate reason a version-1,
  * all-empty strategy should exist).
  *
  * The guard lives entirely in the query's own WHERE/EXISTS clauses, not in

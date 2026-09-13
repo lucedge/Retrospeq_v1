@@ -2192,3 +2192,61 @@ window/type filtering. No alert is wired for this today (this repo has no
 alerting infrastructure at all yet, matching every other runbook entry's
 own standing caveat) — this is the manual "how to check" a human would
 run.
+
+## `ensureDefaultStrategyForUser` failing after a sync/manual-connect (silent default strategy never created)
+
+**Source:** Module 08 (Onboarding & Home) §5.4 — "Create one strategy
+automatically, named after the instrument class ('Forex', 'Crypto'), with
+zero captured fields. Logging works immediately from derived data. The
+streak starts day one." Owning code: `lib/onboarding/default-strategy.ts`'s
+`ensureDefaultStrategyForUser`, called from the exact same two call sites
+as `advanceOnboardingStageBestEffort(..., 'history_imported', ...)`
+(alongside it, never inside it):
+
+- `lib/ingestion/sync.ts`'s `runSync`, on a real broker account's first
+  successful sync.
+- `app/(app)/accounts/actions.ts`'s `connectManualAccount`, on manual
+  account creation.
+
+**What this means operationally:** matches this file's `onboarding_state`
+entry's posture exactly — a failure here must never turn the real,
+already-committed operation (the sync, the manual account creation) into a
+reported failure. Both call sites wrap it in a structural `try/catch`
+(`sync.ts`) or `.catch()` (`accounts/actions.ts`), belt-and-braces on top of
+`ensureDefaultStrategyForUser` itself already never throwing. The only
+trace of a genuinely unexpected failure is a `console.error` line prefixed
+`[onboarding] ensureDefaultStrategyForUser(...) failed unexpectedly` (from
+inside the function itself) or an additional
+`[sync]`/`[connectManualAccount] ensureDefaultStrategyForUser failed
+unexpectedly` line from the call site's own structural guard.
+
+A `DefaultStrategyAlreadyExistsError` reaching this function is
+deliberately NOT logged as an error at all — it is the EXPECTED,
+silently-swallowed shape for a genuine two-connection race (two accounts
+syncing at once for a brand-new user) or a trader who already has a real,
+user-created strategy by the time this runs (e.g. a Pro trader who built
+one manually before their first sync completed), never a bug.
+
+**Left unaddressed**, a trader has no strategy at all to log a trade
+against on day one — the exact outcome §5.4 exists to prevent ("Logging
+works immediately from derived data"). This fails safe, not silently
+unsafe: the trader can still build a strategy manually via the builder if
+they're Pro (§5.4: "the builder stays available from the start ... it is
+simply never required"), and every SUBSEQUENT sync/connect retries this
+same idempotent call, so a transient failure (e.g. a dropped DB
+connection) self-heals on the next successful sync without any operator
+action.
+
+**How to check:** grep application logs for `[onboarding]
+ensureDefaultStrategyForUser(`. A quick live check for a specific trader:
+`select count(*) from retrospeq.strategies where user_id = $1` — zero rows
+for a trader who has completed at least one successful sync or manual
+connect indicates this gap fired and was never retried successfully since.
+
+**Is this alertable?** No alerting infrastructure exists in this repo yet
+(matching every other runbook entry's own standing caveat) — this is the
+manual "how to check" a human would run. Not urgent to page on: the
+builder remains available as a manual workaround for Pro users, and free
+users are the primary audience §5.4 is written for, so a transient miss
+here is a UX gap (no immediate logging path) rather than a data-integrity
+one.

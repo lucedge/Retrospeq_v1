@@ -22,6 +22,7 @@ vi.setConfig({ testTimeout: 20_000 });
 import {
   applyStrategyEditVersion,
   createStrategy,
+  DefaultStrategyAlreadyExistsError,
   editStrategy,
   fetchCurrentStrategyForEdit,
   fetchFieldDefinitionsByIds,
@@ -415,10 +416,10 @@ describe.skipIf(!env)('strategy-repository — entitlement gate (live DB)', () =
     expect(row.rows[0]).toMatchObject({ name: 'Default strategy', current_version: 1 }); // unchanged
   });
 
-  it('a SECOND isDefaultStrategy=true create for the same user is rejected — strategies_one_default_per_user', async () => {
+  it('a SECOND isDefaultStrategy=true create for the same user is rejected — DefaultStrategyAlreadyExistsError, closing docs/infra-gaps.md\'s isDefaultStrategy gap', async () => {
     await expect(
       createStrategy({ userId: user.id, name: 'Second default attempt', fields: [], triggers: [], isDefaultStrategy: true }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(DefaultStrategyAlreadyExistsError);
 
     const rows = await db.query('select count(*)::text as c from retrospeq.strategies where user_id = $1 and is_default = true', [
       user.id,
@@ -444,6 +445,74 @@ describe.skipIf(!env)('strategy-repository — entitlement gate (live DB)', () =
       triggers: [],
     });
     expect(edited.newVersion).toBe(2);
+  });
+});
+
+/**
+ * Module 08 §5.4 slice (2026-09-14) — the ACTUAL security-gap scenario
+ * `docs/infra-gaps.md`'s `isDefaultStrategy` entry named specifically:
+ * "only blocks a SECOND default, not an inappropriate FIRST one for a
+ * user who already has other, non-default strategies." The block above
+ * only ever proves the SECOND-default case (a user who already has a
+ * strategy that IS itself the default) — a materially different bug from
+ * "a user with a real, user-created, non-default strategy gets an
+ * inappropriate silent default anyway." Own `describe` block, own Pro
+ * user, so the pre-existing strategy can be created through the real
+ * `createStrategy` path rather than a raw INSERT.
+ */
+describe.skipIf(!env)('insertStrategyAndVersion — isDefaultStrategy=true rejected for a user with an existing NON-default strategy (live DB)', () => {
+  let db: Client;
+  let user: TestAuthUser;
+
+  beforeAll(async () => {
+    if (!env) return;
+    db = await connectAsOwner(env);
+    user = await createTestAuthUser(env, 'strategy-repo-default-vs-nondefault');
+    await setPlan(db, user.id, 'pro'); // real, user-created strategy needs Pro
+  }, 30_000);
+
+  afterAll(async () => {
+    if (!env) return;
+    await cleanupUser(db, user.id);
+    await deleteTestAuthUser(env, user.id).catch(() => {});
+    await db.end();
+  });
+
+  it('a real, user-created, non-default strategy already existing is enough to reject isDefaultStrategy=true — the gap this slice closes', async () => {
+    const real = await createStrategy({ userId: user.id, name: 'My ICT setup', fields: [], triggers: [] });
+    expect(real.version).toBe(1);
+
+    await expect(
+      createStrategy({ userId: user.id, name: 'Should never be created', fields: [], triggers: [], isDefaultStrategy: true }),
+    ).rejects.toThrow(DefaultStrategyAlreadyExistsError);
+
+    const rows = await db.query<{ name: string; is_default: boolean }>(
+      'select name, is_default from retrospeq.strategies where user_id = $1',
+      [user.id],
+    );
+    expect(rows.rows).toHaveLength(1); // no inappropriate "default" strategy created
+    expect(rows.rows[0]).toMatchObject({ name: 'My ICT setup', is_default: false });
+  });
+
+  it('an ARCHIVED strategy also counts as "already has a strategy" — the check is state-independent, per this slice\'s own dispatch ("any state")', async () => {
+    const user2 = await createTestAuthUser(env!, 'strategy-repo-default-vs-archived');
+    await setPlan(db, user2.id, 'pro');
+    try {
+      const archived = await createStrategy({ userId: user2.id, name: 'Old, abandoned setup', fields: [], triggers: [] });
+      await db.query(`update retrospeq.strategies set state = 'archived' where id = $1`, [archived.strategyId]);
+
+      await expect(
+        createStrategy({ userId: user2.id, name: 'Should never be created', fields: [], triggers: [], isDefaultStrategy: true }),
+      ).rejects.toThrow(DefaultStrategyAlreadyExistsError);
+
+      const rows = await db.query<{ c: string }>('select count(*)::text as c from retrospeq.strategies where user_id = $1', [
+        user2.id,
+      ]);
+      expect(rows.rows[0].c).toBe('1'); // still just the archived one
+    } finally {
+      await cleanupUser(db, user2.id);
+      await deleteTestAuthUser(env!, user2.id).catch(() => {});
+    }
   });
 });
 
@@ -596,6 +665,79 @@ describe.skipIf(!env)('insertStrategyAndVersion — GENUINE two-connection cap-r
         [user.id],
       );
       expect(Number(finalCount.rows[0].c)).toBe(1); // exactly the raw connection's winner, never 2
+    },
+    30_000,
+  );
+});
+
+describe.skipIf(!env)('insertStrategyAndVersion — GENUINE two-connection default-strategy race proof (live DB)', () => {
+  let db: Client;
+  let user: TestAuthUser;
+
+  beforeAll(async () => {
+    if (!env) return;
+    db = await connectAsOwner(env);
+    user = await createTestAuthUser(env, 'strategy-repo-default-race');
+  }, 30_000);
+
+  afterAll(async () => {
+    if (!env) return;
+    await cleanupUser(db, user.id);
+    await deleteTestAuthUser(env, user.id).catch(() => {});
+    await db.end();
+  });
+
+  /**
+   * Module 08 §5.4 slice's own required "genuine concurrency" proof: two
+   * accounts syncing at once for the SAME brand-new user, both racing to
+   * create the silent default strategy. Same technique as the cap-race
+   * test immediately above (advisory-lock contention via a real second
+   * connection, `waitForBlockedQuery` polling `pg_stat_activity`, never a
+   * fixed-timeout sleep) — proves `insertStrategyAndVersion`'s new
+   * `not exists (select 1 from strategies ...)` check for the
+   * `isDefaultStrategy: true` path is genuinely race-safe, not merely
+   * correct in the common (non-racing) case. This user is deliberately
+   * left on the FREE plan (never `setPlan`'d to Pro) — §5.4's default
+   * strategy is specifically the free-tier path, and `isDefaultStrategy:
+   * true` bypasses the entitlement check regardless of plan.
+   */
+  it(
+    'a real second connection holding the SAME advisory lock plus an uncommitted extra strategy for this user forces the real insertStrategyAndVersion(isDefaultStrategy=true) call to genuinely block, then correctly lose — DefaultStrategyAlreadyExistsError, never two strategies',
+    async () => {
+      const raceConn = new Client({ connectionString: env!.SUPABASE_DB_URL });
+      await raceConn.connect();
+      try {
+        await raceConn.query('begin');
+        await raceConn.query('select pg_advisory_xact_lock(hashtext($1::text))', [user.id]);
+        await raceConn.query(
+          `insert into retrospeq.strategies (user_id, name, current_version, is_default, state)
+           values ($1, 'Race winner (raw) -- e.g. account A''s sync', 1, false, 'active')`,
+          [user.id],
+        );
+
+        const createPromise = insertStrategyAndVersion({
+          userId: user.id,
+          name: 'Race loser (should be rejected) -- account B\'s sync',
+          fields: [],
+          triggers: [],
+          isDefaultStrategy: true,
+          capLimit: null,
+        });
+
+        await waitForBlockedQuery(db, '%select pg_advisory_xact_lock%');
+
+        await raceConn.query('commit');
+
+        await expect(createPromise).rejects.toThrow(DefaultStrategyAlreadyExistsError);
+      } finally {
+        await raceConn.end();
+      }
+
+      const finalRows = await db.query<{ c: string }>(
+        `select count(*)::text as c from retrospeq.strategies where user_id = $1`,
+        [user.id],
+      );
+      expect(Number(finalRows.rows[0].c)).toBe(1); // exactly the raw connection's winner, never 2
     },
     30_000,
   );
