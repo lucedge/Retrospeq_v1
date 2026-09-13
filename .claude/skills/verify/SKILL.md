@@ -7,12 +7,13 @@ description: Right-sized verification for a Retrospeq change — classify its ri
 
 Every change gets exactly the checks its risk warrants — no more. Tier comes from the files touched (`npm run classify`, exit code = tier); the orchestrator can raise a tier by judgment, never lower it.
 
-| Tier | Touches | Deterministic (`npm run verify`) | Agents |
-|---|---|---|---|
-| 0 | docs, ledger, `.claude/`, spec modules, config comments | `ledger-check` | none — commit |
-| 1 | `.tsx` markup, CSS, copy, tests, e2e specs, brand assets | + tsc, eslint, unit (non-live) | none — coder's own self-check + `npm run e2e:changed` |
-| 2 | `lib/` or `app/` logic not in tier 3, scripts | + live-DB unit tests | `retrospeq-tester`; `retrospeq-qa` only if a non-negotiable surface changed (home, review, close-out, rules UI, notifications, analytics↔rules) |
-| 3 | migrations, `lib/supabase`, auth, broker/credentials, rule evaluator/catalogue, entitlements, rate-limit, privacy, any `actions.ts` | + `check:security` | `retrospeq-tester` → then `retrospeq-security-reviewer` **and** `retrospeq-qa` in parallel |
+| Tier | Touches | `npm run verify` runs (scoped to touched dirs) | E2E | Agents |
+|---|---|---|---|---|
+| 0 | docs, ledger, `.claude/`, spec modules, config comments | `ledger-check` | none | none — commit |
+| 1 | `.tsx` markup, CSS, copy, tests, e2e specs, brand assets | + tsc, eslint on changed files, unit tests **in touched dirs** | none (screenshot self-check only if a screen visibly changed) | none — commit |
+| 2 | `lib/` or `app/` logic not in tier 3, scripts | + live-DB tests **in touched dirs** | `npm run e2e:changed` only if a route's *behaviour* changed | `retrospeq-tester`; `retrospeq-qa` only if a non-negotiable surface changed (home, review, close-out, rules UI, notifications, analytics↔rules) |
+| 3 | migrations, `lib/supabase`, auth, broker/credentials, rule evaluator/catalogue, entitlements, rate-limit, privacy, any `actions.ts` | + `check:security` | `npm run e2e:changed` | `retrospeq-tester` → then `retrospeq-security-reviewer` **and** `retrospeq-qa` in parallel |
+| phase end | — | `npm run check` + `check:live` + `check:security` | `npm run e2e:changed -- --all` | `/code-review`, `retrospeq-docs` |
 
 Commands (all fast except live/E2E):
 
@@ -27,7 +28,7 @@ npm run test:user -- create <label> | delete <id> | cleanup
 ```
 
 Rules of thumb:
-- The **full** E2E suite is a phase-end thing, not a per-slice thing. Targeted specs per slice.
+- **Nothing runs the whole suite per change.** Unit/live tests are scoped to the touched directories; E2E runs only for changed routes with a spec, and only from tier 2; full suites (`check`, `check:live`, `--all`) are phase-end only.
 - A gate FAIL goes back to `retrospeq-coder` with the finding verbatim; only the failed gate re-runs.
 - Environmental failures (rate limit, shared-DB contention, known broken mailer) are reported as such with evidence, never as a change-caused FAIL and never silently ignored.
 - Screenshots are looked at (`Read` the PNG), not just captured.

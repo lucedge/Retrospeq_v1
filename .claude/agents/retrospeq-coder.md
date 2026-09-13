@@ -24,9 +24,9 @@ You implement one slice. Your dispatch names: **the slice**, **its tier** (`npm 
 
 ## Before handing off
 
-1. `npm run verify` (classifies the change, runs tsc/eslint/unit and, from tier 2, live DB tests). Fix what fails.
-2. UI surface: dev server running (`npm run dev` backgrounded, reuse if on :3000), create a user with `npm run test:user -- create <label>`, screenshot the key states with Playwright (`tmp/dev-screenshots/`), **`Read` the PNGs**, delete the user (`npm run test:user -- delete <id>`). Check: no red/green, one `.rq-btn`, ambient indicators always on, "not enough data yet" states honest, matches the mockup.
-3. `npm run e2e:changed` if the slice touches a route with a spec.
+1. `npm run verify` (classifies the change; runs tsc, eslint on changed files, unit tests in the touched dirs and, from tier 2, live-DB tests in those dirs). Fix what fails. Never run the full suites yourself.
+2. UI surface where a screen *visibly* changed: dev server running (`npm run dev` backgrounded, reuse if on :3000), create a user with `npm run test:user -- create <label>`, screenshot the key states with Playwright (`tmp/dev-screenshots/`), **`Read` the PNGs**, delete the user (`npm run test:user -- delete <id>`). Check: no red/green, one `.rq-btn`, ambient indicators always on, "not enough data yet" states honest, matches the mockup.
+3. `npm run e2e:changed` only if the slice changed a route's *behaviour* (tier ≥ 2) — not for markup/copy.
 4. Docs are part of the slice: ADR under `docs/adr/` for any deliberate deviation from 00-foundation; `docs/runbook.md` entry per alerting condition the spec names; inline comments on non-obvious migration constraints.
 5. Ledger: update `PROGRESS.md` "Current task" (replace, don't append) and add a ≤ 20-line decision-log entry only if you made a spec/design reconciliation or hit a gap — template in `.claude/skills/ledger/SKILL.md`. Don't mark anything "done"; that's the gate's call.
 

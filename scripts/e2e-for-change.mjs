@@ -2,7 +2,7 @@
 // Picks the Playwright spec files that cover the changed app routes, so a
 // slice runs 1–3 spec files instead of all 20 (which trips the sign-in
 // rate limit and takes ~40 min). Falls back to the smoke set for changes
-// with no route of their own. Pass --all for the whole suite.
+// with no route of their own. Pass --all for the whole suite (phase end only).
 import { execSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
@@ -13,7 +13,6 @@ const ROUTE_TO_SPEC = {
   'app/(app)/layout.tsx': ['dashboard', 'rules-list'], 'app/(app)/AppShellNav.tsx': ['dashboard', 'rules-list'],
   'lib/rules': ['rules'], 'lib/review': ['review'], 'lib/ingestion': ['trades'], 'lib/fields': ['fields', 'strateg'], 'lib/onboarding': ['onboarding', 'dashboard'], 'lib/auth': ['auth'],
 };
-const SMOKE = ['dashboard.spec.ts', 'rules-list.spec.ts'];
 const all = process.argv.includes('--all');
 let picked = new Set();
 if (!all) {
@@ -22,7 +21,7 @@ if (!all) {
     if (f.startsWith('e2e/') && f.endsWith('.spec.ts')) picked.add(f.slice(4));
     for (const [prefix, keys] of Object.entries(ROUTE_TO_SPEC)) if (f.startsWith(prefix)) for (const k of keys) specs.filter((s) => s.includes(k)).forEach((s) => picked.add(s));
   }
-  if (!picked.size) SMOKE.forEach((s) => picked.add(s));
+  if (!picked.size) { console.log('e2e: no changed route has a spec — nothing to run'); process.exit(0); }
 }
 const files = all ? [] : [...picked].map((s) => `e2e/${s}`);
 console.log(all ? 'e2e: full suite' : `e2e: ${files.join(' ')}`);

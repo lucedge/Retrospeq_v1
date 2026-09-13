@@ -1,20 +1,33 @@
 #!/usr/bin/env node
-// Runs the deterministic checks a change tier requires, in one command.
+// Runs exactly the deterministic checks a change tier requires — scoped to
+// the directories the change touched, never the whole suite.
 //   npm run verify            → classify the working tree, run that tier's checks
 //   npm run verify -- 2       → force a tier
-// Tier 0: ledger-check. Tier 1: + tsc, eslint, unit (non-live). Tier 2: + live
-// DB unit tests. Tier 3: + security bundle. E2E is run separately and
-// targeted (see .claude/skills/verify/SKILL.md) because it needs the dev server.
+// Tier 0: ledger-check.   Tier 1: + tsc, eslint, unit tests in touched dirs.
+// Tier 2: + live-DB tests in touched dirs only.   Tier 3: + security bundle.
+// E2E is NOT run here: `npm run e2e:changed` runs only when a route with a
+// spec changed behaviour (tier ≥ 2), full suites only at phase end.
 import { execSync, spawnSync } from 'node:child_process';
 
 const forced = process.argv[2];
+const changed = execSync('git diff --name-only HEAD; git ls-files --others --exclude-standard', { encoding: 'utf8' }).split('\n').filter(Boolean);
 let tier;
 if (forced !== undefined) tier = Number(forced);
 else { const r = spawnSync('node', ['scripts/classify-change.mjs'], { encoding: 'utf8' }); process.stdout.write(r.stdout); tier = r.status; }
+
+// Test scope = top-two path segments of every changed source file (lib/rules, app/(app)/rules, …).
+const dirs = [...new Set(changed.filter((f) => /^(lib|app|supabase)\//.test(f)).map((f) => f.split('/').slice(0, 2).join('/')))];
+const scope = dirs.length ? dirs.map((d) => JSON.stringify(d)).join(' ') : '';
+const scopeNote = dirs.length ? ` in ${dirs.join(', ')}` : ' (no source dirs changed → skipped)';
+
 const steps = [['ledger-check', 'node scripts/ledger-check.mjs']];
-if (tier >= 1) steps.push(['tsc', 'npx tsc --noEmit'], ['eslint', 'npx eslint . --max-warnings=1000'], ['unit (non-live)', 'npx vitest run --exclude "**/*.live.test.ts"']);
-if (tier >= 2) steps.push(['unit (live DB)', 'npx vitest run live.test']);
+if (tier >= 1) {
+  steps.push(['tsc', 'npx tsc --noEmit'], ['eslint (changed files)', changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).length ? `npx eslint ${changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).map((f) => JSON.stringify(f)).join(' ')}` : 'true']);
+  if (scope) steps.push([`unit${scopeNote}`, `npx vitest run ${scope} --exclude "**/*.live.test.ts"`]);
+}
+if (tier >= 2 && scope) steps.push([`live DB${scopeNote}`, `npx vitest run live.test ${scope} --maxWorkers=2`]);
 if (tier >= 3) steps.push(['security bundle', 'npm run check:security']);
+
 let failed = false;
 for (const [name, cmd] of steps) {
   const t = Date.now();

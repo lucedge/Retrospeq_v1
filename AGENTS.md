@@ -61,7 +61,7 @@ Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout
 
 - **Risk tiers, not one pipeline.** `npm run classify` → tier 0–3 from files touched. Tier 0–1 (docs, markup, CSS, tests): coder self-check + `npm run verify`, commit. Tier 2 (logic): + `retrospeq-tester`, + `retrospeq-qa` only on non-negotiable surfaces. Tier 3 (schema/RLS/auth/credentials/rule engine/entitlements/rate-limit/privacy/`actions.ts`): + `retrospeq-security-reviewer` (blocking) and `retrospeq-qa` in parallel.
 - **Deterministic before deliberative.** `npm run check` / `check:live` / `check:security` / `e2e:changed` / `verify`; `.githooks/pre-commit` runs ledger-check + eslint. Agents interpret script output; they don't re-derive it.
-- **Commit after every gate PASS.** Full E2E suite only at phase ends.
+- **Scoped, not full.** `verify` runs tests only in the directories touched; E2E only for changed routes from tier 2; the full unit/live/E2E suites are phase-end only. Commit after every gate PASS.
 - **Testing bar** (00-foundation §9): 90% lines on grouping/rule/statistics engines, 70% overall; property tests on grouping + rule-evaluation invariants; RLS isolation on 100% of tables; E2E core flow + one failure path per module; golden-fixture replay for anything touching grouping.
 - **Docs are part of a slice** (00-foundation §12): ADR per deliberate deviation (`docs/adr/`), runbook entry per alerting condition, inline comments on non-obvious migration constraints. qa checks; coder writes.
 - **Ledger is ≤ 200 lines** (`PROGRESS.md`; history in `docs/ledger/`). A gate isn't done until its own ≤ 20-line entry is written (`.claude/skills/ledger/SKILL.md`) — sessions get cut off.
