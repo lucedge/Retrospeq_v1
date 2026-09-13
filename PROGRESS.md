@@ -22,7 +22,7 @@ Cross-cutting follow-ups (details in `docs/infra-gaps.md`): `lib/privacy/export.
 
 ## Current task
 
-**2026-09-14 — Design program started** (`docs/design-program.md`): step 0 `/design-explore` Round 1 (owner judges), step 1 screen inventory, steps 2–3 end-to-end mockups from the real CSS in six batches + brand kit (landing, 5 emails, social/OG/PWA, guidelines + voice). Direction: keep `brand/` unless the owner locks a new one in step 0. Remaining features resume after the program; the mockups become the UI-phase backlog.
+**2026-09-14 — Design program started** (`docs/design-program.md`): step 0 `/design-explore` Round 1 published (artifact f6335aef; owner judging), step 1 screen inventory DONE (`brand/docs/inventory.md`: 7 batches, ~75 screen states, design-system gap list), steps 2–3 end-to-end mockups from the real CSS in six batches + brand kit (landing, 5 emails, social/OG/PWA, guidelines + voice). Direction: keep `brand/` unless the owner locks a new one in step 0. Remaining features resume after the program; the mockups become the UI-phase backlog.
 
 ## Next up (after the design system)
 
