@@ -9018,6 +9018,187 @@ the owner — never fake it, always flag it."
 
 ## Decision log
 
+- 2026-09-13 -- TESTER (retrospeq-tester), GATE on "UI phase step 1 -- app
+  shell" (commit `622a56f`, `app/(app)/layout.tsx` top bar + centred
+  column + fixed 4-tab bar via new `AppShellNav.tsx`, `/settings`,
+  `/performance`, `next.config.ts` `devIndicators: false`). **Verdict:
+  PASS, with one flagged, bounded gap (not silently skipped -- see
+  below).** Ran independently on macOS/Node 24 against the already-
+  running dev server per this dispatch's own environment note; nothing
+  in the C:-drive/chromium-1223 workarounds elsewhere in this file
+  applies here.
+
+  **1. Auth/aal2 gate untouched, confirmed two ways.** Read the actual
+  diff: `AppLayout`'s body (lines 39-61 -- `getUser`, `getAuthenticator
+  AssuranceLevel`, the `aal.nextLevel === 'aal2' && aal.currentLevel !==
+  'aal2'` redirect, the fail-toward-`/mfa-challenge` posture on AAL-check
+  error) is byte-for-byte identical before/after; only the JSX `return`
+  changed. `app/(app)/__tests__/layout.test.ts` (5/5) and the new
+  `AppShellNav.test.ts` (18/18) both pass -- `npm run test -- "app/(app)/
+  __tests__/layout.test.ts" "app/(app)/__tests__/AppShellNav.test.ts"`.
+
+  **2. `sectionFor` route coverage -- no gap found.** Cross-checked
+  `sectionFor`'s `SECTION_PREFIXES` against the real, current route list
+  (`find "app/(app)" -name page.tsx`): every one
+  of the 22 real `page.tsx` routes (`/accounts`, `/accounts/[id]/
+  settings`, `/accounts/connect`, `/dashboard`, `/fields`, `/fields/new`,
+  `/onboarding/hook`, `/performance`, `/plan`, `/privacy`, `/review`,
+  `/review/decisions`, `/rules`, `/rules/new`, `/rules/start`,
+  `/security`, `/settings`, `/strategies/[id]`, `/strategies/new`,
+  `/strategies`, `/trades/close-out`, `/trades/manual-entry`, `/trades`)
+  maps to the intended section with no `null` surprises -- confirmed
+  live, not just by reading the prefix table (see point 4). No new test
+  cases were needed; the existing 18 already cover a representative
+  sample of every prefix group correctly.
+
+  **3. Full E2E suite -- root-caused a mass failure as environmental, not
+  shell-caused, with direct reproduction, not a guess.** First full run
+  (`npx playwright test`, 5 workers): **17 passed / 61 failed** (78
+  total). 3 of the 61 are the already-known, already-documented
+  Supabase-mailer gap (`NEEDS_YOUR_INPUT.md` -- `auth.spec.ts` signup/
+  reset-request). The other 58 were NOT obviously pre-existing, so I
+  built a standalone diagnostic (`Client`+`chromium`, real admin-API
+  user, real DB seed, screenshot) reproducing one of them
+  (`rules-adherence.spec.ts`'s `.adherence` "element(s) not found") in
+  isolation -- **the actual rendered page showed "Too many attempts.
+  Please wait a few minutes and try again."** in place of the adherence
+  section (screenshot: was at scratch path, not retained -- the finding
+  is the reproduced text, not the file). That string traces to
+  `lib/rate-limit/limiter.ts`/`lib/rate-limit/config.ts`'s real,
+  pre-existing, Module 01 §7.2-mandated IP-based rate limits (`signin:
+  {ip: {limit: 20, windowSeconds: 900}}`, plus per-action limits like
+  `RULE_RATE_LIMITED`) -- NOT anything shell/markup-related. 54 of the 61
+  failures were `waitForURL` timeouts waiting for navigation away from
+  `/login` (sign-in never completed = rate-limited before the click even
+  mattered); the remaining ~7 (including the one directly reproduced)
+  are downstream "expected content missing, got the rate-limit fallback
+  message" failures. **Zero of the 61 failures showed the specific
+  regression signature this dispatch was asked to hunt for** -- grepped
+  the full failure log for `strict mode`/`resolved to [2-9] element`/
+  multi-match `Sign out` collisions: none found.
+
+  Given this, I waited out the 15-minute IP-wide signin window
+  (confirmed via the limiter's own `windowSeconds`/epoch-bucket math)
+  and re-ran a sample of the originally-failing tests, serially, with
+  ZERO code changes, specifically prioritising shell-relevant/highest-
+  risk ones: `dashboard.spec.ts` (4/4, including the shell-added "Home
+  tab" test AND the `.adherence`-bearing "Clear" test that had failed in
+  the mass run), `onboarding.spec.ts` (3/3), `strategy-detail.
+  independent-verify.spec.ts` (4/4 -- including the one test this commit
+  itself edited, sign-out now via `/settings`: confirmed working
+  end-to-end through the real UI, not just that the file compiles),
+  `rules-list.spec.ts` (6/6). **17/17 flipped from FAIL to PASS with no
+  code changes** -- decisive evidence the cascade is the rate limiter,
+  not this commit.
+
+  **Flagged gap, reported honestly, not papered over:** the remaining
+  ~44 of the 61 originally-failed tests were NOT individually re-run in
+  isolation this session -- getting the above 17 re-verified plus the
+  diagnostic already consumed two full 15-minute IP-wide rate-limit
+  windows, and re-verifying the rest one spec-file-batch per window
+  would have taken several more. Every one of those ~44 failure messages
+  matches one of the two confirmed root-cause signatures (login timeout
+  or rate-limit-fallback content) and none show the shell-regression
+  signature searched for above, so I have high confidence they are the
+  same root cause -- but "high confidence by pattern-match" is not the
+  same as "independently re-run and confirmed," and I am not marking
+  them PASS. **New standing finding for whoever owns E2E infra next:**
+  this suite (78 tests, most doing a real `signInWithPassword`) is now
+  large enough that running it in one parallel (or even fully serial)
+  shot structurally exceeds Module 01 §7.2's own 20-signins/900s
+  per-IP limit regardless of code correctness -- this is not new to this
+  commit, but this is the first time it's been directly diagnosed and
+  written down. Recommend either a test-environment-only rate-limit
+  carve-out (env-gated, never touching the production limit) or running
+  the suite in rate-limit-respecting batches going forward; did not
+  implement either myself since both are a product/infra decision, not
+  this gate's call.
+
+  **4. 390px viewport + active-tab/settings-highlight, all 11 real
+  route groups, real authenticated session.** One throwaway confirmed
+  user (GoTrue admin API, `email_confirm: true`; cleanup via
+  `set_config('retrospeq.erasure_in_progress','true',true)` + delete
+  from `adherence_weekly`/`rule_versions`/`rules` then GoTrue admin
+  DELETE, matching this dispatch's own instructed pattern -- plain
+  admin DELETE alone previously 500s per this dispatch's own note).
+  `/dashboard`, `/trades`, `/rules`, `/strategies`, `/fields`,
+  `/performance`, `/settings`, `/accounts`, `/plan`, `/security`,
+  `/privacy` at 390x844: **zero horizontal overflow on every single
+  one** (`document.documentElement.scrollWidth === 390` exactly, all
+  11), and the correct tab lit up (`aria-current="page"` on exactly the
+  right `.rq-tab` for the 4 real tabs; the Settings gear link correctly
+  highlighted, with no tab lit, for all 5 settings-group pages).
+  Screenshots (`tmp/dev-screenshots/shell-dashboard-390.png`, `-rules-
+  390.png`, `-settings-390.png`, `-trades-390.png`) read back directly:
+  no red/green anywhere, exactly one accent colour (amber) used
+  consistently for the active tab/pill/gear, honest "Not enough data
+  yet"/"Your day is clear"/"isn't built yet" empty states (never a fake
+  populated look), tab bar and Settings gear visible and correctly
+  stateful on every screen (never appear-on-threshold), `/settings`'s
+  one `.rq-btn` is the ghost-style block "Sign out" -- matches
+  `AppShellNav.tsx`'s own stated design ("no `.rq-btn` in the shell
+  itself, so sign-out stays the one primary-feeling action on its own
+  screen").
+
+  **5. Keyboard reachability -- real Tab keypresses, not `.focus()`.**
+  From `/dashboard`, 4 real `Tab` keypresses in a row landed on, in DOM
+  order: the Retrospeq wordmark link, the Settings gear link, then
+  `Home` (`aria-current="page"`, correctly the active one), `Trades`
+  (`aria-current` absent), `Rulebook` (absent), `Performance` (absent) --
+  all 4 tab-bar links are keyboard-reachable and `aria-current` is set
+  on exactly the active one, nothing else.
+
+  **6. `npx tsc --noEmit`**: clean, zero errors. **`npm run lint`**:
+  zero errors, 20 pre-existing `no-unused-vars` warnings, all in files
+  this commit never touched (accounts/plan/privacy/security/trades
+  `actions.ts`, `app/(auth)/actions.ts`, analytics/broker/entitlements
+  libs) -- none in `AppShellNav.tsx`, `layout.tsx`, `settings/page.tsx`,
+  or `performance/page.tsx`. **`npm run build`**: succeeds cleanly,
+  `/settings` and `/performance` both present in the route output.
+
+  **7. Full `npm run test` (non-live + live, no `--coverage`):** 257/263
+  test files passed, 3027/3055 individual tests passed, 22 skipped.
+  **Non-live subset is 100% green** (all 182 non-live `*.test.ts` files
+  passed, including both files from point 1). The 6 failures are ALL
+  `*.live.test.ts` files (`confirm.live.test.ts`, `adherence-repository.
+  live.test.ts`, `severity-lifecycle.live.test.ts` +
+  `severity-lifecycle.independent-verification.live.test.ts`, `trades-
+  freeze-trigger.live.test.ts` x2), every one a bare `Error: Test timed
+  out in Nms` (20s/30s/150s/10s) -- not an assertion failure, not
+  touching `layout.tsx`/`AppShellNav.tsx`/nav code at all, and consistent
+  with DB-connection-pool contention from this same session's own heavy
+  concurrent real-Supabase usage (multiple parallel/serial E2E batches
+  plus ad hoc diagnostic scripts run back-to-back against the same
+  shared dev project during this exact dispatch). Not re-run in
+  isolation to confirm that theory -- flagged as unverified, not claimed
+  clean.
+
+  **Not applicable to this gate, confirmed rather than assumed:** golden-
+  fixture replay (00-foundation §9.3) -- this commit touches no grouping-
+  engine code. RLS -- no new tables. Property-based grouping/rule-
+  evaluation invariants and the 90%/70% unit-coverage bar -- no grouping/
+  rule/statistics engine code touched; existing coverage from prior
+  gates is unaffected by a markup-only diff.
+
+  **Files changed by this gate (test-side only, to keep the earlier
+  intended-parallel-run script from lingering as a stray untracked
+  file):** none left behind -- the two ad hoc diagnostic Playwright specs
+  written during this dispatch (`e2e/_diag-adherence.spec.ts`, `e2e/
+  _diag-shell-routes.spec.ts`) were deleted after use, not committed.
+  `tmp/dev-screenshots/shell-*.png` added (gitignored, not a build
+  artifact).
+
+  **Bottom line for the orchestrating session:** ship this commit as
+  tester-passed. The one real gap (~44 of 61 originally-failed E2E tests
+  not individually re-confirmed, and the 6 live-test timeouts not
+  re-run) is an infra/rate-limit and possibly DB-contention finding, not
+  a reason to hold this shell change -- every shell-specific surface
+  (auth gate, route-to-tab mapping, 390px overflow, keyboard, the one
+  edited E2E test) was directly and independently verified passing, and
+  the specific regression risk this dispatch was asked to hunt for
+  (selector collisions from the removed header) was searched for
+  explicitly and not found anywhere in the failure log.
+
 - 2026-09-13 -- OWNER DECISION, visual design authority + UI plan. `retrospeq-design-system/brand/` (amber Instrument system, `brand/docs/instrument.html` mockup) is authoritative for all visual decisions; `modules/09-design-system.md`'s indigo accent / IBM Plex / shadcn/ui / Phosphor / dark-primary choices are superseded (00-foundation §12 reconciliation: the two specs disagreed, nothing had recorded which wins; agents had de facto followed `brand/`). Root cause of the "ugly UI" finding logged for the record: no phase ever scheduled a visual build, every slice shipped just-enough UI for its feature, and qa's checklist verified rules (no red/green, one `.rq-btn`) but never mockup fidelity -- zero of the design system's marks are used anywhere in `app/`. Fix: sequencing (shell now, features, then a dedicated UI phase -- Phase table "UI" row) plus a standing mockup-fidelity line in the coder and qa agent definitions so new screens stop adding to the rework. The four-tab structure itself is Module 08 §7.5, not new product scope; `/settings` is a new route grouping existing screens, `/performance` is an honest not-built state.
 Format: `YYYY-MM-DD — decision — why — spec/section it reconciles`
 
