@@ -11,7 +11,7 @@ Input: files/glob or a route (`/review` → `app/(app)/review/**` + its componen
 ## Procedure
 1. Read `.claude/skills/design-build/references/retrospeq-rules.md` (hard rules 1–20) and `references/vercel-wig.md` (pinned rules + overrides). Read the files under audit in full.
 2. **Static pass** — apply, in this order: product hard rules → WCAG 2.2 AA → forms/focus/motion/typography/content (WIG) → React/Next (checklist section) → performance budget for that surface. `node scripts/security-grep.mjs` covers raw red/green hex and logged secrets mechanically; run it.
-3. **Rendered pass** (whenever a screen is involved): dev server on :3000 → `npm run test:user -- create audit` → Playwright screenshots at 390×844 light and dark, 1280 light, of each state you can reach → **`Read` every PNG** → compare with the `instrument.html` counterpart (screen map in `retrospeq-rules.md`) → delete the user. Check: layout and hierarchy match the mockup; marks present where the mockup has them; nothing red/green; one `.rq-btn`; gauges visible; no horizontal overflow; text readable at 390.
+3. **Rendered pass** (whenever a screen is involved): dev server on :3000 → `npm run test:user -- create audit` → Playwright screenshots at 390×844 light and dark, 1280 light, of each state you can reach → **`Read` every PNG** → compare with the frame named in `brand/docs/inventory.md` (`brand/docs/screens/<batch>.html#<row>`) → delete the user. Check: layout and hierarchy match the mockup; marks present where the mockup has them; nothing red/green; one `.rq-btn`; gauges visible; no horizontal overflow; text readable at 390.
 4. **Keyboard pass** for any new flow: Tab order reaches every control, focus visible, Enter/Space activate, Escape closes sheets.
 
 ## Output

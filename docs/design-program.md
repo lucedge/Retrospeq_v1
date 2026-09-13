@@ -24,3 +24,20 @@ Owner-directed. Runs through `.claude/skills/design-build` / `design-audit` / `d
 
 ## Cost posture
 Batches are static HTML, no agents unless a batch touches app code. Tier 0/1 throughout. Owner reviews artifacts; no full-suite runs.
+
+## Status 2026-09-14 — complete. What the UI phase has to work with
+
+| Need | Where | State |
+|---|---|---|
+| Every screen and state, as real-class markup | `brand/docs/screens/{home-onboarding,trades,rulebook,review-performance,account}.html` (76 frames, light + dark toggle) | ✔ |
+| The backlog: route · state · spec § · frame · built? | `brand/docs/inventory.md` | ✔ (mark rows ● as slices land) |
+| The rules, in one page | `brand/docs/guidelines.html`; distilled for agents in `.claude/skills/design-build/references/retrospeq-rules.md` | ✔ |
+| The stylesheet the app already loads | `brand/css/*` → copies `public/brand/`, `app/brand-tokens/` (re-sync after any edit) | ✔ in sync |
+| Build / audit procedure | `/design-build`, `/design-audit` (+ merged checklist, pinned Vercel WIG, motion) | ✔ |
+| Renders for review | `brand/scripts/render.mjs <screens.html>` → `docs/renders/` (gitignored); `render-assets.mjs` for social/OG/PWA | ✔ |
+| Brand surfaces | `docs/landing.html`, `templates/email/`, `templates/social/`, `templates/pwa/` | ✔ (`TODO(owner)`: price, domain) |
+| Review bundle for the owner | artifact ef9a9768-f63d-4baa-be67-9d15384c065d (republish from `brand/` after changes) | ✔ |
+
+Removed as superseded (2026-09-14, owner instruction): `retrospeq-design-system/explorations/` (rejected Round 1), `retrospeq-design-system/.claude/skills/` (older duplicate of the external skills), `~/Workspace/design-mockups/` (sample skill mockups), and the three interim review artifacts. `brand/docs/instrument.html` stays as the original sketch, marked superseded.
+
+How a UI slice runs now (measured on the first one, Module 08 calibration, 2026-09-14): brief → `retrospeq-coder` with the frame id → `npm run verify` (tier 1: tsc + eslint + scoped unit) + the one E2E file that pins the route + screenshots read + `design-audit` static pass → commit. 17 min wall clock, one agent (186K tokens, 65 tool calls), zero review agents. The same class of change took ~3 h and four agents on 2026-09-13.

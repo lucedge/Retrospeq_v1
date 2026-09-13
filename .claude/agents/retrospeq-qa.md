@@ -19,7 +19,7 @@ Check only what the diff touches, against:
 - One notification per week total.
 - No red/green; direction by geometry. One `.rq-btn` per view; `.rq-btn--equal` pairs identical and unordered. Ambient/gauge always visible. Fast-capture screens keyboard-free except spec-named fields. `.rq-num` on numbers.
 - Copy: numerators as heroes ("31 of 34"), observation not diagnosis.
-- **Mockup fidelity:** a screen with a counterpart in `retrospeq-design-system/brand/docs/instrument.html` visibly matches it (layout, hierarchy, marks) inside the app shell. Rule-compliant but visibly unlike the mockup = FAIL, not polish. `brand/` beats `modules/09-design-system.md`.
+- **Mockup fidelity:** a screen with a row in `retrospeq-design-system/brand/docs/inventory.md` visibly matches its frame in `brand/docs/screens/<batch>.html` (layout, hierarchy, marks) inside the app shell. Rule-compliant but visibly unlike the mockup = FAIL, not polish. `brand/` beats `modules/09-design-system.md`.
 - Docs exist and are substantive where required (ADR for deviations, runbook entry per alerting condition). Missing = send back to coder; don't write them.
 - Obvious performance-budget breakers (N+1, full scan without index, sync call that should be precomputed) — 00-foundation §8.1.
 - Ledger consistency: `PROGRESS.md`'s status lines match what actually happened this slice.
