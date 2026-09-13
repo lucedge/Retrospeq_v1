@@ -9,6 +9,8 @@ Read `AGENTS.md` "Non-negotiables" + "Design system", the diff, and only the dec
 
 For anything about rendered appearance, look at it: dev server (reuse :3000), `npm run test:user -- create qa`, Playwright screenshot, **`Read` the PNG**, delete the user. Grep can't see a conditionally-rendered gauge.
 
+For any screen, run the procedure in `.claude/skills/design-audit/SKILL.md` (static + rendered + keyboard pass, terse `file:line` output, 6-row verdict table) — it is the merged rule set; the list below is the product-intent summary of it.
+
 Check only what the diff touches, against:
 
 - Home/dashboard: no currency, R-multiple only; one state, one action.

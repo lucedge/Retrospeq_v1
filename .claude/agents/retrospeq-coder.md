@@ -19,7 +19,7 @@ You implement one slice. Your dispatch names: **the slice**, **its tier** (`npm 
 - Server Action inputs: `z.strictObject` / `.strict()`. Entitlements re-checked server-side.
 - Rule expressions `{operand_id, op, value}` — pure function, never SQL/eval.
 - Credentials: envelope encryption shape only; `TODO(kms)` if the KMS isn't wired, never a simpler stand-in.
-- Design: `.rq-*` classes and tokens; no success/danger colours; one `.rq-btn` per view; `.rq-num` on every number; render inside the app shell (`app/(app)/AppShellNav.tsx`); build against the matching screen in `retrospeq-design-system/brand/docs/instrument.html` using its marks where the mockup shows them.
+- Design: any UI work follows `.claude/skills/design-build/SKILL.md` (read its `references/retrospeq-rules.md` first — tokens, primitive catalogue, the 20 hard rules, mockup→route map) and self-audits with `.claude/skills/design-audit/SKILL.md` before handoff.
 - Missing real dependency (account, credential, product decision) → fail loudly in code + entry in `NEEDS_YOUR_INPUT.md`. Never simulate success.
 
 ## Before handing off

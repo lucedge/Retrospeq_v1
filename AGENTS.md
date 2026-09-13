@@ -55,7 +55,7 @@ RLS + a real policy on **every** table, tested · broker credentials envelope-en
 
 ## Design system
 
-Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout.tsx` (`.rq-btn`, `.rq-h1`, `.rq-num`, `.rq-row`, marks, tab bar) and `app/brand-tokens/tailwind.css` (`bg-bg`, `text-ink`, `border-line`, …). `public/brand/` and `app/brand-tokens/` are **copies** of `retrospeq-design-system/brand/` — edit the source, re-sync all three. Rules that look like bugs: one `.rq-btn` per view; `.rq-btn--equal` pairs have no primary; gauges/ambient strip always visible; ratings are dots, values are steppers, nothing on a fast-capture screen takes a keyboard; `.rq-num` on every number. Every screen lives inside the app shell (`app/(app)/AppShellNav.tsx`, four tabs, phone-width column) and is built against its `instrument.html` counterpart.
+Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout.tsx` (`.rq-btn`, `.rq-h1`, `.rq-num`, `.rq-row`, marks, tab bar) and `app/brand-tokens/tailwind.css` (`bg-bg`, `text-ink`, `border-line`, …). `public/brand/` and `app/brand-tokens/` are **copies** of `retrospeq-design-system/brand/` — edit the source, re-sync all three. Rules that look like bugs: one `.rq-btn` per view; `.rq-btn--equal` pairs have no primary; gauges/ambient strip always visible; ratings are dots, values are steppers, nothing on a fast-capture screen takes a keyboard; `.rq-num` on every number. Every screen lives inside the app shell (`app/(app)/AppShellNav.tsx`, four tabs, phone-width column) and is built against its `instrument.html` counterpart. **UI work goes through the skills**: `/design-build` (build/restyle; its `references/retrospeq-rules.md` is the distilled authority), `/design-audit` (review), `/design-explore` (owner-invoked only). External UI/UX skills are installed at `~/Workspace/design-skills/` (provenance + security notes in its README); the repo skills vendor what they need and work without it.
 
 ## How work flows (details: `docs/process.md`, `.claude/skills/verify/SKILL.md`)
 
@@ -69,7 +69,7 @@ Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout
 
 ## Subagents
 
-`retrospeq-orchestrator` (entry point for `/loop` and cold resumes) · `retrospeq-coder` · `retrospeq-tester` · `retrospeq-security-reviewer` · `retrospeq-qa` · `retrospeq-docs`. Definitions in `.claude/agents/`; skills `/slice`, `/verify`, `/ledger` in `.claude/skills/`. Six roles is deliberate (`docs/process.md`).
+`retrospeq-orchestrator` (entry point for `/loop` and cold resumes) · `retrospeq-coder` · `retrospeq-tester` · `retrospeq-security-reviewer` · `retrospeq-qa` · `retrospeq-docs`. Definitions in `.claude/agents/`; skills `/slice`, `/verify`, `/ledger`, `/design-build`, `/design-audit`, `/design-explore` in `.claude/skills/`. Six roles is deliberate (`docs/process.md`).
 
 ## Known infra gaps (build against the interfaces, don't block)
 
