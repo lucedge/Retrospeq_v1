@@ -224,7 +224,7 @@ describe.skipIf(!env)('Module 04 Slice 6 — adherence_weekly materialisation (l
         top_break_count: 2,
       });
     },
-    30_000,
+    300_000, // remote dev DB ~120ms RTT; pipeline of many sequential round trips (2026-09-14)
   );
 
   it(
@@ -273,7 +273,7 @@ describe.skipIf(!env)('Module 04 Slice 6 — adherence_weekly materialisation (l
       expect(targetWeek).toMatchObject({ hardFollowed: 1, hardTotal: 1 });
       expect(nextWeek).toMatchObject({ hardFollowed: 1, hardTotal: 1 });
     },
-    30_000,
+    300_000, // remote dev DB ~120ms RTT; pipeline of many sequential round trips (2026-09-14)
   );
 
   it(

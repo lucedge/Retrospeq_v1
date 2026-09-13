@@ -22,7 +22,7 @@ Cross-cutting follow-ups (details in `docs/infra-gaps.md`): `lib/privacy/export.
 
 ## Current task
 
-**2026-09-14 — Design direction confirmed: `brand/` stays.** Owner compared sample mockups from the original skills (ui-ux-pro-max, bencium controlled, bencium innovative A–J; `~/Workspace/design-mockups/`, artifact 43618c96) against `brand/docs/instrument.html` and chose the existing amber instrument system. UI work now goes through `design-build` / `design-audit` (brand/ as constitution). **Next: the design-system build — owner supplies the process; do not start it autonomously.** Then remaining features, then screens against the mockup.
+**2026-09-14 — Design program started** (`docs/design-program.md`): step 0 `/design-explore` Round 1 (owner judges), step 1 screen inventory, steps 2–3 end-to-end mockups from the real CSS in six batches + brand kit (landing, 5 emails, social/OG/PWA, guidelines + voice). Direction: keep `brand/` unless the owner locks a new one in step 0. Remaining features resume after the program; the mockups become the UI-phase backlog.
 
 ## Next up (after the design system)
 

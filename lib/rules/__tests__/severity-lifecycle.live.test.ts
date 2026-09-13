@@ -272,7 +272,7 @@ describe.skipIf(!env)('Module 04 Slice 7 — severity lifecycle (live DB)', () =
       // Referenced for readability / to avoid an unused-var lint only.
       expect(tradeIds).toHaveLength(25);
     },
-    150_000,
+    600_000, // measured 187s against the remote dev DB (~120ms RTT), 2026-09-14
   );
 
   it(

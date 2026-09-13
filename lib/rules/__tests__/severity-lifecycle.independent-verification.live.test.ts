@@ -540,7 +540,7 @@ describe.skipIf(!env)('Module 04 Slice 7 — INDEPENDENT concurrency verificatio
         expect(row.rows[0].severity).toBe('soft');
         expect(row.rows[0].promoted_at).toBeNull();
       },
-      150_000,
+      600_000,
     );
   });
 });
