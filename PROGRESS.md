@@ -9018,6 +9018,79 @@ the owner — never fake it, always flag it."
 
 ## Decision log
 
+- 2026-09-13 -- SECURITY REVIEW (retrospeq-security-reviewer), GATE
+  (blocking authority) on "UI phase step 1 -- app shell" (commits
+  `622a56f` + `d3dc898`, on top of TESTER's PASS above). **Verdict:
+  PASS.** Ran independently on macOS/Node 24 against the already-running
+  dev server; ignored the ledger's Windows/C:-drive workarounds per this
+  dispatch's own environment note.
+
+  1. **Auth/aal2 gate unchanged and inherited by both new routes,
+  proven not assumed.** `app/(app)/layout.tsx` lines 39-61
+  (`getUser`, `getAuthenticatorAssuranceLevel`, the
+  `aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2'` redirect,
+  fail-toward-`/mfa-challenge` on AAL-check error) is unchanged from the
+  pre-`622a56f` version -- only the JSX below the guard changed. `/settings`
+  and `/performance` are new `page.tsx` files under `app/(app)/`, so they
+  render as `{children}` inside this same layout with no route-local
+  override; confirmed live with unauthenticated curl against the running
+  dev server: `curl -i http://localhost:3000/settings` and `.../performance`
+  both returned `307` to `location: /login`, identical to the
+  already-reviewed `/dashboard` baseline (`curl -i .../dashboard` same
+  result). No bypass exists.
+
+  2. **`AppShellNav.tsx` -- no data leak, no server-only import in the
+  client bundle.** `'use client'` component; its only imports are
+  `next/link` and `next/navigation` (`usePathname`). It receives no
+  props and reads nothing but `window`-derived pathname -- no user data,
+  no Supabase client, no server module. `sectionFor`/`TABS`/
+  `RULEBOOK_LINKS` are static route tables, not data fetched from
+  anywhere. `SettingsLink`/`TabBar`/`RulebookSubnav` render only static
+  labels/icons/hrefs. No new client-reachable data path introduced.
+
+  3. **Sign-out unchanged.** `app/(app)/settings/page.tsx` imports the
+  same `signOut` from `app/(auth)/actions.ts` the old header used
+  (`export async function signOut(): Promise<void> { ... await
+  supabase.auth.signOut(); redirect('/login'); }`, byte-identical to
+  pre-`622a56f`), invoked via `<form action={signOut}>` -- a React
+  Server Action form submission (POST, not a GET link), same mechanism
+  as before, just relocated from the header to `/settings`, which itself
+  sits behind the same auth+aal2 guard verified in (1). No new open-
+  redirect surface (redirect target is the hardcoded `/login`, not
+  derived from any request input) and no CSRF regression vs. the prior
+  form.
+
+  4. **`devIndicators: false` is not security-relevant.** Checked
+  against this repo's actual vendored Next.js docs (per AGENTS.md's "not
+  the Next.js you know" instruction), not assumption:
+  `node_modules/next/dist/docs/01-app/03-api-reference/05-config/
+  01-next-config-js/devIndicators.md` -- this option only hides the
+  dev-mode on-screen route-info badge; the doc states explicitly "Next.js
+  will still surface any compile or runtime errors that were
+  encountered." It is a `next dev`-only visual affordance with no
+  production behaviour and no effect on error overlays/traces.
+
+  5. **Service-role allowlist unaffected.** `grep -rn
+  "withServiceRoleConnection\|createServiceRoleClient"` across all four
+  changed/new files (`app/(app)/layout.tsx`, `app/(app)/AppShellNav.tsx`,
+  `app/(app)/settings/page.tsx`, `app/(app)/performance/page.tsx`):
+  zero hits -- only `createClient` (the ordinary user-scoped Supabase
+  client) appears, in `layout.tsx`'s existing auth guard. No new entry
+  needed in `lib/supabase/__tests__/service-role-inventory.test.ts`'s
+  allowlist. Ran the test itself to confirm the existing allowlist still
+  holds: `npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts`
+  -> 3/3 passed.
+
+  6. **No new env reads, no new request-body/API-route surface, no Zod
+  boundary needed.** This slice adds no Server Action, no API route, and
+  no form beyond the pre-existing `signOut` (which takes no input). The
+  CSS diff (`public/brand/css/components.css` / vendored
+  `retrospeq-design-system/brand/css/components.css`, tab-bar sizing +
+  `env(safe-area-inset-bottom)`) is presentation-only, no security
+  surface.
+
+  No blocking findings. Module's security bar for this slice: clear.
+
 - 2026-09-13 -- TESTER (retrospeq-tester), GATE on "UI phase step 1 -- app
   shell" (commit `622a56f`, `app/(app)/layout.tsx` top bar + centred
   column + fixed 4-tab bar via new `AppShellNav.tsx`, `/settings`,
