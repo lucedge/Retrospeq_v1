@@ -29049,3 +29049,169 @@ evidence-schema.test.ts`, `app/(app)/review/decisions/__tests__/
 decisions-relaxation-integration.live.test.ts`, `e2e/review-decisions-
 relaxation.independent-verify.spec.ts`. No source file under `app/**`/
 `lib/**` was modified by this gate -- test-only.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 7 -- SECURITY REVIEW GATE: PASS. Cleared for retrospeq-qa and commit.
+
+Read `docs/adr/0041-relaxation-decision-recommit-adjust-and-scope.md` in
+full, `00-foundation.md` section 4, and Module 01 section 7.2 before starting, per this
+gates own standing instruction. Verified every item below against actual
+file contents / live test runs this session performed itself -- not
+re-stated from the coders or testers own narrative.
+
+**1. Live median computation (`fetchMedianObserved`,
+`lib/review/decisions/relaxation-evidence-detail.ts:61-74`) -- correctly
+scoped, fully parameterized.** Runs under `withUserConnection(userId, ...)`
+(`lib/supabase/direct.ts:93-98` -- real `SET LOCAL ROLE authenticated` plus
+`request.jwt.claims` resolving `auth.uid()`, genuine RLS enforcement, not
+an application-layer filter). The query itself: `where user_id = $1 and
+rule_id = $2 and server_day >= $3` -- all three bind parameters, no string
+interpolation anywhere in the SQL text. Double-scoped (user AND rule),
+matching this repos own "two independent redundant checks" posture. The
+sibling `fetchRelaxationWindowCounts`
+(`lib/review/prompt-candidates/relaxation-candidates.ts:128-150`) is
+identically parameterized (`user_id = $1 and rule_id = any($2::uuid[]) and
+server_day >= $3`). No cross-user leakage possible into the computed
+median -- confirmed both by static read and by the live cross-user-isolation
+test (item 5 below).
+
+**2. `editRule` write path via `adjustRelaxationDecision` -- the threshold
+is 100% server-computed, client never supplies a number.**
+`RelaxationDecisionCard.tsx:71-78` -- `handleAdjust` calls
+`adjustRelaxationDecision(detail.promptId)` with ONLY the prompt id as
+argument, no value of any kind. Server-side
+(`app/(app)/review/decisions/actions.ts:657-771`): `newValue` is derived
+via `deriveAdjustedValue(facts.operand, facts.rule.op, facts.medianObserved)`
+(`relaxation-operand-map.ts:74-80`) -- `facts` comes entirely from
+`fetchLiveRelaxationFacts`, a fresh server-side re-derivation, never from
+anything the client sent or from stale `review_prompts.payload`.
+`deriveAdjustedValue` clamps into `operand.bounds` via `Decimal`, no eval,
+no string building. `editRule(facts.rule.ruleId, facts.rule.currentVersion,
+newValue)` (action.ts:728) -- `ruleId`/`currentVersion` are both from the
+same live-fetched `facts`, not client input.
+
+Confirmed editRules own ownership/optimistic-concurrency pipeline runs UNMODIFIED and is not
+bypassed: editRule (`app/(app)/rules/actions.ts:309-322`) re-derives its
+OWN session user via its own requireSessionAndRateLimit call (does not
+trust any userId passed in -- there isnt one), re-fetches
+fetchCurrentRuleForEdit(user.id, ruleId) itself, and re-checks
+current.currentVersion !== parsedExpectedVersion.data (lines 364-372) --
+the exact optimistic-concurrency guard Module 04s own review already
+cleared, exercised through this new call path exactly as it would be from
+the /rules UI, not a parallel or weakened copy. Independently confirmed
+live: this sessions own re-run of decisions-relaxation-integration
+.live.test.ts "ADJUST" case shows rule_versions genuinely gaining a new
+row (old superseded, new carrying the derived value) via this real
+pipeline, not a second write path.
+
+**3. markPromptRecommitted/markPromptAdjusted write scope --
+genuinely restricted to the callers own row, nothing else.**
+lib/review/decisions/prompts-repository.ts:224-271 -- both run under
+withUserConnection and both UPDATE ... where id equals dollar-1 and user_id equals dollar-2
+and kind equals relaxation and state equals pending, fully parameterized, RLS-
+backed (review_prompts_owner, for all ... using user_id = auth.uid()
+with check user_id = auth.uid(),
+supabase/migrations/20260911020000_review_graduation_schema.sql:130-134,
+confirmed present and correctly shaped by direct read). No path from
+either function touches any other users row or any rule/table other than
+the one review_prompts row addressed by id plus user_id. Live cross-user
+test confirms this at the application layer too (item 5).
+
+**4. Hard-rule relaxation -- no entitlement/tier shortcut versus the
+/rules edit UI.** Read editRules full body
+(app/(app)/rules/actions.ts:309-470) end to end: zero severity checks
+anywhere in the pipeline (state check, scope check, optimistic-concurrency,
+validateOperandOpValue, checkTierAvailable, tighten-only, satisfiability,
+render, applyRuleEdit) -- a hard rule and a soft rule take the identical
+code path with identical gates. relaxation-candidates.ts's own
+eligibility check (findRelaxationCandidates,
+lib/review/prompt-candidates/relaxation-candidates.ts:164-202) also
+filters only by state active, never severity. No shortcut,
+no bypass -- same entitlement posture as the standalone editor, confirmed
+by static read and independently reproven live (this sessions own re-run
+of the HARD rule live test case: adjust succeeded identically to the
+soft case, severity column unchanged throughout).
+
+**5. Cross-user isolation -- re-verified live, not just re-read.**
+Independently re-ran (this session, real dev Supabase, not reusing the
+testers own run) decisions-relaxation-integration.live.test.ts in full:
+10/10 passed, roughly 160 seconds, including the
+CROSS-USER ISOLATION case (user B calling recommit/adjust against user As
+relaxation prompt both returned REVIEW_PROMPT_NOT_FOUND, the prompt stayed
+pending, rules.current_version stayed unchanged, the real owner could
+still act afterward). All 4 tables this slices new code touches
+(review_prompts, rules, rule_versions, rule_evaluations) independently
+re-confirmed to have RLS enabled plus a real owner policy by direct
+migration read (review_prompts shown in item 3 above;
+rulebook-schema.rls.test.ts already covers the other three per the
+testers own note, not re-litigated here since no new table or policy was
+added this slice).
+
+**6. Rate limiting -- confirmed as the literal first check, by direct
+read, not inference.** recommitRelaxationDecision/
+adjustRelaxationDecision (actions.ts:585-631, 657-771) both open
+with a call to requireSessionAndRateLimit(reviewDecision) before any other
+statement -- requireSessionAndRateLimit (actions.ts:153-165) calls
+enforceRateLimit(scope, ip, user.id) immediately after resolving the
+session, before any DB read of the prompt row. lib/rate-limit/config.ts
+:661-664 -- the reviewDecision scope (25 per hour per IP, 15 per hour per
+email) is the SAME scope Slice 6's accept and defer actions already use,
+confirmed by direct read, not assumed reused.
+
+**7. Injection/parameterization sweep, all new and modified files --
+clean.** Every SQL statement in relaxation-evidence-detail.ts,
+relaxation-candidates.ts (the exported fetchRelaxationWindowCounts),
+and prompts-repository.ts's widened functions uses dollar-sign-numbered
+bind parameters exclusively -- grepped for template-literal SQL
+interpolation across every touched file, zero hits outside one unrelated
+display-string template literal in graduation-evidence-detail.ts (not
+SQL). No eval or new Function anywhere in this slice's diff.
+operand_id values only ever originate from getOperand() (the static
+operand catalogue) or from a rule row already validated at creation time
+-- never client-supplied and used unchecked.
+
+**8. Service-role allowlist -- confirmed no new or unallowlisted call
+site, test run directly.** Grepped every file this slice touches
+(lib/review/decisions/**, app/(app)/review/decisions/**,
+relaxation-candidates.ts, rules-repository.ts, rules/actions.ts) for
+withServiceRoleConnection -- the only hit is
+lib/rules/rules-repository.ts:672 (deleteAllRulesForUser, erasure-only,
+pre-existing from Module 04, already on the allowlist at
+lib/supabase/__tests__/service-role-inventory.test.ts:264 with its own
+prior-dated reasoning -- not introduced or touched by this slice). Ran
+npx vitest run lib/supabase/__tests__/service-role-inventory.test.ts
+myself: 3/3 passed. No allowlist edit was needed -- this slice's own new
+write paths (relaxation-evidence-detail.ts, prompts-repository.ts's new
+functions, actions.ts's new actions) route exclusively through
+withUserConnection or the already-reviewed editRule, confirmed directly,
+not assumed from the coder's note.
+
+**Additional independent verification performed this gate (not just
+re-reading prior gates' claims):**
+- npx tsc --noEmit -- clean.
+- npx vitest run lib/review/decisions/__tests__/relaxation-operand-map.test.ts
+  lib/review/decisions/__tests__/relaxation-evidence-schema.test.ts
+  app/(app)/review/decisions/__tests__/actions.test.ts
+  app/(app)/review/decisions/__tests__/page.test.ts -- 78/78 passed,
+  re-run myself, not taken on faith from the tester's own count.
+- npx vitest run app/(app)/review/decisions/__tests__/decisions-relaxation-integration.live.test.ts
+  -- 10/10 passed, real dev Supabase, re-run independently by this gate
+  (a genuinely separate run from the tester's own -- new fixture rows
+  created and torn down via the file's own afterAll, confirmed clean by
+  test exit).
+- One environmental note, not a slice defect: my own first attempt at the
+  live suite hit a Fatal process OOM in a leftover cluster of stray
+  node.exe workers from an earlier, still-running background test
+  invocation (this machine's own known low-free-RAM constraint). Killed
+  the stray processes and reran single-forked
+  (--pool=forks --poolOptions.forks.singleFork=true), which passed clean.
+  Not a code or security issue; noted here only so a future session does
+  not mistake host memory pressure for a real live-test regression.
+
+**Verdict: PASS on all 8 checklist items above**, each verified against
+actual file contents and/or a real test run this gate performed itself,
+not assumed from the coder's or tester's own narrative. This slice
+(Module 06 Slice 7, the Part 2 decision flow's RELAXATION half) is
+CLEARED for retrospeq-qa, and, once qa passes, for commit -- no blocking
+finding. No docs/adr entry needed from this gate (no deviation found
+requiring one); no service-role-inventory.test.ts allowlist change needed
+(verified, not assumed -- see item 8).
