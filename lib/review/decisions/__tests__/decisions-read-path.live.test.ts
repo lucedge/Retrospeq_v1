@@ -9,8 +9,8 @@ import {
 } from '@/lib/supabase/__tests__/rls-test-helpers';
 import {
   fetchCurrentReviewIdForDecisions,
-  fetchPendingGraduationPrompts,
-  fetchGraduationDecisionCounts,
+  fetchPendingDecisionPrompts,
+  fetchDecisionCounts,
   fetchPromptById,
 } from '../prompts-repository';
 import { buildGraduationPromptDetail } from '../graduation-evidence-detail';
@@ -121,7 +121,7 @@ describe.skipIf(!env)('lib/review/decisions read path (live DB)', () => {
     return res.rows[0].id;
   }
 
-  it('fetchPendingGraduationPrompts + fetchGraduationDecisionCounts: returns only PENDING rows in rank order, counts total vs pending correctly across mixed states', async () => {
+  it('fetchPendingDecisionPrompts + fetchDecisionCounts: returns only PENDING rows in rank order, counts total vs pending correctly across mixed states', async () => {
     if (!env) return;
     const user = await createTestAuthUser(envBundle, 'readpath-counts');
     cleanupUserIds.push(user.id);
@@ -132,10 +132,10 @@ describe.skipIf(!env)('lib/review/decisions read path (live DB)', () => {
     await insertGraduationPrompt(user.id, reviewId, 1, 'drv.risk_pct', strategyId);
     await insertGraduationPrompt(user.id, reviewId, 3, 'drv.instrument', strategyId, { state: 'accepted' });
 
-    const pending = await fetchPendingGraduationPrompts(user.id, reviewId);
-    expect(pending.map((p) => p.rank)).toEqual([1, 2]); // rank-ordered, accepted row excluded
+    const pending = await fetchPendingDecisionPrompts(user.id, reviewId);
+    expect(pending.map((p: { rank: number }) => p.rank)).toEqual([1, 2]); // rank-ordered, accepted row excluded
 
-    const counts = await fetchGraduationDecisionCounts(user.id, reviewId);
+    const counts = await fetchDecisionCounts(user.id, reviewId);
     expect(counts).toEqual({ total: 3, pending: 2 });
   });
 

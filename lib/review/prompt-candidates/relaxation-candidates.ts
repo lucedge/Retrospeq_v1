@@ -116,8 +116,16 @@ interface RelaxationWindowCountsRow {
 /** One round trip for EVERY active rule's windowed counts at once (`rule_id
  *  = any($2::uuid[])`), not one query per rule — matching this repo's own
  *  established "no N+1" posture (`fetchPromotionEvaluationCounts`'s own
- *  header). */
-async function fetchRelaxationWindowCounts(
+ *  header).
+ *
+ *  Exported (Module 06 Slice 7) so `relaxation-evidence-detail.ts`'s live
+ *  re-check at decision time — "has this rule's break rate genuinely
+ *  changed since the review was materialised?" — reuses the EXACT same
+ *  windowed count query the weekly eligibility pass itself uses, rather
+ *  than a second, independently-drifting copy. Called there with a
+ *  single-element `ruleIds` array, the same shape this function already
+ *  handles for any caller. */
+export async function fetchRelaxationWindowCounts(
   userId: string,
   ruleIds: readonly string[],
   windowStart: string,

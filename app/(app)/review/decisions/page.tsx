@@ -1,24 +1,23 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { fetchNextGraduationDecision } from './actions';
+import { fetchNextDecision } from './actions';
 import { DecisionCard } from './DecisionCard';
+import { RelaxationDecisionCard } from './RelaxationDecisionCard';
 
 /**
- * Module 06 (Review & Graduation) Slice 6 — `/review/decisions`, the Part 2
- * decision flow's own route, GRADUATION ONLY (see `actions.ts`'s own
- * header for the full scope boundary). Reached from `/review`'s own
- * "N decisions" button (`app/(app)/review/page.tsx`), which this slice
- * wires up for real — Slice 5 shipped it `disabled`, per that page's own
- * explicit deferral note.
+ * Module 06 (Review & Graduation) `/review/decisions` — the Part 2 decision
+ * flow's own route. Slice 6 shipped graduation only; Slice 7 widens this
+ * page to also render relaxation, dispatching on `fetchNextDecision`'s own
+ * `kind` discriminant (`actions.ts`'s own header has the full "why
+ * per-prompt, not per-screen, entitlement gating" reasoning). Reached from
+ * `/review`'s own "N decisions" button (`app/(app)/review/page.tsx`).
  *
  * Same "Server Component does the first read, hands off to a Client
  * Component for interactivity" split `ManualEntryScreen.tsx`
  * (`app/(app)/trades/manual-entry/`) already established — every
- * subsequent accept/defer + "load the next decision" round trip happens
- * client-side against the SAME rate-limited Server Actions
- * (`fetchNextGraduationDecision`/`acceptGraduationDecision`/
- * `deferGraduationDecision`, all in `./actions.ts`), never a second,
- * un-throttled read path.
+ * subsequent accept/defer/recommit/adjust + "load the next decision" round
+ * trip happens client-side against the SAME rate-limited Server Actions
+ * (all in `./actions.ts`), never a second, un-throttled read path.
  */
 export default async function ReviewDecisionsPage() {
   const supabase = await createClient();
@@ -34,7 +33,7 @@ export default async function ReviewDecisionsPage() {
     );
   }
 
-  const result = await fetchNextGraduationDecision();
+  const result = await fetchNextDecision();
 
   if (!result.success) {
     return (
@@ -84,6 +83,10 @@ export default async function ReviewDecisionsPage() {
         </Link>
       </section>
     );
+  }
+
+  if (result.kind === 'relaxation') {
+    return <RelaxationDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
   }
 
   return <DecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;

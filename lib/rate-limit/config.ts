@@ -648,6 +648,15 @@ export const RATE_LIMITS = {
    * actions operate on the exact same `review_prompts` row under the exact
    * same 3-per-week ceiling, so splitting them would not change the real
    * abuse surface, only double the bookkeeping.
+   *
+   * Module 06 Slice 7 (relaxation): `recommitRelaxationDecision`/
+   * `adjustRelaxationDecision` reuse this SAME scope, not a new one — the
+   * identical reasoning applies verbatim (same `review_prompts` row, same
+   * 3-per-week decision ceiling), and this entry's own header already
+   * anticipated exactly this ("this repo is now explicit about NEVER
+   * shipping a new write path under `/review/**` without a scope from day
+   * one" — that principle is satisfied by reuse here, not by minting a
+   * fourth scope for a fourth verb operating on the same row).
    */
   reviewDecision: {
     ip: { limit: 25, windowSeconds: 3600 },

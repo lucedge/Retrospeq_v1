@@ -62,32 +62,41 @@ export async function fetchCurrentReviewIdForDecisions(userId: string): Promise<
 // Reads
 // ---------------------------------------------------------------------
 
-export interface PendingGraduationPromptRow {
+export interface PendingDecisionPromptRow {
   id: string;
   rank: number;
-  /** Raw jsonb — parsed against `graduationEvidenceSchema` by the caller
-   *  (`accept-graduation.ts`/the decisions page), not here. This file has
-   *  no opinion about `GraduationEvidence`'s own shape, matching
+  kind: 'graduation' | 'relaxation';
+  /** Raw jsonb — parsed against `graduationEvidenceSchema`/
+   *  `relaxationEvidenceSchema` by the caller, keyed on `kind`, not here.
+   *  This file has no opinion about either evidence shape, matching
    *  `review-prompts-repository.ts`'s own "this function performs no
    *  eligibility logic of its own" separation of concerns. */
   payload: unknown;
 }
 
 /**
- * Every PENDING `kind = 'graduation'` prompt for this review, oldest-
- * ranked first — §2.1's "Part 2 decisions, one at a time," scoped to
- * graduation only per this slice's own explicit scope boundary (not every
- * kind Module 06 will eventually support — see this repo's own
- * `app/(app)/review/decisions/page.tsx` header for how "Decision N of M"
- * is defined against ONLY this filtered set, not every pending prompt of
- * every kind).
+ * Every PENDING `kind in ('graduation', 'relaxation')` prompt for this
+ * review, oldest-ranked first — §2.1's "Part 2 decisions, one at a time."
+ *
+ * Module 06 Slice 7 widened this from graduation-only (Slice 6) to also
+ * include relaxation — the two kinds this repo's `/review/decisions`
+ * screen can render a real decision for today. `rank` already encodes the
+ * cross-kind priority §4.3 specifies (relaxation ranked ahead of
+ * graduation across the WHOLE review at write time — `ranking.ts`'s own
+ * `rankAndCapPromptCandidates`), so `order by rank asc` alone is sufficient
+ * to produce the correct "next decision across kinds" ordering — no
+ * per-kind interleaving logic needed here. Promotion/retirement/detection
+ * are deliberately NOT in this `kind in (...)` list yet — no decision
+ * screen exists for them (a future slice's own scope, not a bug: those
+ * rows simply sit `pending` until that slice ships, exactly like
+ * relaxation itself sat unrendered between Slice 4 and this one).
  */
-export async function fetchPendingGraduationPrompts(userId: string, reviewId: string): Promise<PendingGraduationPromptRow[]> {
+export async function fetchPendingDecisionPrompts(userId: string, reviewId: string): Promise<PendingDecisionPromptRow[]> {
   return withUserConnection(userId, async (client) => {
-    const res = await client.query<{ id: string; rank: number; payload: unknown }>(
-      `select id, rank, payload
+    const res = await client.query<{ id: string; rank: number; kind: 'graduation' | 'relaxation'; payload: unknown }>(
+      `select id, rank, kind, payload
          from retrospeq.review_prompts
-        where user_id = $1 and review_id = $2 and kind = 'graduation' and state = 'pending'
+        where user_id = $1 and review_id = $2 and kind in ('graduation', 'relaxation') and state = 'pending'
         order by rank asc, created_at asc`,
       [userId, reviewId],
     );
@@ -95,13 +104,13 @@ export async function fetchPendingGraduationPrompts(userId: string, reviewId: st
   });
 }
 
-export interface GraduationDecisionCounts {
-  /** Every `kind = 'graduation'` prompt ever written for this review,
-   *  regardless of state — the denominator for §5.1's "Decision N of M"
-   *  label. Stable for the life of a review (Slice 4's `writeReviewPrompts`
-   *  only ever deletes/reinserts `state = 'pending'` rows for THIS review,
-   *  and only when the whole review is recomputed — see that function's
-   *  own header — so an already-accepted/deferred graduation row from
+export interface DecisionCounts {
+  /** Every `kind in ('graduation', 'relaxation')` prompt ever written for
+   *  this review, regardless of state — the denominator for §5.1's
+   *  "Decision N of M" label. Stable for the life of a review (Slice 4's
+   *  `writeReviewPrompts` only ever deletes/reinserts `state = 'pending'`
+   *  rows for THIS review, and only when the whole review is recomputed —
+   *  see that function's own header — so an already-decided row from
    *  earlier in the same session is never silently dropped out of this
    *  count once counted). */
   total: number;
@@ -110,17 +119,17 @@ export interface GraduationDecisionCounts {
 
 /**
  * `index` for §5.1's "Decision N of M" is `total - pending + 1` — how many
- * graduation decisions in this review have already been resolved
- * (accepted or deferred), plus one for whichever one is about to be shown.
- * A plain `COUNT(*) FILTER` query rather than two round trips.
+ * decisions (of the kinds this screen renders) in this review have already
+ * been resolved, plus one for whichever one is about to be shown. A plain
+ * `COUNT(*) FILTER` query rather than two round trips.
  */
-export async function fetchGraduationDecisionCounts(userId: string, reviewId: string): Promise<GraduationDecisionCounts> {
+export async function fetchDecisionCounts(userId: string, reviewId: string): Promise<DecisionCounts> {
   return withUserConnection(userId, async (client) => {
     const res = await client.query<{ total: string; pending: string }>(
       `select count(*)::text as total,
               count(*) filter (where state = 'pending')::text as pending
          from retrospeq.review_prompts
-        where user_id = $1 and review_id = $2 and kind = 'graduation'`,
+        where user_id = $1 and review_id = $2 and kind in ('graduation', 'relaxation')`,
       [userId, reviewId],
     );
     const row = res.rows[0];
@@ -196,6 +205,72 @@ export async function markPromptAccepted(
 }
 
 /**
+ * §4.5/§4.7's "Recommit" — the trader chose to keep the rule exactly as it
+ * is. Module 06 Slice 7's own reasoning (see `docs/adr/0041`, judgment call
+ * #1): this is a REAL, engaged decision that resolves the prompt — the
+ * trader looked at "you break this most weeks" and affirmatively said "I'm
+ * keeping it anyway" — so it sets `state = 'accepted'` and `decided_at`,
+ * NOT `'deferred'`. It is deliberately NOT the same as decline: §4.5's
+ * `decline_count`/`prompt_history` dormancy tracking exists for a trader
+ * who was OFFERED something and said no to the offer itself (e.g. "don't
+ * turn this into a rule," "don't retire this"); recommit is the trader
+ * affirming the CURRENT rule is correct, which is not a rejection of
+ * anything Module 06 proposed. `payload` merges `resolution: 'recommit'`
+ * only — no `ruleId`/`newValue`, since no rule write happens (mirrors
+ * `markPromptAccepted`'s own `payload || jsonb_build_object(...)` merge
+ * shape for the identical §9 `PROMPT_ALREADY_DECIDED` idempotent-replay
+ * reason).
+ */
+export async function markPromptRecommitted(userId: string, promptId: string): Promise<{ id: string } | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'accepted',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'recommit'::text)
+        where id = $1 and user_id = $2 and kind = 'relaxation' and state = 'pending'
+        returning id`,
+      [promptId, userId],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+/**
+ * §4.7's "Adjust" — the trader chose to move the rule to where they
+ * actually trade. The new rule VERSION itself is written by
+ * `editRule`/`applyRuleEdit` (Module 04, called from `adjustRelaxation
+ * Decision` BEFORE this function runs) — this function only records the
+ * OUTCOME on the prompt row, the same "prompt bookkeeping is separate from
+ * the domain write it authorises" split `markPromptAccepted` already
+ * establishes for graduation (`createRuleInternal` writes the rule;
+ * `markPromptAccepted` only marks the prompt). `newValue`/`newRendered`
+ * are the POST-edit values (jsonb-encoded via `to_jsonb($4::text)` for
+ * `newRendered`, and `$5::jsonb` for `newValue` since a rule's `value` can
+ * be a number, string, or array depending on operand type — never assumed
+ * numeric here, matching `rule_versions.value jsonb` itself).
+ */
+export async function markPromptAdjusted(
+  userId: string,
+  promptId: string,
+  newValue: unknown,
+  newRendered: string,
+): Promise<{ id: string } | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'accepted',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'adjust'::text, 'newValue', $3::jsonb, 'newRendered', $4::text)
+        where id = $1 and user_id = $2 and kind = 'relaxation' and state = 'pending'
+        returning id`,
+      [promptId, userId, JSON.stringify(newValue), newRendered],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+/**
  * §4.5's defer — "returns next review, still under the cap. No penalty."
  * Sets ONLY `state = 'deferred'`; deliberately does NOT touch
  * `decided_at` (a defer is explicitly "not deciding yet" — `decided_at`
@@ -209,6 +284,17 @@ export async function markPromptAccepted(
  * eligibility + `prompt_history` on every future materialisation, never
  * from old `review_prompts` rows — a deferred row with no `prompt_history`
  * entry is, by construction, still eligible next time.
+ *
+ * Deliberately still `kind = 'graduation'`-only (Module 06 Slice 7, `docs/
+ * adr/0041`): §5.1's own relaxation reference markup shows exactly two
+ * buttons ("Keep 1%" / "Change to 2%"), no third "Not yet" — Slice 7 keeps
+ * this function scoped to graduation rather than widening it to a kind it
+ * has no UI caller for yet, per this repo's own "build against a real
+ * consumer, not a speculative one" posture (`review-prompts-repository.ts`'s
+ * own `canRender`-gate header cites the identical reasoning for a different
+ * decision). See `docs/adr/0041` for the full reasoning on why "Keep" — not
+ * a third defer option — already plays the low-commitment role a defer
+ * button would for relaxation.
  */
 export async function markPromptDeferred(userId: string, promptId: string): Promise<{ id: string } | null> {
   return withUserConnection(userId, async (client) => {

@@ -51,13 +51,18 @@ const fetchActiveFindingForFieldTupleMock = vi.hoisted(() => vi.fn());
 const createFindingRuleLinkMock = vi.hoisted(() => vi.fn());
 const insertRuleFieldUsageMock = vi.hoisted(() => vi.fn());
 const fetchCurrentReviewIdForDecisionsMock = vi.hoisted(() => vi.fn());
-const fetchPendingGraduationPromptsMock = vi.hoisted(() => vi.fn());
-const fetchGraduationDecisionCountsMock = vi.hoisted(() => vi.fn());
+const fetchPendingDecisionPromptsMock = vi.hoisted(() => vi.fn());
+const fetchDecisionCountsMock = vi.hoisted(() => vi.fn());
 const fetchPromptByIdMock = vi.hoisted(() => vi.fn());
 const markPromptAcceptedMock = vi.hoisted(() => vi.fn());
 const markPromptDeferredMock = vi.hoisted(() => vi.fn());
+const markPromptRecommittedMock = vi.hoisted(() => vi.fn());
+const markPromptAdjustedMock = vi.hoisted(() => vi.fn());
 const buildGraduationPromptDetailMock = vi.hoisted(() => vi.fn());
+const buildRelaxationPromptDetailMock = vi.hoisted(() => vi.fn());
+const fetchLiveRelaxationFactsMock = vi.hoisted(() => vi.fn());
 const createRuleInternalMock = vi.hoisted(() => vi.fn());
+const editRuleMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: createClientMock }));
 vi.mock('@/lib/rate-limit/limiter', () => ({ enforceRateLimit: enforceRateLimitMock }));
@@ -79,15 +84,22 @@ vi.mock('@/lib/fields/fields-repository', () => ({
 }));
 vi.mock('@/lib/review/decisions/prompts-repository', () => ({
   fetchCurrentReviewIdForDecisions: fetchCurrentReviewIdForDecisionsMock,
-  fetchPendingGraduationPrompts: fetchPendingGraduationPromptsMock,
-  fetchGraduationDecisionCounts: fetchGraduationDecisionCountsMock,
+  fetchPendingDecisionPrompts: fetchPendingDecisionPromptsMock,
+  fetchDecisionCounts: fetchDecisionCountsMock,
   fetchPromptById: fetchPromptByIdMock,
   markPromptAccepted: markPromptAcceptedMock,
   markPromptDeferred: markPromptDeferredMock,
+  markPromptRecommitted: markPromptRecommittedMock,
+  markPromptAdjusted: markPromptAdjustedMock,
 }));
 vi.mock('@/lib/review/decisions/graduation-evidence-detail', () => ({
   buildGraduationPromptDetail: buildGraduationPromptDetailMock,
 }));
+vi.mock('@/lib/review/decisions/relaxation-evidence-detail', () => ({
+  buildRelaxationPromptDetail: buildRelaxationPromptDetailMock,
+  fetchLiveRelaxationFacts: fetchLiveRelaxationFactsMock,
+}));
+vi.mock('../../../rules/actions', () => ({ editRule: editRuleMock }));
 // Security review finding, Module 06 Slice 6 (PROGRESS.md, dated
 // 2026-09-13, "ADR 0040 decision 7's `origin` bypass" — BLOCKING;
 // resolved same day). `acceptGraduationDecision` now calls
@@ -170,15 +182,15 @@ async function importActions() {
 // ---------------------------------------------------------------------
 
 describe('rate limiting is the first check on every exported action', () => {
-  it('fetchNextGraduationDecision: rate-limited before canForUser/DB reads ever run', async () => {
+  it('fetchNextDecision: rate-limited before canForUser/DB reads ever run', async () => {
     enforceRateLimitMock.mockRejectedValueOnce(
       Object.assign(new Error('rate limited'), { name: 'RateLimitExceededError' }),
     );
     const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
     enforceRateLimitMock.mockReset().mockRejectedValueOnce(new RateLimitExceededError('reviewDecision', 'ip', 60));
-    const { fetchNextGraduationDecision } = await importActions();
+    const { fetchNextDecision } = await importActions();
 
-    const result = await fetchNextGraduationDecision();
+    const result = await fetchNextDecision();
 
     expect(result.success).toBeUndefined();
     expect((result as { error: { code: string } }).error.code).toBe('REVIEW_DECISION_RATE_LIMITED');
@@ -218,14 +230,22 @@ describe('rate limiting is the first check on every exported action', () => {
 // ---------------------------------------------------------------------
 
 describe('graduation entitlement (Pro-only) is checked on both the read and the accept action', () => {
-  it('fetchNextGraduationDecision returns plan_required for a free user, without ever reading review_prompts', async () => {
+  it('fetchNextDecision returns plan_required for a free user when the NEXT prompt is a graduation one', async () => {
     canForUserMock.mockResolvedValue({ allowed: false });
-    const { fetchNextGraduationDecision } = await importActions();
+    fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, kind: 'graduation', payload: baseEvidence('drv.risk_pct') }]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
+    const { fetchNextDecision } = await importActions();
 
-    const result = await fetchNextGraduationDecision();
+    const result = await fetchNextDecision();
 
     expect(result).toEqual({ success: true, status: 'plan_required' });
-    expect(fetchCurrentReviewIdForDecisionsMock).not.toHaveBeenCalled();
+    // Per Module 06 Slice 7 (docs/adr/0041 judgment call #3), gating moved
+    // from per-screen to per-prompt — `fetchCurrentReviewIdForDecisions`
+    // IS now called (a relaxation prompt ranked ahead of this one, if any,
+    // must still be reachable by a free user), unlike Slice 6's own
+    // "gate before reading anything" posture.
+    expect(fetchCurrentReviewIdForDecisionsMock).toHaveBeenCalled();
   });
 
   it('acceptGraduationDecision rejects a free user directly, even with a valid pending prompt id — closing the "call the action directly" bypass', async () => {
@@ -546,50 +566,295 @@ describe('deferGraduationDecision — §4.5 no-penalty defer', () => {
 });
 
 // ---------------------------------------------------------------------
-// fetchNextGraduationDecision — no_review / none_pending / corrupt payload.
+// fetchNextDecision — no_review / none_pending / corrupt payload / ready.
+// Slice 7 renamed this from `fetchNextGraduationDecision` and widened it
+// to cover relaxation too — see additional relaxation-specific coverage
+// further below.
 // ---------------------------------------------------------------------
 
-describe('fetchNextGraduationDecision — status branches', () => {
+describe('fetchNextDecision — status branches', () => {
   it('no_review when fetchCurrentReviewIdForDecisions returns null', async () => {
     fetchCurrentReviewIdForDecisionsMock.mockResolvedValue(null);
-    const { fetchNextGraduationDecision } = await importActions();
-    const result = await fetchNextGraduationDecision();
+    const { fetchNextDecision } = await importActions();
+    const result = await fetchNextDecision();
     expect(result).toEqual({ success: true, status: 'no_review' });
   });
 
-  it('none_pending when a review exists but zero pending graduation prompts remain', async () => {
+  it('none_pending when a review exists but zero pending prompts remain', async () => {
     fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
-    fetchPendingGraduationPromptsMock.mockResolvedValue([]);
-    fetchGraduationDecisionCountsMock.mockResolvedValue({ total: 2, pending: 0 });
-    const { fetchNextGraduationDecision } = await importActions();
-    const result = await fetchNextGraduationDecision();
+    fetchPendingDecisionPromptsMock.mockResolvedValue([]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 2, pending: 0 });
+    const { fetchNextDecision } = await importActions();
+    const result = await fetchNextDecision();
     expect(result).toEqual({ success: true, status: 'none_pending' });
   });
 
-  it('a corrupt payload on the earliest pending prompt returns REVIEW_PROMPT_CORRUPT rather than crashing or guessing', async () => {
+  it('a corrupt graduation payload on the earliest pending prompt returns REVIEW_PROMPT_CORRUPT rather than crashing or guessing', async () => {
     fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
-    fetchPendingGraduationPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, payload: { garbage: true } }]);
-    fetchGraduationDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, kind: 'graduation', payload: { garbage: true } }]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { fetchNextGraduationDecision } = await importActions();
+    const { fetchNextDecision } = await importActions();
 
-    const result = await fetchNextGraduationDecision();
+    const result = await fetchNextDecision();
 
     expect((result as { error: { code: string } }).error.code).toBe('REVIEW_PROMPT_CORRUPT');
     errSpy.mockRestore();
   });
 
-  it('ready: builds the detail via buildGraduationPromptDetail and computes index from total-pending', async () => {
+  it('ready: builds the graduation detail via buildGraduationPromptDetail and computes index from total-pending', async () => {
     fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
-    fetchPendingGraduationPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, payload: baseEvidence('drv.risk_pct') }]);
-    fetchGraduationDecisionCountsMock.mockResolvedValue({ total: 2, pending: 1 });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, kind: 'graduation', payload: baseEvidence('drv.risk_pct') }]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 2, pending: 1 });
     buildGraduationPromptDetailMock.mockResolvedValue({
       promptId: PROMPT_ID, rank: 1, fieldName: 'Risk %', statement: 's', meta: 'm', costLine: 'c', hint: 'h', canAccept: true, blockedReason: null,
     });
-    const { fetchNextGraduationDecision } = await importActions();
+    const { fetchNextDecision } = await importActions();
 
-    const result = await fetchNextGraduationDecision();
+    const result = await fetchNextDecision();
 
-    expect(result).toEqual({ success: true, status: 'ready', index: 2, total: 2, detail: expect.objectContaining({ promptId: PROMPT_ID }) });
+    expect(result).toEqual({
+      success: true,
+      status: 'ready',
+      kind: 'graduation',
+      index: 2,
+      total: 2,
+      detail: expect.objectContaining({ promptId: PROMPT_ID }),
+    });
+  });
+
+  it('a Pro-gated graduation prompt blocks the whole queue (plan_required), never silently skipped', async () => {
+    canForUserMock.mockResolvedValue({ allowed: false });
+    fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([{ id: PROMPT_ID, rank: 1, kind: 'graduation', payload: baseEvidence('drv.risk_pct') }]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
+    const { fetchNextDecision } = await importActions();
+
+    const result = await fetchNextDecision();
+
+    expect(result).toEqual({ success: true, status: 'plan_required' });
+    expect(buildGraduationPromptDetailMock).not.toHaveBeenCalled();
+  });
+
+  it('a relaxation prompt is NOT gated by the graduation entitlement — a free user still sees it', async () => {
+    canForUserMock.mockResolvedValue({ allowed: false });
+    fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([
+      { id: 'relax-1', rank: 1, kind: 'relaxation', payload: { ruleId: '55555555-5555-4555-8555-555555555555', rendered: 'x', ageDays: 50, applicableEvaluations: 30, brokenEvaluations: 15, breakRate: 0.5 } },
+    ]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
+    buildRelaxationPromptDetailMock.mockResolvedValue({
+      promptId: 'relax-1', rank: 1, statement: 's', meta: 'm', decisionFrame: 'f', canDecide: true, blockedReason: null, currentLabel: '1%', newLabel: '2%',
+    });
+    const { fetchNextDecision } = await importActions();
+
+    const result = await fetchNextDecision();
+
+    expect(result).toEqual({
+      success: true,
+      status: 'ready',
+      kind: 'relaxation',
+      index: 1,
+      total: 1,
+      detail: expect.objectContaining({ promptId: 'relax-1' }),
+    });
+  });
+
+  it('an undecidable relaxation prompt (canDecide: false) is skipped silently, falling through to none_pending when nothing else is queued', async () => {
+    fetchCurrentReviewIdForDecisionsMock.mockResolvedValue({ reviewId: 'review-1' });
+    fetchPendingDecisionPromptsMock.mockResolvedValue([
+      { id: 'relax-1', rank: 1, kind: 'relaxation', payload: { ruleId: '55555555-5555-4555-8555-555555555555', rendered: 'x', ageDays: 50, applicableEvaluations: 30, brokenEvaluations: 15, breakRate: 0.5 } },
+    ]);
+    fetchDecisionCountsMock.mockResolvedValue({ total: 1, pending: 1 });
+    buildRelaxationPromptDetailMock.mockResolvedValue({
+      promptId: 'relax-1', rank: 1, statement: 's', meta: '', decisionFrame: 'f', canDecide: false, blockedReason: 'gone', currentLabel: null, newLabel: null,
+    });
+    const { fetchNextDecision } = await importActions();
+
+    const result = await fetchNextDecision();
+
+    expect(result).toEqual({ success: true, status: 'none_pending' });
+  });
+});
+
+// ---------------------------------------------------------------------
+// recommitRelaxationDecision / adjustRelaxationDecision — Module 06
+// Slice 7, §4.7's symmetric choice. See docs/adr/0041 for the reasoning
+// behind every judgment call exercised below.
+// ---------------------------------------------------------------------
+
+const RELAX_PROMPT_ID = '44444444-4444-4444-8444-444444444444';
+const RULE_UUID = '55555555-5555-4555-8555-555555555555';
+
+function relaxationBaseEvidence() {
+  return { ruleId: RULE_UUID, rendered: 'Never risk more than 1% per trade.', ageDays: 50, applicableEvaluations: 30, brokenEvaluations: 15, breakRate: 0.5 };
+}
+
+function pendingRelaxationPromptRow(overrides: Partial<{ state: string; payload: unknown }> = {}) {
+  return {
+    id: RELAX_PROMPT_ID,
+    reviewId: 'review-1',
+    kind: 'relaxation',
+    state: overrides.state ?? 'pending',
+    payload: overrides.payload ?? relaxationBaseEvidence(),
+  };
+}
+
+const RISK_PCT_OPERAND = {
+  id: 'risk_pct',
+  label: 'Risk per trade',
+  group: 'risk_and_size',
+  type: 'number',
+  unit: 'percent',
+  direction: 'lower_is_tighter',
+  evaluation: 'pre_entry',
+  tier: 't0',
+  phrasing: { lte: 'Never risk more than {value}% per trade.' },
+  bounds: { min: 0.1, max: 5.0, step: 0.1 },
+  computableToday: true,
+  factNote: 'test fixture',
+};
+
+function liveRelaxationFacts(overrides: Partial<{ eligible: boolean; medianObserved: number | null }> = {}) {
+  return {
+    rule: { ruleId: RULE_UUID, scope: 'strategy', scopeId: STRATEGY_ID, state: 'active', currentVersion: 1, operandId: 'risk_pct', op: 'lte', value: 1.0, createdAt: '2026-06-01T00:00:00Z' },
+    operand: RISK_PCT_OPERAND,
+    eligibility: { eligible: overrides.eligible ?? true, ageDays: 50, breakRate: 0.5 },
+    applicableEvaluations: 30,
+    brokenEvaluations: 15,
+    medianObserved: overrides.medianObserved === undefined ? 2.0 : overrides.medianObserved,
+  };
+}
+
+beforeEach(() => {
+  fetchLiveRelaxationFactsMock.mockResolvedValue(liveRelaxationFacts());
+  markPromptRecommittedMock.mockResolvedValue({ id: RELAX_PROMPT_ID });
+  markPromptAdjustedMock.mockResolvedValue({ id: RELAX_PROMPT_ID });
+  editRuleMock.mockResolvedValue({
+    success: true,
+    rule: { id: RULE_UUID, operandId: 'risk_pct', op: 'lte', value: 2.0, rendered: 'Never risk more than 2% per trade.', scope: 'strategy', scopeId: STRATEGY_ID, version: 2 },
+  });
+});
+
+describe('recommitRelaxationDecision — a real, engaged decision that changes no rule', () => {
+  it('marks the prompt accepted via markPromptRecommitted, writes no rule, and revalidates', async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    const { recommitRelaxationDecision } = await importActions();
+
+    const result = await recommitRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result).toEqual({ success: true, ruleId: RULE_UUID });
+    expect(markPromptRecommittedMock).toHaveBeenCalledWith(USER_ID, RELAX_PROMPT_ID);
+    expect(editRuleMock).not.toHaveBeenCalled();
+    expect(markPromptAdjustedMock).not.toHaveBeenCalled();
+    expect(revalidatePathMock).toHaveBeenCalledWith('/review');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/review/decisions');
+  });
+
+  it('rejects honestly when the rule has been retired since materialisation, writing nothing', async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    fetchLiveRelaxationFactsMock.mockResolvedValue(null);
+    const { recommitRelaxationDecision } = await importActions();
+
+    const result = await recommitRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('RELAXATION_RULE_GONE');
+    expect(markPromptRecommittedMock).not.toHaveBeenCalled();
+  });
+
+  it('a prompt of a different kind (graduation) is treated as not-found', async () => {
+    fetchPromptByIdMock.mockResolvedValue({ ...pendingRelaxationPromptRow(), kind: 'graduation' });
+    const { recommitRelaxationDecision } = await importActions();
+
+    const result = await recommitRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('REVIEW_PROMPT_NOT_FOUND');
+  });
+
+  it('replays the winning outcome on a double submit rather than erroring or re-deciding', async () => {
+    fetchPromptByIdMock.mockResolvedValue(
+      pendingRelaxationPromptRow({ state: 'accepted', payload: { ...relaxationBaseEvidence(), resolution: 'recommit' } }),
+    );
+    const { recommitRelaxationDecision } = await importActions();
+
+    const result = await recommitRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result).toEqual({ success: true, ruleId: RULE_UUID });
+    expect(markPromptRecommittedMock).not.toHaveBeenCalled();
+  });
+
+  it('is rate-limited before any DB read, same scope as accept/defer', async () => {
+    const { RateLimitExceededError } = await import('@/lib/rate-limit/errors');
+    enforceRateLimitMock.mockRejectedValueOnce(new RateLimitExceededError('reviewDecision', 'ip', 60));
+    const { recommitRelaxationDecision } = await importActions();
+
+    const result = await recommitRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('REVIEW_DECISION_RATE_LIMITED');
+    expect(fetchPromptByIdMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('adjustRelaxationDecision — reuses editRule, never reimplements rule editing', () => {
+  it('derives the new value from the live median and calls editRule(ruleId, currentVersion, newValue)', async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    const { adjustRelaxationDecision } = await importActions();
+
+    const result = await adjustRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(editRuleMock).toHaveBeenCalledWith(RULE_UUID, 1, 2.0);
+    expect(markPromptAdjustedMock).toHaveBeenCalledWith(USER_ID, RELAX_PROMPT_ID, 2.0, 'Never risk more than 2% per trade.');
+    expect(result).toEqual({ success: true, ruleId: RULE_UUID, newValue: 2.0, newRendered: 'Never risk more than 2% per trade.' });
+    expect(revalidatePathMock).toHaveBeenCalledWith('/rules');
+  });
+
+  it("editRule's own rejection (e.g. a concurrent edit conflict) is surfaced verbatim, and the prompt is never marked adjusted", async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    editRuleMock.mockResolvedValue({
+      error: { code: 'RULE_EDIT_CONFLICT', user_message: 'This rule was just changed elsewhere. Please refresh and try again.', retryable: true },
+    });
+    const { adjustRelaxationDecision } = await importActions();
+
+    const result = await adjustRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('RULE_EDIT_CONFLICT');
+    expect(markPromptAdjustedMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects honestly when the condition has changed (no longer eligible) since materialisation, without calling editRule', async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    fetchLiveRelaxationFactsMock.mockResolvedValue(liveRelaxationFacts({ eligible: false }));
+    const { adjustRelaxationDecision } = await importActions();
+
+    const result = await adjustRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('RELAXATION_CONDITION_CHANGED');
+    expect(editRuleMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects honestly when no median is derivable (e.g. zero numeric observations), without calling editRule', async () => {
+    fetchPromptByIdMock.mockResolvedValue(pendingRelaxationPromptRow());
+    fetchLiveRelaxationFactsMock.mockResolvedValue(liveRelaxationFacts({ medianObserved: null }));
+    const { adjustRelaxationDecision } = await importActions();
+
+    const result = await adjustRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result.error?.code).toBe('RELAXATION_NOT_ADJUSTABLE');
+    expect(editRuleMock).not.toHaveBeenCalled();
+  });
+
+  it('replays the winning outcome on a double submit rather than calling editRule a second time', async () => {
+    fetchPromptByIdMock.mockResolvedValue(
+      pendingRelaxationPromptRow({
+        state: 'accepted',
+        payload: { ...relaxationBaseEvidence(), resolution: 'adjust', newValue: 2.0, newRendered: 'Never risk more than 2% per trade.' },
+      }),
+    );
+    const { adjustRelaxationDecision } = await importActions();
+
+    const result = await adjustRelaxationDecision(RELAX_PROMPT_ID);
+
+    expect(result).toEqual({ success: true, ruleId: RULE_UUID, newValue: 2.0, newRendered: 'Never risk more than 2% per trade.' });
+    expect(editRuleMock).not.toHaveBeenCalled();
   });
 });

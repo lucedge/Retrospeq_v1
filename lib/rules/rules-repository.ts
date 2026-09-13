@@ -436,6 +436,15 @@ export interface CurrentRuleForEdit {
   operandId: string;
   op: RuleOperator;
   value: unknown;
+  /** Module 06 (Review & Graduation) Slice 7 addition — `relaxation-
+   *  evidence-detail.ts`'s live re-check needs the RULE's own age (§4.4's
+   *  "active >= 6 weeks" gate reads `rules.created_at`, the same column
+   *  `evaluateRelaxationEligibility`'s own callers already read via
+   *  `fetchRulesForUser`), not just its current threshold. Purely additive
+   *  — every existing caller of this function (`editRule`,
+   *  `previewRule`'s siblings) already destructures only the fields it
+   *  needs and is unaffected by one more field being present. */
+  createdAt: string;
 }
 
 /**
@@ -456,8 +465,10 @@ export async function fetchCurrentRuleForEdit(userId: string, ruleId: string): P
       operand_id: string;
       op: RuleOperator;
       value: unknown;
+      created_at: string;
     }>(
-      `select r.id as rule_id, r.scope, r.scope_id, r.state, r.current_version, rv.operand_id, rv.op, rv.value
+      `select r.id as rule_id, r.scope, r.scope_id, r.state, r.current_version, rv.operand_id, rv.op, rv.value,
+              r.created_at::text as created_at
          from retrospeq.rules r
          join retrospeq.rule_versions rv on rv.rule_id = r.id and rv.version = r.current_version
         where r.id = $1 and r.user_id = $2`,
@@ -474,6 +485,7 @@ export async function fetchCurrentRuleForEdit(userId: string, ruleId: string): P
       operandId: row.operand_id,
       op: row.op,
       value: row.value,
+      createdAt: row.created_at,
     };
   });
 }

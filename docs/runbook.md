@@ -2148,3 +2148,47 @@ when it shouldn't be. No alert is wired for this today (this repo has no
 alerting infrastructure at all yet, matching every other runbook entry's
 own standing caveat) — this is the manual "how to check" a human would
 run.
+
+## Relaxation adjust found an eligible, adjustable rule with no numeric median — a data-shape mismatch, not an expected outcome
+
+**Source:** Module 06 (Review & Graduation) Slice 7 (2026-09-13),
+`app/(app)/review/decisions/actions.ts`'s `adjustRelaxationDecision`. See
+`docs/adr/0041-relaxation-decision-recommit-adjust-and-scope.md` decision
+2 for the full reasoning this entry only operationalises.
+
+**What this means operationally:** `adjustRelaxationDecision` only
+reaches this log line when BOTH of the following are true at once: (a)
+`facts.eligibility.eligible` is `true`, which per
+`evaluateRelaxationEligibility` (`lib/review/prompt-candidates/
+relaxation-candidates.ts`) REQUIRES at least 20 applicable evaluations in
+the rolling 42-day window, and (b) `canAdjustRelaxation` confirmed the
+rule's operand is `number`/`duration`/`rating`-typed with real `bounds` —
+exactly the operand kinds whose `evaluate.ts` `compareOrdered` branch
+always writes a NUMERIC `observed` value for every applicable evaluation.
+Given both, `fetchMedianObserved`'s `percentile_cont(0.5)` query
+(`lib/review/decisions/relaxation-evidence-detail.ts`) should always find
+at least 20 numeric rows to take a median of — a `null` result here means
+the `observed` column contains something unexpected for at least a
+meaningful share of this rule's evaluations (a non-numeric shape, or a
+count/window mismatch between the eligibility query and the median
+query), not a legitimate "nothing to adjust" case. The trader still gets
+an honest `RELAXATION_NOT_ADJUSTABLE` rejection either way — this is a
+correctness signal for an operator, not a trader-facing outage.
+
+**How to check:** grep application logs for `[review/decisions:
+adjustRelaxationDecision] unexpected null median for an eligible,
+adjustable rule`. The message names the exact `rule_id`/`operand_id` and
+the applicable-evaluation count the eligibility check itself reported.
+
+**Is this alertable?** Any occurrence at all is worth investigating —
+unlike the graduation `finding_rule_links` skip above (a legitimate,
+expected product case), this specific combination of conditions is not
+expected to ever be null by this file's own invariants. A single
+occurrence could still be a one-off data artefact (e.g. a manually
+patched `rule_evaluations` row); a RECURRING pattern for the same
+`rule_id` or across many rules would indicate a real bug in
+`freeze-evaluations.ts`'s `observed` write path or in this query's own
+window/type filtering. No alert is wired for this today (this repo has no
+alerting infrastructure at all yet, matching every other runbook entry's
+own standing caveat) — this is the manual "how to check" a human would
+run.

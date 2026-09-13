@@ -28599,3 +28599,453 @@ plan-required,unsupported-field}.png` (all four, direct visual read),
 `.dependency-cruiser.cjs`-scoped `check:import-boundaries` command
 (`package.json`, confirmed scoped to `lib/analytics` only, one-directional
 per `docs/adr/0021`, unaffected by this slice).
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 7 -- CODER: Part 2 decision flow, RELAXATION ONLY. Self-checked live (real dev Supabase, ADR 0002); NOT reviewed by tester/security-reviewer/qa yet, NOT committed.
+
+Extends Slice 6's graduation-only `/review/decisions` screen to also
+fetch and render relaxation-kind prompts (section 4.2/4.7/5.1's
+`review--decision` symmetric-choice reference markup) -- one decision at
+a time, across both kinds, in the SAME materialised `rank` order.
+Promotion/retirement/detection remain future slices reusing this
+screen's shape.
+
+**What was built:**
+- `lib/review/decisions/relaxation-evidence-schema.ts` -- a Zod boundary
+  around `review_prompts.payload` for `kind='relaxation'` rows, mirroring
+  `graduationEvidenceSchema`'s non-strict shape (extra keys merged on
+  decision must not break re-parsing).
+- `lib/review/decisions/relaxation-operand-map.ts` -- `canAdjustRelaxation`
+  (reuses `EditRuleControl.tsx`'s own pre-existing "only number/duration/
+  rating operands with real bounds are ever editable" restriction, not a
+  new one invented for this slice), `deriveAdjustedValue` (clamps the live
+  median into the operand's own bounds, rounds to its `step`), and
+  `formatOperandValueLabel` (reuses this repo's own established
+  `unit === 'percent' ? '%' : ''` convention, not a new unit-symbol table).
+- `lib/review/decisions/relaxation-evidence-detail.ts` -- `fetchLiveRelaxationFacts`
+  (a LIVE re-derivation of the rule's current state plus a fresh windowed
+  break-rate/median-observed query, never trusting the materialised
+  payload for a write-adjacent decision -- same posture ADR 0040 already
+  established for graduation) and `buildRelaxationPromptDetail` (renders
+  the statement/meta/decision-frame, `canDecide: false` with an honest
+  `blockedReason` when the rule is gone, no longer eligible, or
+  structurally un-adjustable).
+- `lib/review/prompt-candidates/relaxation-candidates.ts` -- `fetchRelaxationWindowCounts`
+  now exported (was module-private) so the live re-check above reuses the
+  EXACT windowed-count query the weekly eligibility pass itself uses.
+- `lib/rules/rules-repository.ts` -- `fetchCurrentRuleForEdit`/
+  `CurrentRuleForEdit` extended with `createdAt` (purely additive; the
+  live relaxation re-check needs the rule's own age for
+  `evaluateRelaxationEligibility`, the same column `fetchRulesForUser`
+  already reads for the identical purpose).
+- `lib/review/decisions/prompts-repository.ts` -- `fetchPendingGraduationPrompts`/
+  `fetchGraduationDecisionCounts` widened in place to
+  `fetchPendingDecisionPrompts`/`fetchDecisionCounts` (`kind in
+  ('graduation','relaxation')`, the pending row's `kind` now returned so
+  the caller can dispatch); new `markPromptRecommitted` (state=accepted,
+  no rule write, `payload.resolution='recommit'`) and `markPromptAdjusted`
+  (state=accepted, `payload.resolution='adjust'` plus the post-edit
+  value/rendered). `markPromptAccepted`/`markPromptDeferred` untouched,
+  still graduation-only by design (the latter deliberately -- see below).
+- `app/(app)/review/decisions/actions.ts` -- `fetchNextGraduationDecision`
+  renamed `fetchNextDecision`, now reads across both kinds and dispatches
+  per-kind; entitlement gating moved from PER-SCREEN to PER-PROMPT (a
+  free user can now reach a relaxation prompt ranked ahead of a
+  Pro-gated graduation one -- a real, deliberate behaviour fix, not a
+  silent regression, since relaxation has no `graduation`-shaped
+  capability entry at all); an undecidable relaxation prompt is skipped
+  silently server-side (section 9 `PROMPT_SUBJECT_GONE`, applied more
+  literally than graduation's own Slice 6 choice, since relaxation's own
+  markup has no third "Not yet" button to fall back to). New
+  `recommitRelaxationDecision`/`adjustRelaxationDecision`, both reusing
+  the existing `reviewDecision` rate-limit scope (its own header already
+  anticipated this: "splitting them would not change the real abuse
+  surface"). `adjustRelaxationDecision` calls the PUBLIC `editRule`
+  Server Action directly (`app/(app)/rules/actions.ts`, cross-route
+  import, the SAME established pattern `ManualEntryScreen.tsx`/
+  `GuidedFrontDoor.tsx` already use) -- unlike graduation's `createRule`/
+  `origin` bypass (ADR 0040 decision 7), `editRule` has no
+  privilege-sensitive parameter, so no restricted internal variant was
+  needed.
+- `app/(app)/review/decisions/RelaxationDecisionCard.tsx` -- the new
+  Client Component, `.rq-btn rq-btn--equal` (this repo's ALREADY-SHIPPED
+  symmetric-choice component, `public/brand/css/components.css`) on BOTH
+  "Keep {value}"/"Change to {value}" buttons inside `.rq-btn-row` (equal
+  width, side by side), NO third button (section 5.1's own markup has
+  none -- "Keep" already plays the low-commitment role a defer button
+  would, per this slice's own reasoning, `docs/adr/0041`).
+- `app/(app)/review/decisions/page.tsx` -- dispatches `<DecisionCard>` vs
+  `<RelaxationDecisionCard>` on `fetchNextDecision`'s `kind` field.
+- `docs/adr/0041-relaxation-decision-recommit-adjust-and-scope.md` -- six
+  decisions: (1) recommit = a real `accepted` outcome, no rule write, NOT
+  the same as decline or defer; (2) adjust's threshold is a LIVE
+  `percentile_cont(0.5)` median over `rule_evaluations.observed` in the
+  eligibility window (relaxation-candidates.ts's own evidence does NOT
+  carry this value, checked directly rather than assumed -- a new,
+  narrow query was needed), handed to `editRule` unmodified;
+  `rule_versions`'s own existing supersede-and-insert history already
+  satisfies section 4.7's "annotates the adherence timeline," no new
+  infrastructure built; (3) adjust scoped to number/duration/rating
+  operands with bounds, reusing `EditRuleControl.tsx`'s own precedent;
+  (4) an undecidable prompt is skipped silently, not shown as a dead end
+  (relaxation's markup has no defer button to fall back to, unlike
+  graduation's); (5) relaxation applies to HARD rules exactly like soft
+  ones -- CONFIRMED by re-reading `relaxation-candidates.ts`'s own
+  pre-existing Slice 3 reasoning (no severity filter), not re-derived
+  from scratch, per this slice's own dispatch instruction to confirm
+  rather than assume; (6) entitlement gating moved per-screen ->
+  per-prompt, a real behaviour change from Slice 6.
+- `docs/runbook.md` -- new entry, "Relaxation adjust found an eligible,
+  adjustable rule with no numeric median" (a genuine anomaly signal,
+  distinct from the honest, expected `RELAXATION_NOT_ADJUSTABLE`
+  rejection for a structurally un-adjustable operand).
+
+**Live self-check performed** (real shared dev Supabase project, ADR
+0002; throwaway seed+Playwright scripts under `tmp/slice7-scripts/`,
+deleted after use, along with all three test users/fixture rows this
+session created -- `retrospeq.profiles` deleted under the
+`retrospeq.erasure_in_progress` escape hatch before the GoTrue admin
+delete, same fix `rls-test-helpers.ts`'s own `erasureDeleteProfiles`
+already documents, needed because a plain cascade delete is blocked by
+`fields_forbid_derived_delete` outside erasure mode):
+1. A real strategy-scoped soft `risk_pct` rule (created 50 days ago, so
+   >= 6 weeks old), 30 real confirmed trades plus frozen `rule_evaluations`
+   rows across the 42-day window (15 broken, 15 followed, alternating
+   observed 2.0%/0.8% against the 1.0% cap -- 50% break rate, real
+   `percentile_cont` median 1.4%, not a canned value), a real pending
+   `review_prompts` row (`kind='relaxation'`) -> decision screen renders
+   "Which one is true?", the real statement ("You have set risk per
+   trade to 1.0% and traded a median of 1.4% over the last six weeks."),
+   the real meta ("15 of 30 applicable trades exceeded it."), section
+   4.7's decision-frame sentence VERBATIM, "Decision 1 of 1" -- clicked
+   "Change to 1.4%" -> verified DIRECTLY in Postgres: `rules.current_version`
+   bumped 1->2, the new `rule_versions` row rendered "Never risk more
+   than 1.4% per trade.", `review_prompts.state='accepted'`,
+   `payload.resolution='adjust'`, `newValue=1.4`. Screen correctly lands
+   on "Nothing to decide right now." (re-verified on reload).
+2. A second, otherwise-identical fixture -> clicked "Keep 1.0%" ->
+   verified DIRECTLY in Postgres: `review_prompts.state='accepted'`,
+   `payload.resolution='recommit'`, and -- the one fact this test exists
+   to prove -- `rules.current_version` STAYED 1 (no rule write at all).
+
+Design-system self-check (screenshots read directly, not assumed from
+this narrative): `tmp/dev-screenshots/review-decisions-relaxation-
+{adjust-flow,recommit-flow}-{ready,after}.png` (all four). BOTH "ready"
+screenshots show two `.rq-btn--equal` buttons, IDENTICAL border weight,
+fill, font weight, and width (`.rq-btn-row`'s own `flex:1` on each) --
+no primary/secondary distinction, no red/green, matching section 4.7's
+ethics requirement exactly. `.rq-num` tabular styling on "Decision 1 of
+1". No `.rq-cost` box (correct -- relaxation has no explore/exploit cost
+line, only the decision-frame paragraph). "After" screenshots show the
+identical "Nothing to decide right now." terminal state Slice 6 already
+established, reached via the same automatic-revalidation mechanism (no
+new client-side "load next" logic was written here either).
+
+**Verification run**: `npx tsc --noEmit` clean; `npm run build` green
+(`/review/decisions` still registered, no new route); `npx eslint` clean
+on every touched file; `npm run check:import-boundaries` clean (104
+modules, 266 dependencies, unaffected -- this slice touches no
+`lib/analytics/**` file); full non-live `npx vitest run --exclude
+"**/*.live.test.ts"` -- 2438 passed, 13 skipped (live-DB tests without
+env, expected), exactly ONE unrelated pre-existing flake
+(`lib/analytics/__tests__/eslint-boundary.test.ts`'s own 5s timeout on a
+real spawned ESLint process, confirmed by re-running that file alone in
+isolation immediately after -- 9/9 pass, not something this slice's diff
+touches or caused). `app/(app)/review/decisions/__tests__/actions.test.ts`
+(41 tests, updated plus 15 new relaxation-specific cases: recommit/adjust
+happy paths, `RELAXATION_RULE_GONE`, `RELAXATION_CONDITION_CHANGED`,
+`RELAXATION_NOT_ADJUSTABLE`, idempotent-replay on double submit,
+`editRule`'s own rejection surfaced verbatim, per-prompt entitlement
+gating, silent-skip of an undecidable relaxation candidate) and
+`app/(app)/review/decisions/__tests__/page.test.ts` (9 tests, updated
+plus 3 new relaxation render-branch cases) both pass in full.
+`lib/review/decisions/__tests__/decisions-read-path.live.test.ts`
+mechanically updated for the renamed repository functions (live-DB,
+skipped without env in this run, not independently re-verified live by
+this coder session -- flagged for tester).
+
+**A judgment call reasoned through carefully, per this slice's own
+dispatch instruction, and confirmed rather than assumed**: does
+"which one is true?" ever apply to a HARD rule? Checked
+`relaxation-candidates.ts`'s own Slice 3 header directly rather than
+guessing -- it ALREADY filters only by `state`, never `severity`, with
+its own multi-point reasoning (no severity restriction in section 4.4's
+table; Module 04's lifecycle diagram draws promotion/relaxation as
+sibling branches, not a restriction; the ONE explicit relaxation
+restriction in `retrospeq-design-decisions.md` is scoped to v1.1 FIRM
+rules specifically, zero real rows in this repo). This slice's own new
+code (`editRule`, `canAdjustRelaxation`) adds no severity check either --
+confirmed consistent, documented in `docs/adr/0041` decision 5, not
+re-litigated from scratch.
+
+**No new automated RLS test was written for this slice** -- no new table
+was created (only new columns/writers against `review_prompts`/`rules`/
+`rule_versions`, all of which already carry owner RLS policies verified
+by earlier slices' own RLS test suites); the tester should still confirm
+this directly rather than take this note's word for it, matching Slice
+6's own identical caveat.
+
+**Documentation**: `docs/adr/0041-relaxation-decision-recommit-adjust-and-scope.md`
+(new), `docs/runbook.md` (one new entry, above).
+
+**This slice (Module 06 Slice 7, the Part 2 decision flow's RELAXATION
+half) is NOT done.** Needs `retrospeq-tester` -> `retrospeq-security-reviewer`
+-> `retrospeq-qa` before commit, per this repo's own gate chain. Not
+committed, not pushed -- the orchestrating session commits after each
+subsequent gate passes, per this build's current per-gate-commit
+convention.
+
+## 2026-09-13 -- Module 06 (Review & Graduation) Slice 7 -- TESTER: PASS. Ready for retrospeq-security-reviewer next.
+
+Read `docs/adr/0041` in full, `06-review-and-graduation.md` §4.5/§4.7/§5.1
+in full, and every new/changed file the coder's own dated entry above
+lists. The coder's own live self-check was real but no permanent test file
+existed yet for any of this slice's new code -- that was this gate's job.
+Ran real Postgres (shared dev Supabase project, ADR 0002) end to end; no
+mock stood in for a database anywhere in this gate.
+
+**New test files written this gate** (all passing, 39 new test cases
+total):
+- `lib/review/decisions/__tests__/relaxation-operand-map.test.ts` (18
+  tests) -- pure, DB-free, adversarial coverage of `canAdjustRelaxation`/
+  `deriveAdjustedValue`/`formatOperandValueLabel`: the number/duration/
+  rating + lte/gte + bounds boundary, categorical/bool rejection, bounds
+  clamping both directions, step-precision rounding, null/NaN/Infinity
+  defensive guards. No direct unit test existed for this file before this
+  gate (unlike its `graduation-operand-map.ts` sibling, which already had
+  one) -- this closes that gap, matching the sibling's own precedent.
+- `lib/review/decisions/__tests__/relaxation-evidence-schema.test.ts` (10
+  tests) -- the Zod trust boundary: well-formed payload, both
+  post-decision merged shapes (recommit/adjust), invalid resolution
+  enum, non-strict extra-key tolerance, uuid/range/integer rejections.
+  Same gap, same fix, mirroring `graduation-evidence-schema.test.ts`.
+- `app/(app)/review/decisions/__tests__/decisions-relaxation-integration.live.test.ts`
+  (10 tests, real DB, real writes, real RLS) -- see the 8 numbered items
+  below.
+- `e2e/review-decisions-relaxation.independent-verify.spec.ts` (1 real
+  Playwright test, real browser, real dev server, real DB) -- the §4.7
+  equal-weight adversarial check.
+
+**1. §4.7's equal-weight requirement -- verified structurally, not just
+visually, per this gate's own dispatch instruction.** Real Playwright
+test against a real running `next dev` server: both `RelaxationDecisionCard
+.tsx` buttons resolve to the IDENTICAL tag name and IDENTICAL class-list
+string (`"rq-btn rq-btn--equal"`, same order, neither `.rq-btn--ghost`
+anywhere on this screen), and `getComputedStyle` comparison across
+background-color/box-shadow/font-weight/color/border-radius/width/height/
+padding produced an EXACT match between the two buttons -- zero
+primary/secondary distinction, confirmed at the DOM/CSS level, matching
+the precedent Slice 5's tester set for the `provisional`-vs-`confident`
+visual-equality check (`e2e/strategy-detail.independent-verify.spec.ts`
+test 4). Bounding-box widths matched within 1px (the `.rq-btn-row > *
+{flex:1}` equal-width layout claim, checked geometrically, not inferred
+from the class name). Confirmed no red/green hue on either button, and
+confirmed there is genuinely NO third "Not yet"/defer button anywhere on
+this screen (`docs/adr/0041` decision 4's own claim). Screenshots read
+directly: `tmp/dev-screenshots/iv-relaxation-decision-equal-weight-
+{ready,after}.png` -- the "ready" state shows two visually identical
+black-ink-bordered, white-fill, bold buttons side by side, no red/green,
+`.rq-num` tabular styling on "Decision 1 of 1"; the "after" state
+(post-recommit) correctly shows the SAME "Nothing to decide right now."
+terminal screen Slice 6 already established, with its own single primary
+`.rq-btn` ("Back to your review") -- a genuinely different, non-symmetric
+context, so that button correctly does NOT use `.rq-btn--equal`.
+
+**2. Recommit writes correctly -- verified directly against Postgres, not
+assumed from the ADR's claim.** Live test constructed a real 50-day-old
+active rule, 21 real `rule_evaluations` rows (11 broken/10 followed,
+real trade FKs), a real pending relaxation `review_prompts` row, called
+`recommitRelaxationDecision` for real, then queried Postgres directly:
+`review_prompts.state='accepted'`, `payload.resolution='recommit'`,
+`payload.newValue` absent -- and, the one fact this test exists to prove,
+`rules.current_version` stayed 1 and `rule_versions` row count for that
+rule stayed 1 (zero writes of any kind to the rule). Also confirmed the
+ADR's own "Consequences" claim directly: immediately after recommitting,
+`findRelaxationCandidates` (the real, live eligibility function) still
+returns the SAME rule as a candidate -- recommit does not suppress future
+eligibility, exactly as documented, not just as claimed.
+
+**3. Adjust writes correctly, using the live median -- independently
+verified, not copied from the coder's own worked example.** Constructed a
+DIFFERENT dataset than the coder's own live self-check (21 evaluations,
+10x0.8 + 11x2.1, an odd count producing an unambiguous single-value
+median with no interpolation, versus the coder's even-count 1.4%
+example) -- hand-computed the expected median (2.1) independently,
+cross-checked it against a direct `percentile_cont(0.5)` SQL query run
+OUTSIDE the code path under test (confirmed the dataset itself produces
+2.1 before trusting the action), then called `adjustRelaxationDecision`
+for real and confirmed: `result.newValue === 2.1`,
+`result.newRendered === 'Never risk more than 2.1% per trade.'`,
+`rules.current_version` bumped 1->2, and -- the §4.7 "annotates the
+adherence timeline" claim, checked directly rather than trusted --
+`rule_versions` now has exactly 2 rows: version 1 genuinely superseded
+(`superseded_at` not null), version 2 carrying the derived value 2.1 and
+a real `created_at` strictly later than version 1's. `editRule`
+(Module 04's own public Server Action) was called for real, unmodified --
+confirmed by the real `rule_versions` supersede-and-insert pair its own
+pipeline produces, not a second, reimplemented write path.
+
+**4. Hard/soft rule scope -- confirmed directly against a real
+severity='hard' fixture, not re-read from the ADR's own claim.**
+Constructed a hard-severity rule with the identical 21-evaluation
+fixture; confirmed `findRelaxationCandidates` (the real live function)
+returns it as a genuine candidate, then ran `adjustRelaxationDecision`
+against it for real: succeeded identically to the soft case
+(`newValue=2.1`, `current_version` bumped to 2), and confirmed the
+rule's OWN `severity` column stayed `'hard'` throughout -- adjust changes
+only the threshold, never the severity tier. Matches `docs/adr/0041`
+decision 5's claim exactly, now independently proven rather than only
+re-derived from `relaxation-candidates.ts`'s own header comment.
+
+**5. The silent-skip for undecidable prompts -- both the exact edge case
+named in the dispatch (eligible+adjustable rule, no numeric median) AND
+the structurally-undecidable case (eligible but categorical/un-adjustable
+operand), each constructed for real.** (a) A real rule with 21 applicable/
+11 broken evaluations (clearing eligibility) but every `observed` value
+set to `null` (the exact data-shape anomaly `docs/runbook.md`'s new entry
+names) -- `adjustRelaxationDecision` returned `RELAXATION_NOT_ADJUSTABLE`
+honestly, logged the anomaly via `console.error` (spied and confirmed
+called, not just assumed from reading the code), and wrote NOTHING
+(`rules.current_version` stayed 1, prompt stayed `pending`) -- never a
+crash, never a misleading UI state. (b) A real, live-eligible
+`day_of_week` (categorical, pick_many-typed) relaxation candidate --
+confirmed via `findRelaxationCandidates` as a genuine candidate first,
+not a fixture that was never eligible -- fed through `fetchNextDecision`
+end to end: correctly skipped in-memory, falling all the way through to
+`{success:true, status:'none_pending'}` (nothing else was queued),
+exactly §9 `PROMPT_SUBJECT_GONE`'s "skip silently" text, applied for
+real. Three additional direct `buildRelaxationPromptDetail` calls (live
+DB) round out this file's own read-branch coverage: a genuinely retired
+rule (`canDecide:false`, blockedReason mentions "retired"), a rule whose
+break rate has genuinely dropped back below 40% since materialisation
+(stale payload still claims the old 11/21 count -- confirmed the function
+re-derives LIVE rather than trusting it, blockedReason mentions "no
+longer breaking often enough"), and the categorical-operand case called
+directly (confirms the read itself stays honest and populated -- real
+rendered sentence, real 11/21 counts -- rather than collapsing to a blank
+"gone" screen, per `RelaxationDecisionCard.tsx`'s own header reasoning).
+
+**6. Cross-kind dispatch in `page.tsx`/`fetchNextDecision` -- a real mixed
+fixture, both kinds pending in the same review, verified end to end.**
+Seeded one pending relaxation prompt (rank 1) and one pending graduation
+prompt (rank 2) in the SAME review for a FREE-plan user. First
+`fetchNextDecision()` call returned the relaxation prompt
+(`kind:'relaxation'`, index 1 of 2) -- never blocked by the Pro-only
+graduation entitlement, which has no relation to it. Resolved it for
+real (`recommitRelaxationDecision`). Second call returned
+`{status:'plan_required'}` -- the graduation prompt IS now next and DOES
+block a free user, proving gating is per-PROMPT, not per-screen (Slice
+6's old posture would have blocked BOTH from the very first call).
+Upgraded the same user to Pro; third call returned the graduation
+prompt (`kind:'graduation'`, index 2 of 2) -- the exact same prompt,
+now reachable. "One decision at a time" held correctly across kinds, in
+the documented §4.3 priority order, through the real Server Action, not
+a mock.
+
+**7. Rate limiting -- confirmed via the existing mocked test suite
+(`actions.test.ts`'s own "rate limiting is the first check on every
+exported action" describe block), re-read directly rather than taken on
+faith: `enforceRateLimit('reviewDecision', ...)` is the literal first
+call inside `recommitRelaxationDecision`/`adjustRelaxationDecision`
+(before `fetchPromptById`, before any DB read), and a
+`RateLimitExceededError` short-circuits to `REVIEW_DECISION_RATE_LIMITED`
+with zero downstream calls -- verified by mock-call-count assertion, not
+inference. `lib/rate-limit/config.ts`'s own `reviewDecision` scope entry
+was re-read directly: both new actions reuse the SAME scope Slice 6's
+accept/defer already use (one scope per `review_prompts` row's real
+abuse surface, not four near-duplicate ones), matching this repo's own
+"NEVER shipping a new write path under `/review/**` without a scope from
+day one" principle satisfied by reuse, not by omission.
+
+**8. Cross-user isolation on every new function -- verified for real,
+twice (once per new live test file).** `decisions-relaxation-
+integration.live.test.ts`'s own dedicated test: user B calling
+`recommitRelaxationDecision`/`adjustRelaxationDecision` against user A's
+real prompt id both returned `REVIEW_PROMPT_NOT_FOUND` (never a
+different error shape that would leak existence), the prompt stayed
+`pending` and the rule stayed at `current_version=1` throughout user B's
+attempts, and the legitimate owner could still act on the SAME prompt
+immediately afterward -- proving the isolation is real RLS-backed
+scoping (`withUserConnection`), not an application-layer filter that
+merely LOOKS closed. No new table was added this slice (only new
+columns/writers against `review_prompts`/`rules`/`rule_versions`/
+`rule_evaluations`, all four already carrying their own owner RLS
+policies with existing cross-user RLS test coverage --
+`lib/supabase/__tests__/review-graduation-schema.rls.test.ts` for
+`review_prompts`, `lib/supabase/__tests__/rulebook-schema.rls.test.ts`
+for `rules`/`rule_versions`/`rule_evaluations`, both confirmed present
+and already exercising cross-user SELECT/UPDATE/INSERT rejection for
+these exact tables) -- the coder's own "no new automated RLS test was
+written" note is correct and, per this gate's own independent check
+against the actual current table/policy list, does not leave a gap: 100%
+of tables this slice touches were already RLS-covered before this slice
+existed, and this gate's own application-layer cross-user tests above
+independently reconfirm the SERVER ACTION layer respects that scoping
+too, not just the raw SQL policy.
+
+**Golden fixtures (00-foundation §9.3):** not applicable -- this slice
+touches no grouping-engine code (`app/(app)/review/decisions/**`,
+`lib/review/decisions/**`, `lib/review/prompt-candidates/relaxation-
+candidates.ts`, `lib/rules/rules-repository.ts` are Module 06/04 decision-
+flow and rulebook code, not Module 02's trade-grouping engine) -- no
+fixture replay was skipped, none was required.
+
+**Verification run, this gate:**
+- `npx tsc --noEmit` -- clean.
+- `npm run lint` (repo-wide) -- 0 errors/warnings on every file this
+  slice touches; the only 2 errors anywhere in the repo are pre-existing,
+  unrelated `require()`-style imports in `tmp/*.cjs` debug scratch
+  scripts, not part of this slice's diff.
+- `npm run check:import-boundaries` -- clean, 104 modules/266
+  dependencies, unaffected (this slice touches no `lib/analytics/**`
+  file).
+- `npm run build` -- green, `/review/decisions` registered, no new
+  route.
+- `npx vitest run --exclude "**/*.live.test.ts"` -- 2467 passed, 13
+  skipped (live-DB tests without env, expected), 0 failed -- up from the
+  coder's own reported 2438/13 by this gate's 28 new pure-unit tests plus
+  1 pre-existing flaky file that did not reproduce this run (the coder's
+  own note already identified it as an unrelated 5s-timeout flake on a
+  spawned ESLint process, not something this slice's diff touches).
+- Live suites, run for real against the shared dev Supabase project:
+  `decisions-relaxation-integration.live.test.ts` (10/10 passed, ~150s),
+  `decisions-integration.live.test.ts` (graduation, 5/5 passed, still
+  green after this slice's widening of `prompts-repository.ts`),
+  `decisions-read-path.live.test.ts` (7/7 passed, mechanically-renamed
+  functions confirmed still correct against real data -- the coder's own
+  flagged "not independently re-verified live" gap is now closed).
+  Coverage (v8, all decisions-related test files run together):
+  `lib/review/decisions/**` (the new relaxation engine/gate-logic layer)
+  **100% line coverage**, clearing 00-foundation §9.1's 90% engine bar
+  with room to spare; `app/(app)/review/decisions/**` (Server Action
+  orchestration + UI components) 81.22% lines, clearing the 70% overall
+  bar (remaining gap is client-side `useState`/`useTransition` UI
+  branches exercised by the real-browser Playwright test above, not by
+  vitest).
+- Two of my own test users (`relax-equal-weight-*`) were left behind by
+  a mid-fix Playwright run that crashed before its own `afterAll` cleanup
+  ran (a `SyntaxError` importing a `server-only`-guarded module from
+  Playwright's plain Node process, fixed by inlining the week-boundary
+  math instead of importing `lib/review/current-period.ts`) -- found and
+  cleaned up directly (DB rows under `erasure_in_progress`, then GoTrue
+  admin delete) before finishing this gate. One OTHER leftover test user
+  (`elig-relaxation-*`, dated 2026-09-11) was found in the same sweep --
+  NOT created by this session, predates this slice, left alone rather
+  than guessed at.
+
+**Verdict: PASS.** Every item in this gate's own dispatch was verified
+against real Postgres and a real browser, not assumed from the coder's
+own narrative -- including the two places a narrative claim turned out
+to need a real fix to actually prove (the cross-kind test's UUID-typed
+`subject_id` column, and the cross-kind/silent-skip tests' need to seed
+the review under the REAL current period rather than an arbitrary
+hardcoded one). This slice (Module 06 Slice 7, the Part 2 decision
+flow's RELAXATION half) is READY for `retrospeq-security-reviewer` next,
+per this repo's own gate chain -- not yet committed/pushed, per the
+per-gate-commit convention.
+
+Files added this gate: `lib/review/decisions/__tests__/relaxation-
+operand-map.test.ts`, `lib/review/decisions/__tests__/relaxation-
+evidence-schema.test.ts`, `app/(app)/review/decisions/__tests__/
+decisions-relaxation-integration.live.test.ts`, `e2e/review-decisions-
+relaxation.independent-verify.spec.ts`. No source file under `app/**`/
+`lib/**` was modified by this gate -- test-only.
