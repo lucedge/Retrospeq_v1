@@ -1,6 +1,6 @@
 # Screen inventory — every route and state, v1 (Modules 01–08)
 
-The UI-phase backlog. One row per screen state. **Mockup** = anchor in `brand/docs/screens/<batch>.html` (or the existing `instrument.html` screen number S01–S17 until the batch file exists). **Built** = what `app/` renders today: ● designed against mockup · ◐ functional but plain · ○ not built.
+The UI-phase backlog. One row per screen state. **Mockup** = every row now has a frame in `brand/docs/screens/<batch>.html#<row id>` (batch 1 → `home-onboarding`, 2 → `trades`, 3 → `rulebook`, 4–5 → `review-performance`, 6 → `account`); the S01–S17 references are the earlier `instrument.html` sketches the frames supersede. **Built** = what `app/` renders today: ● designed against mockup · ◐ functional but plain · ○ not built.
 
 Legend for states: `empty` = honest "not enough data yet" / nothing-here state · `error` = degraded/failed state the spec names.
 
