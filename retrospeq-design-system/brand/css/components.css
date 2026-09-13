@@ -648,3 +648,105 @@
 /* ---------- Day group label in lists ---------- */
 .day-label { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-spacing: var(--rq-track-label); text-transform: uppercase; color: var(--rq-ink-faint); margin: var(--rq-space-4) 0 4px; }
 .day-label:first-child { margin-top: 0; }
+
+/* ============================================================
+   Added 2026-09-14 — design program batch 3 (rulebook, strategies,
+   fields). Module 04 §6.1, Module 03 §5.2 reference markup.
+   ============================================================ */
+
+/* ---------- Rule card ---------- */
+.rule { display: flex; flex-direction: column; gap: 9px; }
+.rule__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.rule__sentence { margin: 0; font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); color: var(--rq-ink); line-height: 1.4; }
+.rule__held { margin: 0; font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .06em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.rule__held b { color: var(--rq-accent-ink); font-weight: var(--rq-weight-medium); }
+.rule__actions { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 2px; }
+.rule__actions .link { font-size: var(--rq-text-sm); }
+.rule[data-state="retired"] { opacity: .6; }
+details.retired > summary { list-style: none; cursor: pointer; font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-spacing: var(--rq-track-label); text-transform: uppercase; color: var(--rq-ink-faint); padding: 8px 0; }
+details.retired > summary::-webkit-details-marker { display: none; }
+details.retired[open] > summary { color: var(--rq-ink-soft); }
+
+/* ---------- Eligibility breakdown (why a promote isn't offered yet) ---------- */
+.eligibility { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.eligibility li { display: flex; gap: 10px; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.eligibility li::before { font-family: var(--rq-font-mono); width: 16px; text-align: center; content: "·"; color: var(--rq-ink-faint); }
+.eligibility li[data-met="true"] { color: var(--rq-ink-faint); }
+.eligibility li[data-met="true"]::before { content: "✓"; color: var(--rq-accent-ink); }
+.eligibility li[data-met="false"] { color: var(--rq-ink); font-weight: var(--rq-weight-medium); }
+
+/* ---------- Discovery + catalogue ---------- */
+.discovery__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.discovery__btn { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; padding: 12px 0; border-bottom: 1px solid var(--rq-line); text-align: left; min-height: 48px; }
+.discovery__name { font-size: var(--rq-text-base); font-weight: var(--rq-weight-semi); }
+.discovery__evidence { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-size: var(--rq-text-xs); color: var(--rq-ink-faint); text-align: right; }
+details.catalogue > summary, details.examples > summary { cursor: pointer; font-size: var(--rq-text-sm); font-weight: var(--rq-weight-semi); color: var(--rq-accent-ink); padding: 8px 0; list-style: none; }
+details.catalogue > summary::-webkit-details-marker, details.examples > summary::-webkit-details-marker { display: none; }
+details.catalogue input[type="search"] { width: 100%; min-height: 44px; padding: 10px 12px; border-radius: var(--rq-radius-md); border: 1px solid var(--rq-line-strong); background: var(--rq-surface); color: var(--rq-ink); font-size: var(--rq-text-md); margin: 6px 0 10px; }
+
+/* ---------- Rule meta (coverage, severity at creation) ---------- */
+.rule-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rule-coverage { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); }
+
+/* ---------- Trigger conditions (strategy builder) ---------- */
+.guidance { margin: 0; font-size: var(--rq-text-base); color: var(--rq-ink-soft); }
+.examples__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 8px 0 4px; }
+.examples__col h3 { margin: 0 0 6px; font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.examples__col--fail h3 { color: var(--rq-ink-faint); }
+.examples__col ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.examples__col--fail ul { text-decoration: line-through; text-decoration-color: var(--rq-line-strong); }
+.conditions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: cond; }
+.condition { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: center; }
+.condition input { min-height: 44px; padding: 10px 12px; border-radius: var(--rq-radius-md); border: 1px solid var(--rq-line-strong); background: var(--rq-surface); color: var(--rq-ink); font-size: var(--rq-text-md); width: 100%; }
+.condition .icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--rq-ink-faint); font-size: 18px; }
+.condition .hint--advisory { grid-column: 1 / -1; }
+
+/* ---------- Field picker ---------- */
+.field-group { display: flex; flex-direction: column; gap: 8px; }
+.field-group h3 { margin: 0; font-size: var(--rq-text-base); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.field-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.field-list__item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--rq-line); min-height: 48px; }
+.field-list__item:last-child { border-bottom: 0; }
+.field-list__item label { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; min-width: 0; }
+.field-list__item input { width: 20px; height: 20px; accent-color: var(--rq-accent); flex-shrink: 0; }
+.field-list__name { font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium); }
+.chip--small { font-size: 9px; padding: 3px 7px; }
+.field-list__usage { font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); color: var(--rq-ink-faint); white-space: nowrap; }
+.cap-warning { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); }
+.cap-warning p { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+
+/* ---------- Radio stack (capture moment) ---------- */
+.radio-stack { display: flex; flex-direction: column; }
+.radio-stack label { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--rq-line); cursor: pointer; }
+.radio-stack label:last-child { border-bottom: 0; }
+.radio-stack input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--rq-accent); grid-row: span 2; }
+.radio-stack span { font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium); }
+.radio-stack small { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); }
+fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-spacing: var(--rq-track-label); text-transform: uppercase; color: var(--rq-ink-faint); padding: 0; margin-bottom: 4px; }
+
+/* ---------- Strategy screen: per-field finding state ---------- */
+.field-states { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.field-state { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 0; border-bottom: 1px solid var(--rq-line); }
+.field-state:last-child { border-bottom: 0; }
+.field-state__name { margin: 0; font-size: var(--rq-text-base); font-weight: var(--rq-weight-semi); grid-row: span 2; align-self: center; }
+.field-state__finding { margin: 0; font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-size: var(--rq-text-base); text-align: right; }
+.field-state__meta { margin: 0; font-size: var(--rq-text-xs); color: var(--rq-ink-faint); text-align: right; }
+.field-state[data-state="insufficient"] .field-state__finding, .field-state[data-state="null-result"] .field-state__finding { font-family: var(--rq-font-sans); color: var(--rq-ink-soft); }
+.field-state[data-state="confident"] .field-state__finding { font-weight: var(--rq-weight-medium); }
+
+/* ---------- Dependents (deletion blocked) + version list ---------- */
+.dependents { margin: 0; padding: 0 0 0 18px; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); display: flex; flex-direction: column; gap: 4px; }
+.versions { list-style: none; margin: 0; padding: 0; }
+.versions li { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--rq-line); font-size: var(--rq-text-sm); }
+.versions li:last-child { border-bottom: 0; }
+.versions time { font-family: var(--rq-font-mono); color: var(--rq-ink-faint); }
+
+/* ---------- Pro gate (a quantity cap, not a wall) ---------- */
+.gate { background: var(--rq-surface-2); border-radius: var(--rq-radius-lg); padding: var(--rq-space-4); display: flex; flex-direction: column; gap: 10px; }
+.gate p { margin: 0; font-size: var(--rq-text-base); color: var(--rq-ink); }
+.gate .hint { color: var(--rq-ink-faint); }
+
+/* ---------- Builder steps ---------- */
+.steps { display: flex; gap: 6px; font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.steps span[aria-current="step"] { color: var(--rq-accent-ink); }
