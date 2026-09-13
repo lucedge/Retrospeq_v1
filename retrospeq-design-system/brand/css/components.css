@@ -797,3 +797,76 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 /* ---------- Performance: stat pair + section rows ---------- */
 .stats { display: flex; gap: var(--rq-space-6); flex-wrap: wrap; }
 .axis { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--rq-font-mono); font-size: 9.5px; color: var(--rq-ink-faint); }
+
+/* ============================================================
+   Added 2026-09-14 — design program batch 6 (account, auth, settings).
+   Module 01 §5.2 reference markup: account cards, usage fractions,
+   upgrade prompt, sessions; auth card.
+   ============================================================ */
+
+/* ---------- Auth card (signed-out shell) ---------- */
+.auth { display: flex; flex-direction: column; gap: var(--rq-space-4); }
+.auth__thesis { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-faint); }
+.auth__or { display: flex; align-items: center; gap: 10px; font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .12em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.auth__or::before, .auth__or::after { content: ""; flex: 1; border-top: 1px solid var(--rq-line); }
+.auth__foot { margin: 0; text-align: center; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.field__row { display: flex; justify-content: space-between; align-items: baseline; }
+.code { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; letter-spacing: .3em; font-size: var(--rq-text-xl); text-align: center; }
+.codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-family: var(--rq-font-mono); font-size: var(--rq-text-sm); }
+.codes li[data-used] { color: var(--rq-ink-faint); text-decoration: line-through; }
+
+/* ---------- Settings rows ---------- */
+.settings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.settings li { border-bottom: 1px solid var(--rq-line); }
+.settings li:first-child { border-top: 1px solid var(--rq-line); }
+.settings a, .settings__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 10px 0; text-decoration: none; color: inherit; }
+.settings__label { display: flex; flex-direction: column; gap: 2px; }
+.settings__label b { font-size: var(--rq-text-base); font-weight: var(--rq-weight-semi); }
+.settings__label span { font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.settings__chev { color: var(--rq-ink-faint); flex-shrink: 0; }
+
+/* ---------- Toggle switch ---------- */
+.switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch i { position: absolute; inset: 0; border-radius: var(--rq-radius-pill); background: var(--rq-line-strong); transition: background var(--rq-duration-fast) var(--rq-ease); }
+.switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--rq-surface); transition: transform var(--rq-duration-fast) var(--rq-ease); }
+.switch input:checked + i { background: var(--rq-accent); }
+.switch input:checked + i::after { transform: translateX(18px); }
+.switch input:focus-visible + i { outline: 2px solid var(--rq-focus); outline-offset: 2px; }
+
+/* ---------- Account card ---------- */
+.account-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.account-card { background: var(--rq-surface); border: 1px solid var(--rq-line); border-radius: var(--rq-radius-lg); padding: var(--rq-space-4); display: flex; flex-direction: column; gap: 10px; }
+.account-card[data-status="attention"] { box-shadow: inset 0 0 0 1.5px var(--rq-ink); }
+.account-card[data-status="disconnected"] { opacity: .6; }
+.account-card__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.account-card__label { margin: 0; font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.account-card__meta { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.account-card__meta div { display: flex; flex-direction: column; gap: 1px; }
+.account-card__meta dt { font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .06em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.account-card__meta dd { margin: 0; font-size: var(--rq-text-sm); font-variant-numeric: tabular-nums; }
+.account-card__reason { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.account-card__actions { display: flex; gap: 14px; }
+
+/* ---------- Plan usage: fractions, never a bare percentage ---------- */
+.plan__current { margin: 0; font-family: var(--rq-font-mono); font-size: var(--rq-text-xl); font-weight: var(--rq-weight-medium); }
+.usage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.usage__item { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: baseline; }
+.usage__label { font-size: var(--rq-text-base); }
+.usage__value { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-size: var(--rq-text-base); }
+.usage__value strong { font-weight: var(--rq-weight-bold); }
+.usage__item progress { grid-column: 1 / -1; width: 100%; height: 8px; appearance: none; -webkit-appearance: none; border: 0; background: var(--rq-mark-ghost); border-radius: var(--rq-radius-pill); overflow: hidden; }
+.usage__item progress::-webkit-progress-bar { background: var(--rq-mark-ghost); }
+.usage__item progress::-webkit-progress-value { background: var(--rq-mark); }
+.usage__item progress::-moz-progress-bar { background: var(--rq-mark); }
+.usage__item[data-at-limit="true"] .usage__value { color: var(--rq-ink); }
+.upgrade-prompt { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); display: flex; flex-direction: column; gap: 10px; }
+.upgrade-prompt p { margin: 0; font-size: var(--rq-text-base); }
+.price { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- Sessions ---------- */
+.sessions { list-style: none; margin: 0; padding: 0; }
+.sessions li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--rq-line); min-height: 52px; }
+.sessions li:last-child { border-bottom: 0; }
+.sessions__dev { display: flex; flex-direction: column; gap: 2px; font-size: var(--rq-text-sm); }
+.sessions__dev small { color: var(--rq-ink-faint); font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); }
