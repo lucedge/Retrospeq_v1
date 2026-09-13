@@ -1,6 +1,6 @@
 ---
 name: design-build
-description: Build or restyle any Retrospeq UI — tokens, components, screens — against the brand design system and the 17-screen mockup, with the merged rule set from the installed UI/UX skills (Vercel WIG, react-best-practices, ui-ux-pro-max, bencium) adapted to this product. Use for "build the X screen", "restyle Y to the mockup", "add a component", "design-system work". Not for auditing (use design-audit) or re-opening the visual direction (design-explore).
+description: Build or restyle any Retrospeq UI — tokens, components, screens — against the brand design system and the 76-state mockup, with the merged rule set from the installed UI/UX skills (Vercel WIG, react-best-practices, ui-ux-pro-max, bencium) adapted to this product. Use for "build the X screen", "restyle Y to the mockup", "add a component", "design-system work". Not for auditing (use design-audit) or re-opening the visual direction (design-explore).
 ---
 
 # design-build
