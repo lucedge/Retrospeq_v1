@@ -1,10 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Decimal } from 'decimal.js';
 import type { GuidedRuleSeed } from '@/lib/rules/guided-front-door';
-import { renderSentence } from '@/lib/rules/render-sentence';
 import { createRule, previewRule, type PreviewRuleActionState } from '../actions';
 import { completeGuidedRuleCalibration } from '../../onboarding/actions';
 
@@ -19,18 +18,24 @@ import { completeGuidedRuleCalibration } from '../../onboarding/actions';
  *
  * DESIGN-SYSTEM CHOICES, documented (per this slice's own dispatch):
  *
- * - Stepper only, no native `<input type="range">` — §6.1's own reference
- *   markup pairs a stepper with a range slider, but that markup is
- *   EXPLICITLY illustrative (this file's own dispatch: "reuse its
- *   structure/classes ... even though this screen shows three at once"),
- *   and `retrospeq-design-system/brand/css/components.css` only ever
- *   styles `.rq-step`/`.rq-step__btn`/`.rq-step__val` — there is no
- *   `.rq-slider` primitive anywhere in the real, shipped design system.
- *   Adding an unstyled native range input would both look out of place
- *   and duplicate the stepper's own job. The stepper alone already
- *   satisfies the real constraint the README states this markup exists
- *   to satisfy ("Nothing on a fast-capture screen may require a
- *   keyboard").
+ * - Sentence + inline value + range (updated 2026-09-14, mockup fidelity
+ *   slice, supersedes this file's own earlier note): the design program's
+ *   batch 1 (`docs/screens/home-onboarding.html` #1.10/#1.11, `rulebook.html`
+ *   #3.6) shipped real `.rule-value`/`.rq-range` CSS
+ *   (`retrospeq-design-system/brand/css/components.css`) that did not exist
+ *   when this file first chose stepper-only — that "no `.rq-slider`
+ *   primitive exists" reasoning no longer holds for THIS screen and has
+ *   been replaced by the mockup-matching markup below (sentence rendered
+ *   with the current value as an inline `.rule-value.rq-step__val` button,
+ *   a `.rq-range` row pairing the same `−`/`+` stepper buttons with a real
+ *   `<input type="range">` bound to the same value/bounds/step). Nothing
+ *   about this changes the "no keyboard required" guarantee — every
+ *   control here is still pointer/tap-driven (buttons and a range thumb),
+ *   never a text field. NOTE: `../new/RuleEditor.tsx` (the general rule
+ *   editor) still carries the OLD "no range primitive" claim in its own
+ *   header comment — out of this slice's scope (dispatch named only this
+ *   file + `page.tsx`), flagged in this slice's ledger entry for whoever
+ *   next touches that screen.
  * - "Add" vs "Skip" is a genuine `.rq-btn--equal` pair, not a primary +
  *   secondary pair. Per this slice's own dispatch and the design system's
  *   own ethics rule ("the relaxation prompt must not imply a
@@ -243,7 +248,7 @@ export function GuidedFrontDoor({
         </p>
       )}
 
-      <ul className="flex flex-col gap-4">
+      <ol className="calibrate__list">
         {cards.map((card) => (
           <GuidedRuleCard
             key={card.seed.operandId}
@@ -253,7 +258,8 @@ export function GuidedFrontDoor({
             onToggleSelected={() => toggleSelected(card.seed.operandId)}
           />
         ))}
-      </ul>
+      </ol>
+      <p className="rq-sub">All start soft and apply to every strategy.</p>
 
       <div className="rq-btn-row">
         <button
@@ -283,13 +289,56 @@ export function GuidedFrontDoor({
   );
 }
 
+/** Splits an operand's `{value}` phrasing template into the text before and
+ *  after the blank, so the current value can be rendered as a real inline
+ *  element (`.rule-value`) rather than substituted into a single opaque
+ *  string — matching `home-onboarding.html` #1.10/#1.11 and `rulebook.html`
+ *  #3.6's markup shape. Percent operands carry their own `%` INSIDE the
+ *  value chip (mockup: `<button class="rule-value">1.5%</button>`) rather
+ *  than as trailing sentence text, so a literal `%` immediately after the
+ *  placeholder in the template is stripped from the suffix here — it is
+ *  re-added to the button's own text below instead, never shown twice. */
+function splitSentenceAroundValue(template: string, unit: string): { prefix: string; suffix: string } {
+  const PLACEHOLDER = '{value}';
+  const idx = template.indexOf(PLACEHOLDER);
+  if (idx === -1) {
+    // Structurally unreachable for the three guided operands — each has an
+    // `lte` phrasing entry with a bare `{value}` placeholder
+    // (`operand-catalogue.ts`). Loud guard rather than a silently
+    // malformed sentence.
+    throw new Error(`splitSentenceAroundValue: phrasing template "${template}" has no {value} placeholder.`);
+  }
+  const prefix = template.slice(0, idx);
+  let suffix = template.slice(idx + PLACEHOLDER.length);
+  if (unit === 'percent' && suffix.startsWith('%')) {
+    suffix = suffix.slice(1);
+  }
+  return { prefix, suffix };
+}
+
+/** Categorises an already-computed flagged ratio (`PreviewResult.ratio`,
+ *  present only when `state === 'flagged'`) into the design system's own
+ *  `preview__guidance[data-band]` CSS hook — boundary-for-boundary the same
+ *  table `lib/rules/preview.ts`'s own `guidanceForRatio` already encodes in
+ *  its guidance TEXT (§5.8: `0`, `> 0.35`, `< 0.06`, else). Purely a display
+ *  categorisation of a number the server already returned — not a second
+ *  copy of any rule/evaluation logic. If that table's boundaries ever move,
+ *  this is the one place on this screen that needs to move with it. */
+function bandForRatio(ratio: number): 'never' | 'tight' | 'healthy' | 'loose' {
+  if (ratio === 0) return 'never';
+  if (ratio > 0.35) return 'loose';
+  if (ratio < 0.06) return 'tight';
+  return 'healthy';
+}
+
 /**
- * One guided rule card — §6.1's `.rule-editor` reference markup, adapted:
- * sentence with the current value inline, a real `.rq-step` stepper (no
- * text input, no keyboard), a live read-only preview (`role="status"
- * aria-live="polite"`, matching the reference markup's own accessibility
- * contract exactly), the "Starts soft"/"Applies to all strategies" meta
- * chips, and an inclusion toggle.
+ * One guided rule card — Module 08 §5.3 / Module 04 §6.1's `.rule-editor`
+ * reference markup, matching `home-onboarding.html` #1.10/#1.11 and
+ * `rulebook.html` #3.6: the sentence with its current value inline as a
+ * `.rule-value` chip, a `.rq-range` row (the same stepper buttons paired
+ * with a real range slider, both bound to the identical value/bounds/step
+ * — no text input, no keyboard), a live read-only preview (`role="status"
+ * aria-live="polite"`), and an inclusion switch.
  */
 function GuidedRuleCard({
   card,
@@ -323,10 +372,24 @@ function GuidedRuleCard({
   const [previewLoading, setPreviewLoading] = useState(true);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
+  const rangeInputRef = useRef<HTMLInputElement>(null);
 
-  const sentence = useMemo(() => renderSentence(seed.operandId, OP, card.value), [seed.operandId, card.value]);
   const decimals = countDecimals(boundsStep);
   const displayValue = card.value.toFixed(decimals);
+  const displayValueWithUnit = `${displayValue}${seed.operand.unit === 'percent' ? '%' : ''}`;
+
+  // `OP` is `'lte'` for every guided operand (this file's own constant) —
+  // each of the three has an `lte` phrasing entry with exactly one
+  // `{value}` blank (`operand-catalogue.ts`), so this lookup and split are
+  // safe for the whole guided set, not just risk_pct.
+  const phrasingTemplate = seed.operand.phrasing[OP];
+  if (!phrasingTemplate) {
+    // Structurally unreachable — same class of guard as the `bounds` check
+    // above: a real drift bug between this screen's hardcoded operand list
+    // and the catalogue, not a data-volume case.
+    throw new Error(`GuidedRuleCard: operand "${seed.operandId}" has no "${OP}" phrasing template.`);
+  }
+  const { prefix, suffix } = splitSentenceAroundValue(phrasingTemplate, seed.operand.unit);
 
   const showInteractive = !seed.alreadyGoverned && !card.added;
 
@@ -372,103 +435,146 @@ function GuidedRuleCard({
   }
 
   return (
-    <li>
-      <section className="rule-editor rq-card flex flex-col gap-3" aria-labelledby={`guided-${seed.operandId}-h`}>
-        <h2 id={`guided-${seed.operandId}-h`} className="sr-only">
-          {seed.operand.label}
-        </h2>
+    <li className="calibrate__rule rule-editor" aria-labelledby={`guided-${seed.operandId}-h`}>
+      <h2 id={`guided-${seed.operandId}-h`} className="sr-only">
+        {seed.operand.label}
+      </h2>
 
-        {seed.alreadyGoverned ? (
-          <>
-            <p className="rq-body">{seed.existingRuleRendered}</p>
-            <p className="rq-sub">Already in your rulebook — not offered again here.</p>
-          </>
-        ) : card.added ? (
-          <>
-            <p className="rq-body">{card.addedRendered}</p>
-            <span className="rq-tag rq-tag--on">Added</span>
-          </>
-        ) : (
-          <>
-            <p className="rule-sentence rq-body">{sentence}</p>
-
-            <div className="rq-step" role="group" aria-label={`${seed.operand.label} threshold`}>
-              <button
-                type="button"
-                className="rq-step__btn"
-                aria-label="Decrease"
-                disabled={disabled}
-                onClick={() => step(-1)}
-              >
-                −
-              </button>
-              <span className="rq-step__val rq-num" aria-live="polite">
-                {displayValue}
-                {seed.operand.unit === 'percent' ? '%' : ''}
-              </span>
-              <button
-                type="button"
-                className="rq-step__btn"
-                aria-label="Increase"
-                disabled={disabled}
-                onClick={() => step(1)}
-              >
-                +
-              </button>
-            </div>
-
-            <aside className="preview rq-well flex flex-col gap-1" role="status" aria-live="polite">
-              {previewLoading ? (
-                // A LOADING skeleton, deliberately distinct from
-                // `insufficient_history`'s own real "not enough data
-                // yet" copy below — a spinner is not the same claim as
-                // "we checked and there isn't enough history."
-                <p className="rq-sub" aria-busy="true">
-                  Checking against your history…
-                </p>
-              ) : previewError ? (
-                <p className="rq-sub" role="alert">
-                  {previewError}
-                </p>
-              ) : preview?.state === 'flagged' ? (
-                <>
-                  <p className="preview__lede rq-sub">Against your recent trades, this would have flagged</p>
-                  <p className="preview__count rq-num">{preview.flagged}</p>
-                  <p className="preview__guidance rq-sub">{preview.guidance}</p>
-                  {preview.calibration && <p className="preview__calibration rq-sub">{preview.calibration}</p>}
-                </>
-              ) : (
-                <p className="rq-sub">{preview?.guidance ?? 'Not enough data yet.'}</p>
-              )}
-              <p className="preview__disclaimer rq-sub">
-                Preview only. Past trades are never scored against this rule.
-              </p>
-            </aside>
-
-            <div className="rule-meta flex flex-wrap items-center gap-2">
-              <span className="rq-tag rq-tag--muted">Starts soft</span>
-              <span className="rq-tag rq-tag--muted">Applies to all strategies</span>
-            </div>
-
+      {seed.alreadyGoverned ? (
+        <>
+          <p className="rule-sentence rq-body">{seed.existingRuleRendered}</p>
+          <p className="rq-sub">Already in your rulebook — not offered again here.</p>
+        </>
+      ) : card.added ? (
+        <>
+          <p className="rule-sentence rq-body">{card.addedRendered}</p>
+          <span className="rq-tag rq-tag--on">Added</span>
+        </>
+      ) : (
+        <>
+          <p className="rule-sentence">
+            {prefix}
             <button
               type="button"
-              className={card.selected ? 'rq-pill on' : 'rq-pill'}
-              role="switch"
-              aria-checked={card.selected}
-              disabled={disabled}
-              onClick={onToggleSelected}
+              className="rule-value rq-step__val rq-num"
+              aria-live="polite"
+              // A real, useful action (not a fake affordance): the
+              // components.css source comment for `.rule-value` documents
+              // its job as "a button that opens the stepper" — here, the
+              // fine control (the range slider right below) is already
+              // always visible, so "opens" becomes "focuses."
+              onClick={() => rangeInputRef.current?.focus()}
             >
-              {card.selected ? 'Included' : 'Not included'}
+              {displayValueWithUnit}
             </button>
+            {suffix}
+          </p>
 
-            {card.error && (
-              <p className="rq-sub" role="alert">
-                {card.error}
+          <div className="rq-range" role="group" aria-label={`${seed.operand.label} threshold`}>
+            <button
+              type="button"
+              className="rq-step__btn"
+              aria-label="Decrease"
+              disabled={disabled}
+              onClick={() => step(-1)}
+            >
+              −
+            </button>
+            <input
+              ref={rangeInputRef}
+              type="range"
+              min={boundsMin}
+              max={boundsMax}
+              step={boundsStep}
+              value={card.value}
+              disabled={disabled}
+              aria-label={`${prefix}value${suffix}`}
+              onChange={(e) => onValueChange(Number(e.target.value))}
+            />
+            <button
+              type="button"
+              className="rq-step__btn"
+              aria-label="Increase"
+              disabled={disabled}
+              onClick={() => step(1)}
+            >
+              +
+            </button>
+          </div>
+
+          <div className="preview" role="status" aria-live="polite">
+            {previewLoading ? (
+              // A LOADING skeleton, deliberately distinct from
+              // `insufficient_history`'s own real "not enough data
+              // yet" copy below — a spinner is not the same claim as
+              // "we checked and there isn't enough history."
+              <p className="rq-sub" aria-busy="true">
+                Checking against your history…
               </p>
+            ) : previewError ? (
+              <p className="rq-sub" role="alert">
+                {previewError}
+              </p>
+            ) : preview?.state === 'flagged' ? (
+              <>
+                <p className="preview__lede rq-sub">
+                  Against your last <span className="rq-num">{preview.n}</span> trades, this would have flagged
+                </p>
+                <p className="preview__count rq-num">{preview.flagged}</p>
+                <p
+                  className="preview__guidance rq-sub"
+                  data-band={preview.ratio !== undefined ? bandForRatio(preview.ratio) : undefined}
+                >
+                  {preview.guidance}
+                </p>
+                {preview.calibration && <p className="preview__calibration rq-sub">{preview.calibration}</p>}
+              </>
+            ) : preview?.state === 'insufficient_history' ? (
+              <>
+                <p className="preview__lede rq-sub">No history yet</p>
+                <p className="preview__guidance rq-sub">We&rsquo;ll refine this once you&rsquo;ve logged 20 trades.</p>
+              </>
+            ) : (
+              // `operand_not_computable` (structurally unreachable for
+              // these three guided operands, all distribution-backed — see
+              // `guided-front-door.ts`'s own header) or the pre-first-load
+              // instant: the server's own guidance text, honestly, never a
+              // fabricated "No history yet" claim for a state that isn't
+              // actually that.
+              <p className="preview__guidance rq-sub">{preview?.guidance ?? 'Preview unavailable right now.'}</p>
             )}
-          </>
-        )}
-      </section>
+            <p className="preview__disclaimer rq-sub">
+              Preview only. Past trades are never scored against this rule.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            // `self-start`: `.calibrate__rule`'s `display:flex;
+            // flex-direction:column` (like `.rule-editor`'s own layout
+            // before it) stretches direct block-level flex children to
+            // its own width by default -- without this, the pill fills
+            // the whole card and reads exactly like the `.rq-btn--block`
+            // it must NOT look like (this dispatch's own explicit
+            // concern). `.rq-pill` elsewhere (e.g. the top `.rq-pills`
+            // nav) never sits directly in a vertical flex column, so this
+            // is scoped to this instance, not a `.rq-pill` source change.
+            className={card.selected ? 'rq-pill on self-start' : 'rq-pill self-start'}
+            role="switch"
+            aria-checked={card.selected}
+            disabled={disabled}
+            onClick={onToggleSelected}
+          >
+            {card.selected ? 'Included' : 'Skip this one'}
+          </button>
+
+          {card.error && (
+            <p className="rq-sub" role="alert">
+              {card.error}
+            </p>
+          )}
+        </>
+      )}
     </li>
   );
 }

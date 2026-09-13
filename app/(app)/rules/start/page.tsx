@@ -60,9 +60,9 @@ export default async function GuidedRuleFrontDoorPage() {
         <h1 id="guided-rules-h" className="rq-h1">
           Three rules to start with
         </h1>
-        <p className="rq-body">
-          Every trader needs these. Nothing here is final — every one starts soft, and you can
-          change, promote, or retire any of them later.
+        <p className="rq-sub">
+          Set from how you already trade. All start soft — nothing is enforced, and you can
+          change them any time.
         </p>
       </div>
 
