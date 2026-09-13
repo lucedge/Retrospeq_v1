@@ -1,5 +1,7 @@
 # Infra gaps — standing reference (not blocking current work)
 
+- [ ] **Shared dev project: 837 of 850 `auth.users` are orphaned test accounts (`retrospeq-*`/`e2e-*`/`qa-*@example.com`, older than 6h) as of 2026-09-14; stale unconfirmed trades down to 4.** Live tests that call the unscoped `autoConfirmStaleTrades()` (4 files) still time out / race under parallel workers. Purge needs owner go-ahead (destructive on the shared project) — `npm run test:user -- cleanup --hours 100000` would do it; after that, retest `check:live`. The 5 known-flaky tests: see PROGRESS.md 2026-09-14 gate entry.
+
 > Moved verbatim out of PROGRESS.md on 2026-09-14. `NEEDS_YOUR_INPUT.md` is for things blocking work *now*; this is the long-form register of known future needs and deferred follow-ups. Add new entries at the top; tick and strike resolved ones.
 
 
