@@ -183,7 +183,8 @@
 }
 .ambient__value {
   font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums;
-  font-size: var(--rq-text-md); font-weight: var(--rq-weight-medium); color: var(--rq-ink);
+  font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium); color: var(--rq-ink);
+  white-space: nowrap;
 }
 /* watch: a broken SOFT rule -- visible, not alarming. Heavier edge only. */
 .ambient__cell[data-state="watch"] { border-left-color: var(--rq-ink-soft); }
@@ -581,3 +582,69 @@
 
 /* ---------- Screen-reader only ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ============================================================
+   Added 2026-09-14 — design program batch 2 (trades). Module 02 §5.2
+   reference markup: trade rows with expandable fills, trim reasons,
+   close-out list, grouping resolution. Same rule: state by text,
+   weight, position — never hue. Direction is a letter and a side of
+   the zero line, never a colour.
+   ============================================================ */
+
+/* ---------- Direction badge ---------- */
+.dir { font-family: var(--rq-font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); }
+
+/* ---------- Trade row (summary is a button; fills expand beneath) ---------- */
+.trade { border-bottom: 1px solid var(--rq-line); }
+.trade:last-child { border-bottom: 0; }
+.trade__summary { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 0; text-align: left; min-height: 44px; }
+.trade__instrument { width: 62px; flex-shrink: 0; font-size: var(--rq-text-sm); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.trade__summary .dir { width: 34px; flex-shrink: 0; }
+.trade__summary .rq-track { flex: 1; }
+.trade__r { width: 46px; flex-shrink: 0; text-align: right; font-size: var(--rq-text-sm); }
+.trade__time { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); color: var(--rq-ink-faint); width: 38px; text-align: right; flex-shrink: 0; }
+.trade__fillcount { font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); color: var(--rq-ink-faint); }
+.trade__summary[aria-expanded="true"] .trade__instrument { color: var(--rq-accent-ink); }
+.trade__fills { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 10px; }
+.trade__grouping { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-faint); display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- Fills table (any dense numeric table) ---------- */
+.fills, .rq-table { width: 100%; border-collapse: collapse; font-size: var(--rq-text-sm); }
+.fills th, .rq-table th { text-align: left; font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); letter-spacing: .08em; text-transform: uppercase; color: var(--rq-ink-faint); font-weight: var(--rq-weight-regular); padding: 4px 0; border-bottom: 1px solid var(--rq-line); }
+.fills td, .rq-table td { padding: 6px 0; border-bottom: 1px solid var(--rq-line); font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; }
+.fills td:nth-child(2) { font-family: var(--rq-font-sans); }
+.fills tr:last-child td, .rq-table tr:last-child td { border-bottom: 0; }
+.fills th:not(:first-child), .fills td:not(:first-child), .rq-table th.num, .rq-table td.num { text-align: right; }
+.fills td:nth-child(2), .fills th:nth-child(2) { text-align: left; }
+
+/* ---------- Not a decision (checkbox with explainer) ---------- */
+.not-a-decision { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: start; padding: 10px 0; cursor: pointer; }
+.not-a-decision input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--rq-accent); grid-row: span 2; }
+.not-a-decision span { font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium); }
+.not-a-decision small { font-size: var(--rq-text-sm); color: var(--rq-ink-faint); }
+
+/* ---------- Trim reason: one tap, fixed options, always skippable ---------- */
+.trim-reason { display: flex; flex-direction: column; gap: 10px; }
+.trim-reason > p { margin: 0; font-size: var(--rq-text-base); font-weight: var(--rq-weight-semi); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips .chip { min-height: 36px; padding: 8px 13px; font-family: var(--rq-font-sans); font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); background: var(--rq-surface); box-shadow: inset 0 0 0 1px var(--rq-line); color: var(--rq-ink-soft); cursor: pointer; }
+.chips .chip[aria-pressed="true"], .chips .chip.on { background: var(--rq-accent); color: var(--rq-accent-on); box-shadow: none; font-weight: var(--rq-weight-bold); }
+.chips--static .chip { cursor: default; }
+.ghost { background: none; color: var(--rq-ink-faint); font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); min-height: 36px; padding: 0 6px; }
+
+/* ---------- Close-out list ---------- */
+.closeout__trades { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.closeout__trade { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--rq-line); min-height: 52px; }
+.closeout__trade:last-child { border-bottom: 0; }
+.closeout__trade .instrument { width: 62px; flex-shrink: 0; font-size: var(--rq-text-sm); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.closeout__trade .rq-track { flex: 1; }
+.closeout__trade .link { margin-left: auto; font-size: var(--rq-text-sm); white-space: nowrap; }
+.closeout__trade[data-capture="unmatched"] .instrument { color: var(--rq-ink-soft); }
+
+/* ---------- Alert (neutral shell, from Module 04 §6.1) — shared ---------- */
+.alert h2 { font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-tight); margin: 0; }
+.alert .rq-btn--ghost { align-self: flex-start; }
+
+/* ---------- Day group label in lists ---------- */
+.day-label { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-spacing: var(--rq-track-label); text-transform: uppercase; color: var(--rq-ink-faint); margin: var(--rq-space-4) 0 4px; }
+.day-label:first-child { margin-top: 0; }
