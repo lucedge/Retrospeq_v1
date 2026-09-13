@@ -458,3 +458,126 @@
 .finding[data-confidence="provisional"] .finding__statement {
   font-weight: var(--rq-weight-bold);
 }
+
+/* ============================================================
+   Added 2026-09-14 — design program batch 1 (home + onboarding).
+   Spec-named markup from Module 01 §5.2, 02 §5.2, 04 §6.1, 07 §6.1,
+   08 §8 that had no CSS. Every state below is carried by text,
+   weight, edge or position — never hue. No success/danger colour
+   exists in this system and nothing here invents one.
+   ============================================================ */
+
+/* ---------- Status chip ----------
+   Text always. `--attention` is the "needs a fix" state: full-ink
+   edge, not a colour. `--ok`/`--muted` differ by weight only. */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: var(--rq-radius-pill);
+  font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs);
+  font-weight: var(--rq-weight-semi); letter-spacing: .03em;
+  background: var(--rq-surface-2); color: var(--rq-ink-soft);
+}
+.chip--ok { color: var(--rq-ink); }
+.chip--muted { color: var(--rq-ink-faint); font-weight: var(--rq-weight-regular); }
+.chip--attention { background: var(--rq-surface); box-shadow: inset 0 0 0 1.5px var(--rq-ink); color: var(--rq-ink); }
+.chip--syncing::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--rq-ink-soft); animation: rq-pulse 1.4s var(--rq-ease) infinite; }
+@keyframes rq-pulse { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+
+/* ---------- Segmented control (radiogroup) ----------
+   Inputs visually hidden; labels are the targets (44px). */
+.segmented { display: flex; gap: 6px; flex-wrap: wrap; }
+.segmented input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.segmented label {
+  min-height: 40px; padding: 9px 13px; border-radius: var(--rq-radius-pill);
+  background: var(--rq-surface); color: var(--rq-ink-soft);
+  box-shadow: inset 0 0 0 1px var(--rq-line);
+  font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium);
+  display: inline-flex; align-items: center; cursor: pointer;
+}
+.segmented input:checked + label { background: var(--rq-accent); color: var(--rq-accent-on); box-shadow: none; font-weight: var(--rq-weight-bold); }
+.segmented input:focus-visible + label { outline: 2px solid var(--rq-focus); outline-offset: 2px; }
+
+/* ---------- Text fields (post-close and account screens only —
+   never on a pre-entry capture screen) ---------- */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-spacing: var(--rq-track-label); text-transform: uppercase; color: var(--rq-ink-faint); }
+.field input, .field textarea, .field select {
+  min-height: 44px; padding: 10px 12px; border-radius: var(--rq-radius-md);
+  background: var(--rq-surface); color: var(--rq-ink); border: 1px solid var(--rq-line-strong);
+  font-size: var(--rq-text-md);   /* 16px: no iOS zoom on focus */
+}
+.field input:focus-visible { border-color: var(--rq-accent); outline: 2px solid var(--rq-focus); outline-offset: 1px; }
+.field input[data-sensitive] { font-family: var(--rq-font-mono); letter-spacing: .12em; }
+.hint { font-size: var(--rq-text-sm); line-height: var(--rq-leading-snug); color: var(--rq-ink-faint); margin: 0; }
+.hint--advisory { color: var(--rq-ink-soft); padding-left: 10px; border-left: 2px solid var(--rq-line-strong); }
+.explainer { font-size: var(--rq-text-base); line-height: var(--rq-leading-body); color: var(--rq-ink-soft); margin: 0; }
+.explainer strong { color: var(--rq-ink); font-weight: var(--rq-weight-semi); }
+.link { color: var(--rq-accent-ink); text-decoration: underline; text-underline-offset: 3px; font-weight: var(--rq-weight-medium); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+
+/* ---------- Verification steps (live region) ----------
+   State by glyph and weight: done "✓", active "…" (pulsing), pending "·". */
+.verify { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.verify li { display: flex; align-items: center; gap: 10px; font-size: var(--rq-text-base); color: var(--rq-ink-faint); }
+.verify li::before { font-family: var(--rq-font-mono); width: 18px; text-align: center; content: "·"; flex-shrink: 0; }
+.verify li[data-state="active"] { color: var(--rq-ink); font-weight: var(--rq-weight-semi); }
+.verify li[data-state="active"]::before { content: "…"; animation: rq-pulse 1.4s var(--rq-ease) infinite; }
+.verify li[data-state="done"] { color: var(--rq-ink-soft); }
+.verify li[data-state="done"]::before { content: "✓"; color: var(--rq-accent-ink); }
+
+/* ---------- Capability statement (honest, incl. what's missing) ---------- */
+.capability ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.capability li { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--rq-line); font-size: var(--rq-text-base); }
+.capability li:last-child { border-bottom: 0; }
+.capability li::before { font-family: var(--rq-font-mono); width: 18px; text-align: center; flex-shrink: 0; content: "✓"; color: var(--rq-accent-ink); }
+.capability li[data-available="false"] { color: var(--rq-ink-faint); }
+.capability li[data-available="false"]::before { content: "—"; color: var(--rq-ink-faint); }
+
+/* ---------- Progress (import) — a plain track, no zero line ---------- */
+.rq-progress { height: 8px; background: var(--rq-mark-ghost); border-radius: var(--rq-radius-pill); overflow: hidden; }
+.rq-progress i { display: block; height: 100%; background: var(--rq-mark); border-radius: var(--rq-radius-pill); transition: width var(--rq-duration) var(--rq-ease); }
+
+/* ---------- Quiet sync line (dashboard degraded — never an error screen) ---------- */
+.sync { display: inline-flex; align-items: center; gap: 8px; font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); color: var(--rq-ink-faint); margin: 0; }
+.sync::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--rq-ink-faint); animation: rq-pulse 1.4s var(--rq-ease) infinite; }
+
+/* ---------- Grouping chip (ambient bookkeeping question, never a modal) ---------- */
+.grouping-chip { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); display: flex; flex-direction: column; gap: 10px; }
+.grouping-chip__q { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink); }
+.grouping-chip__actions { display: flex; gap: 6px; }
+.grouping-chip__actions button { flex: 1; min-height: 36px; border-radius: var(--rq-radius-pill); background: var(--rq-surface); box-shadow: inset 0 0 0 1px var(--rq-line); font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); color: var(--rq-ink); }
+.grouping-chip__actions .ghost { box-shadow: none; color: var(--rq-ink-faint); }
+
+/* ---------- Milestone (inline, quiet, never a modal) ---------- */
+.milestone { border-left: 2px solid var(--rq-accent); padding: 4px 0 4px 12px; }
+.milestone__text { margin: 0; font-size: var(--rq-text-base); color: var(--rq-ink); }
+
+/* ---------- Offer (framed by a finding, never a nag) ---------- */
+.offer { background: var(--rq-surface); border: 1px solid var(--rq-line); border-radius: var(--rq-radius-lg); padding: var(--rq-space-4); display: flex; flex-direction: column; gap: var(--rq-space-2); }
+.offer__finding { margin: 0; font-size: var(--rq-text-md); font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-snug); }
+.offer__ask { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.offer__actions { display: flex; gap: 8px; margin-top: var(--rq-space-2); }
+.offer__actions > * { flex: 1; }
+
+/* ---------- Rule sentence + range stepper + preview ----------
+   Module 04 §6.1 / 08 §5.3. One blank in a sentence; the value is
+   a button that opens the stepper; the range is the fine control. */
+.rule-sentence { font-size: var(--rq-text-lg); font-weight: var(--rq-weight-semi); letter-spacing: var(--rq-track-snug); line-height: 1.35; margin: 0; text-wrap: balance; }
+.rule-value { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-weight: var(--rq-weight-medium); color: var(--rq-accent-ink); border-bottom: 2px solid var(--rq-accent); padding: 0 2px; background: none; font-size: inherit; }
+.rq-range { display: flex; align-items: center; gap: 10px; }
+.rq-range input[type="range"] { flex: 1; accent-color: var(--rq-accent); height: 32px; }
+.preview { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); display: flex; flex-direction: column; gap: 4px; }
+.preview__lede { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-soft); }
+.preview__count { margin: 0; font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-size: var(--rq-text-2xl); font-weight: var(--rq-weight-medium); line-height: 1.1; }
+.preview__guidance { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink); }
+.preview__guidance[data-band="tight"], .preview__guidance[data-band="loose"] { font-weight: var(--rq-weight-semi); }
+.preview__disclaimer { margin: 0; font-size: var(--rq-text-xs); color: var(--rq-ink-faint); }
+.calibrate__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--rq-space-4); }
+.calibrate__rule { display: flex; flex-direction: column; gap: 10px; padding-bottom: var(--rq-space-4); border-bottom: 1px solid var(--rq-line); }
+.calibrate__rule:last-child { border-bottom: 0; }
+
+/* ---------- Alert (neutral shell) — blocking variant: ink ring, no colour ---------- */
+.alert--blocking { box-shadow: inset 0 0 0 1.5px var(--rq-ink); }
+.alert p { margin: 0; font-size: var(--rq-text-base); color: var(--rq-ink-soft); }
+
+/* ---------- Screen-reader only ---------- */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

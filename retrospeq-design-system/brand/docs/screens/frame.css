@@ -1,0 +1,31 @@
+/* Phone frames + gallery chrome for brand/docs/screens/*.html.
+   ONLY framing — every in-screen element uses brand/css/index.css.
+   Frames are true device size (390 wide) so components render at
+   the scale they ship at. */
+.gal { display: flex; flex-wrap: wrap; gap: 40px 26px; align-items: flex-start; }
+.ex { width: 408px; display: flex; flex-direction: column; }
+.ex__t { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; font-family: var(--rq-font-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--rq-ink-faint); }
+.ex__t b { color: var(--rq-accent-ink); font-weight: 500; }
+.phone { padding: 9px; border-radius: 44px; background: var(--rq-bezel); box-shadow: 0 24px 44px -22px var(--rq-shadow); }
+.scr { width: 390px; height: 780px; background: var(--rq-bg); border-radius: 36px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+.sbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 4px; font-family: var(--rq-font-mono); font-size: 12px; font-weight: 500; flex-shrink: 0; }
+.sbar__ic { display: flex; gap: 4px; align-items: center; }
+.sbar__ic i { width: 4px; height: 4px; border-radius: 50%; background: var(--rq-ink); display: block; }
+.sbar__b { width: 18px; height: 10px; border: 1.2px solid var(--rq-ink); border-radius: 3px; position: relative; }
+.sbar__b::after { content: ""; position: absolute; inset: 1.5px; width: 10px; background: var(--rq-ink); border-radius: 1px; }
+.top { display: flex; align-items: center; justify-content: space-between; padding: 8px 20px 0; flex-shrink: 0; }
+.top__brand { display: flex; align-items: center; gap: 8px; font-weight: var(--rq-weight-bold); letter-spacing: var(--rq-track-tight); font-size: var(--rq-text-md); }
+.sb { flex: 1; min-height: 0; padding: 14px 20px 18px; display: flex; flex-direction: column; gap: var(--rq-space-4); overflow: hidden; }
+.sb--scroll { overflow-y: auto; }
+.sb--auth { justify-content: center; }
+.push { margin-top: auto; }
+.cap { margin-top: 12px; font-size: 12.5px; line-height: 1.45; color: var(--rq-ink-soft); max-width: 390px; }
+.cap b { color: var(--rq-ink); font-weight: 600; }
+/* docs page chrome */
+.page { max-width: 1400px; margin: 0 auto; padding: 40px 28px 80px; }
+.bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; gap: 16px; flex-wrap: wrap; }
+.bar h1 { font-size: var(--rq-text-xl); font-weight: var(--rq-weight-display); letter-spacing: var(--rq-track-display); margin: 0; }
+.bar p { margin: 4px 0 0; }
+.tbtn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 8px 12px; border-radius: var(--rq-radius-pill); box-shadow: inset 0 0 0 1px var(--rq-line-strong); font-size: var(--rq-text-sm); font-weight: var(--rq-weight-semi); }
+.sect { margin: 44px 0 18px; }
+@media (max-width: 460px) { .ex { width: 100%; } .phone { border-radius: 0; padding: 0; } .scr { width: 100%; border-radius: 0; } }

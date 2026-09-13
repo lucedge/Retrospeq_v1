@@ -72,3 +72,4 @@ next-env.d.ts
 # docs/adr/0021, actually fires) — it should never survive a normal run,
 # this entry only guards against a crash mid-test leaving it behind.
 /lib/analytics/__eslint_boundary_fixture__/
+/retrospeq-design-system/brand/docs/renders/
