@@ -62,7 +62,7 @@ export async function fetchCurrentReviewIdForDecisions(userId: string): Promise<
 // Reads
 // ---------------------------------------------------------------------
 
-export type DecisionPromptKind = 'graduation' | 'relaxation' | 'promotion' | 'retirement';
+export type DecisionPromptKind = 'graduation' | 'relaxation' | 'promotion' | 'retirement' | 'detection';
 
 /** §4.4/`types.ts`'s own header: retirement (decay) and retirement
  *  (condition) share one `kind = 'retirement'` value, distinguished by
@@ -85,7 +85,7 @@ export interface PendingDecisionPromptRow {
   payload: unknown;
 }
 
-const DECISION_KINDS: DecisionPromptKind[] = ['graduation', 'relaxation', 'promotion', 'retirement'];
+const DECISION_KINDS: DecisionPromptKind[] = ['graduation', 'relaxation', 'promotion', 'retirement', 'detection'];
 
 /**
  * Every PENDING decision-kind prompt for this review, oldest-ranked first
@@ -216,6 +216,7 @@ export async function fetchPromptById(userId: string, promptId: string): Promise
 export async function markPromptAccepted(
   userId: string,
   promptId: string,
+  kind: 'graduation' | 'detection',
   ruleId: string,
   ruleRendered: string,
 ): Promise<{ id: string } | null> {
@@ -224,10 +225,11 @@ export async function markPromptAccepted(
       `update retrospeq.review_prompts
           set state = 'accepted',
               decided_at = now(),
-              payload = payload || jsonb_build_object('ruleId', $3::uuid, 'ruleRendered', $4::text)
-        where id = $1 and user_id = $2 and kind = 'graduation' and state = 'pending'
+              payload = payload || jsonb_build_object('ruleId', $4::uuid, 'ruleRendered', $5::text)
+                        || case when $3::text = 'detection' then jsonb_build_object('resolution', 'added'::text) else '{}'::jsonb end
+        where id = $1 and user_id = $2 and kind = $3 and state = 'pending'
         returning id`,
-      [promptId, userId, ruleId, ruleRendered],
+      [promptId, userId, kind, ruleId, ruleRendered],
     );
     return res.rows[0] ?? null;
   });
@@ -325,14 +327,14 @@ export async function markPromptAdjusted(
  * a third defer option — already plays the low-commitment role a defer
  * button would for relaxation.
  */
-export async function markPromptDeferred(userId: string, promptId: string): Promise<{ id: string } | null> {
+export async function markPromptDeferred(userId: string, promptId: string, kind: 'graduation' | 'detection' = 'graduation'): Promise<{ id: string } | null> {
   return withUserConnection(userId, async (client) => {
     const res = await client.query<{ id: string }>(
       `update retrospeq.review_prompts
           set state = 'deferred'
-        where id = $1 and user_id = $2 and kind = 'graduation' and state = 'pending'
+        where id = $1 and user_id = $2 and kind = $3 and state = 'pending'
         returning id`,
-      [promptId, userId],
+      [promptId, userId, kind],
     );
     return res.rows[0] ?? null;
   });

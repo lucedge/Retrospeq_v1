@@ -5,6 +5,7 @@ import { DecisionCard } from './DecisionCard';
 import { RelaxationDecisionCard } from './RelaxationDecisionCard';
 import { PromotionDecisionCard } from './PromotionDecisionCard';
 import { RetirementDecisionCard } from './RetirementDecisionCard';
+import { DetectionDecisionCard } from './DetectionDecisionCard';
 
 /**
  * Module 06 (Review & Graduation) `/review/decisions` — the Part 2 decision
@@ -99,6 +100,10 @@ export default async function ReviewDecisionsPage() {
 
   if (result.kind === 'retirement') {
     return <RetirementDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
+  }
+
+  if (result.kind === 'detection') {
+    return <DetectionDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
   }
 
   return <DecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;

@@ -34,6 +34,10 @@ import { relaxationEvidenceSchema } from '@/lib/review/decisions/relaxation-evid
 import { canAdjustRelaxation, deriveAdjustedValue } from '@/lib/review/decisions/relaxation-operand-map';
 import { buildPromotionPromptDetail, type PromotionPromptDetail } from '@/lib/review/decisions/promotion-evidence-detail';
 import { promotionEvidenceSchema } from '@/lib/review/decisions/promotion-evidence-schema';
+import { buildDetectionPromptDetail, type DetectionPromptDetail } from '@/lib/review/decisions/detection-evidence-detail';
+import { detectionEvidenceSchema } from '@/lib/review/decisions/detection-evidence-schema';
+import { resolveDetectionRuleProposal } from '@/lib/review/decisions/detection-operand-map';
+import { fetchActiveDetectionsForUser } from '@/lib/analytics/detections-repository';
 import {
   buildRetirementDecayPromptDetail,
   buildRetirementConditionPromptDetail,
@@ -219,7 +223,8 @@ export type NextDecisionResult =
   | { success: true; status: 'ready'; kind: 'graduation'; index: number; total: number; detail: GraduationPromptDetail }
   | { success: true; status: 'ready'; kind: 'relaxation'; index: number; total: number; detail: RelaxationPromptDetail }
   | { success: true; status: 'ready'; kind: 'promotion'; index: number; total: number; detail: PromotionPromptDetail }
-  | { success: true; status: 'ready'; kind: 'retirement'; index: number; total: number; detail: RetirementPromptDetail };
+  | { success: true; status: 'ready'; kind: 'retirement'; index: number; total: number; detail: RetirementPromptDetail }
+  | { success: true; status: 'ready'; kind: 'detection'; index: number; total: number; detail: DetectionPromptDetail };
 
 export async function fetchNextDecision(): Promise<NextDecisionResult> {
   const user = await requireSessionAndRateLimit('reviewDecision');
@@ -325,6 +330,20 @@ export async function fetchNextDecision(): Promise<NextDecisionResult> {
 
       const detail = await buildPromotionPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
       return { success: true, status: 'ready', kind: 'promotion', index, total, detail };
+    }
+
+    if (candidate.kind === 'detection') {
+      // No entitlement gate — `analytics-registry.md` §4.5 lists every v1
+      // detection analytic as `free` tier, unlike graduation/promotion.
+      const parsedEvidence = detectionEvidenceSchema.safeParse(candidate.payload);
+      if (!parsedEvidence.success) {
+        console.error('[review/decisions:fetchNextDecision] corrupt detection payload for prompt', candidate.id, parsedEvidence.error);
+        return {
+          error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+        };
+      }
+      const detail = await buildDetectionPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
+      return { success: true, status: 'ready', kind: 'detection', index, total, detail };
     }
 
     // kind === 'retirement' — no entitlement gate (retiring is free for
@@ -543,7 +562,7 @@ export async function acceptGraduationDecision(promptId: string): Promise<Gradua
     );
   }
 
-  const marked = await markPromptAccepted(user.id, parsedId.data, rule.id, rule.rendered);
+  const marked = await markPromptAccepted(user.id, parsedId.data, 'graduation', rule.id, rule.rendered);
   if (!marked) {
     // Genuine double-submit race lost -- a concurrent request already
     // flipped this exact prompt to a terminal state between our own
@@ -1195,4 +1214,179 @@ export async function keepRetirementDecision(promptId: string): Promise<Retireme
   revalidatePath('/review/decisions');
 
   return { success: true, subjectType: prompt.subjectType === 'trigger_condition' ? 'trigger_condition' : 'rule' };
+}
+
+// ---------------------------------------------------------------------
+// acceptDetectionDecision / deferDetectionDecision — frame 4.10's own
+// "Add the rule" / "Not yet" pair. Module 06, this slice.
+// ---------------------------------------------------------------------
+
+export interface DetectionDecisionActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  ruleId?: string;
+  ruleRendered?: string;
+}
+
+function detectionNotFoundResult(): DetectionDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_NOT_FOUND', user_message: "We couldn't find that decision.", retryable: false } };
+}
+
+function detectionAlreadyDecidedResult(): DetectionDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_ALREADY_DECIDED', user_message: 'This decision has already been made.', retryable: false } };
+}
+
+/** §9 `PROMPT_ALREADY_DECIDED` — same idempotent-replay posture every
+ *  other decision kind in this file already establishes. */
+function replayIfDetectionAccepted(payload: unknown): DetectionDecisionActionResult | null {
+  const parsed = detectionEvidenceSchema.safeParse(payload);
+  if (parsed.success && parsed.data.ruleId) {
+    return { success: true, ruleId: parsed.data.ruleId, ruleRendered: parsed.data.ruleRendered ?? '' };
+  }
+  return null;
+}
+
+/**
+ * Frame 4.10, "Add the rule." Mirrors `acceptGraduationDecision`'s own
+ * write order, minus the finding/field-usage/decay-link writes a
+ * detection has no equivalent of (no `findings` row, no field-registry
+ * field to record usage against): re-resolve the rule proposal live
+ * (`resolveDetectionRuleProposal`, never trusted from whatever
+ * `buildDetectionPromptDetail` last rendered), create it via
+ * `createRuleInternal` (`origin: 'detected'`, scope `'global'` — a
+ * behavioural pattern is not tied to one strategy the way a graduated
+ * finding is), then guard the prompt transition exactly like every other
+ * accept in this file, including the same "lost the race after already
+ * creating the rule -> retire the duplicate, replay the winner" recovery
+ * `acceptGraduationDecision` establishes.
+ *
+ * Per `detection-operand-map.ts`'s own header: this currently resolves
+ * `DETECTION_PATTERN_UNSUPPORTED` for every one of today's five real
+ * detection analytics (none has both a computable operand AND an honest
+ * threshold to derive from a `detections` row) — written for real, not
+ * stubbed, so it activates automatically the day that catalogue gap
+ * closes, rather than needing a second dispatch to wire up.
+ */
+export async function acceptDetectionDecision(promptId: string): Promise<DetectionDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'detection') return detectionNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfDetectionAccepted(prompt.payload) ?? detectionAlreadyDecidedResult();
+
+  const parsedEvidence = detectionEvidenceSchema.safeParse(prompt.payload);
+  if (!parsedEvidence.success) {
+    console.error('[review/decisions:acceptDetectionDecision] corrupt payload for prompt', prompt.id, parsedEvidence.error);
+    return {
+      error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+    };
+  }
+
+  // Re-verify live, independently of the materialised payload — the same
+  // "changed since your review was prepared" honesty acceptGraduationDecision
+  // already establishes via fetchActiveFindingForFieldTuple.
+  const activeDetections = await fetchActiveDetectionsForUser(user.id);
+  const live = activeDetections.find((d) => d.analyticId === parsedEvidence.data.analyticId);
+  if (!live || !live.ruleProposable) {
+    return {
+      error: {
+        code: 'DETECTION_PATTERN_GONE',
+        user_message: 'This pattern has changed since your review was prepared. Please refresh and try again.',
+        retryable: true,
+      },
+    };
+  }
+
+  const proposal = resolveDetectionRuleProposal(parsedEvidence.data.analyticId);
+  if (!proposal) {
+    return {
+      error: { code: 'DETECTION_PATTERN_UNSUPPORTED', user_message: "This pattern can't become a rule yet.", retryable: false },
+    };
+  }
+
+  const createResult = await createRuleInternal(user.id, {
+    operandId: proposal.operand.id,
+    op: proposal.op,
+    value: proposal.value,
+    scope: 'global',
+    scopeId: null,
+    origin: 'detected',
+  });
+
+  if (!createResult.success || !createResult.rule) {
+    // Verbatim pass-through of createRuleInternal's own honest rejection —
+    // no second, redundant gate here, matching acceptGraduationDecision's
+    // identical posture.
+    return {
+      error: createResult.error ?? {
+        code: 'DETECTION_RULE_CREATE_FAILED',
+        user_message: 'Something went wrong creating this rule. Please try again.',
+        retryable: true,
+      },
+    };
+  }
+  const rule = createResult.rule;
+
+  const marked = await markPromptAccepted(user.id, parsedId.data, 'detection', rule.id, rule.rendered);
+  if (!marked) {
+    // Genuine double-submit race lost -- a real, duplicate rule already
+    // exists at this point; retire it rather than leave an orphaned extra
+    // active one, then replay the WINNER's own recorded outcome (identical
+    // recovery to acceptGraduationDecision's own).
+    try {
+      await retireRuleState(user.id, rule.id);
+    } catch (err) {
+      if (!(err instanceof RuleLifecycleConflictError)) {
+        console.error('[review/decisions:acceptDetectionDecision] cleanup retire of duplicate rule failed:', err);
+      }
+    }
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfDetectionAccepted(current.payload) : null) ?? detectionAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  revalidatePath('/rules');
+
+  return { success: true, ruleId: rule.id, ruleRendered: rule.rendered };
+}
+
+/**
+ * Frame 4.10, "Not yet" — a defer, per this slice's own dispatch
+ * instruction ("use whatever graduation's 'Not yet' does"), NOT a
+ * decline: no `prompt_history` write, no dormancy/mute clock started.
+ * §4.5's own generic decline table would let a trader permanently mute a
+ * detection subject after two declines — that path is deliberately not
+ * built this slice (frame 4.10's own markup has no third button, only
+ * "Add the rule" / "Not yet"), a real, flagged gap for a future slice
+ * (`docs/infra-gaps.md`), not a silent omission.
+ */
+export async function deferDetectionDecision(promptId: string): Promise<DeferDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'detection') {
+    return { error: { code: 'REVIEW_PROMPT_NOT_FOUND', user_message: "We couldn't find that decision.", retryable: false } };
+  }
+  if (prompt.state !== 'pending') {
+    return { success: true };
+  }
+
+  await markPromptDeferred(user.id, parsedId.data, 'detection');
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  return { success: true };
 }

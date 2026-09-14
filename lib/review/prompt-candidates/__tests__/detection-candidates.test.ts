@@ -32,30 +32,39 @@ function makeDetection(overrides: Partial<ActiveDetectionRow> = {}): ActiveDetec
 
 describe('selectDetectionCandidates', () => {
   it('includes a count_outcome pattern with rule_proposable = true', () => {
-    expect(selectDetectionCandidates([makeDetection()])).toHaveLength(1);
+    expect(selectDetectionCandidates([makeDetection()], () => true)).toHaveLength(1);
   });
 
   it('excludes a count-tier detection (never rule-proposable per Module 05 §5)', () => {
-    const result = selectDetectionCandidates([makeDetection({ tier: 'count', ruleProposable: false })]);
+    const result = selectDetectionCandidates([makeDetection({ tier: 'count', ruleProposable: false })], () => true);
     expect(result).toHaveLength(0);
   });
 
   it('excludes an incident classification (clustered, not distributed)', () => {
-    const result = selectDetectionCandidates([makeDetection({ classification: 'incident', ruleProposable: false })]);
+    const result = selectDetectionCandidates([makeDetection({ classification: 'incident', ruleProposable: false })], () => true);
     expect(result).toHaveLength(0);
   });
 
   it('excludes rule_proposable = false even if tier/classification look right (defensive, matches the literal §4.4 condition)', () => {
-    const result = selectDetectionCandidates([makeDetection({ ruleProposable: false })]);
+    const result = selectDetectionCandidates([makeDetection({ ruleProposable: false })], () => true);
     expect(result).toHaveLength(0);
   });
 
   it('includes an "improved"-direction pattern the same as an "active" one — §4.4 names no direction restriction', () => {
-    const result = selectDetectionCandidates([makeDetection({ direction: 'improved' })]);
+    const result = selectDetectionCandidates([makeDetection({ direction: 'improved' })], () => true);
     expect(result).toHaveLength(1);
   });
 
   it('returns an empty array for no detections', () => {
     expect(selectDetectionCandidates([])).toEqual([]);
+  });
+
+  it('excludes a rule-proposable pattern whose analytic maps to no computable operand today (never spends a decision slot on an unacceptable card)', () => {
+    expect(selectDetectionCandidates([makeDetection()], () => false)).toHaveLength(0);
+  });
+
+  it('uses the real operand map by default', () => {
+    // As of 2026-09-15 every v1 detection analytic maps to null (cross-trade operands not computable yet).
+    expect(selectDetectionCandidates([makeDetection()])).toHaveLength(0);
   });
 });

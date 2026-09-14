@@ -85,7 +85,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 4.7 | `/review/decisions` | Relaxation: "Which one is true?" equal pair | 06 §5.1 | S12 | ◐ |
 | 4.8 | `/review/decisions` | Promotion (soft → hard) | 06 §4.3 | new | ● |
 | 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ● |
-| 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ○ |
+| 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ◐ built; not offered until cross-trade operands are computable |
 | 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ○ |
 | 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |
 | 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ○ |

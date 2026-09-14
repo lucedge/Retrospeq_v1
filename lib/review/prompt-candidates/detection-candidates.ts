@@ -1,6 +1,7 @@
 import 'server-only';
 import { fetchActiveDetectionsForUser, type ActiveDetectionRow } from '@/lib/analytics/detections-repository';
 import { detectionSubjectId } from './stable-subject-id';
+import { resolveDetectionRuleProposal } from '@/lib/review/decisions/detection-operand-map';
 import type { PromptCandidate } from './types';
 
 /**
@@ -43,8 +44,18 @@ export interface DetectionEvidence {
 
 /** Pure filter over already-fetched rows — independently unit-testable
  *  without a DB. */
-export function selectDetectionCandidates(detections: readonly ActiveDetectionRow[]): ActiveDetectionRow[] {
-  return detections.filter((d) => d.tier === 'count_outcome' && d.classification === 'pattern' && d.ruleProposable);
+export function selectDetectionCandidates(
+  detections: readonly ActiveDetectionRow[],
+  // A detection prompt exists to propose a rule. When the pattern maps to no
+  // operand the rule engine can evaluate today, offering it would spend one of
+  // the review's three decision slots on a card whose only honest answer is
+  // "can't become a rule yet" — so it isn't offered until the operand exists
+  // (owner-facing reasoning in PROGRESS.md 2026-09-15). Injectable for tests.
+  canProposeRule: (analyticId: string) => boolean = (analyticId) => resolveDetectionRuleProposal(analyticId) !== null,
+): ActiveDetectionRow[] {
+  return detections.filter(
+    (d) => d.tier === 'count_outcome' && d.classification === 'pattern' && d.ruleProposable && canProposeRule(d.analyticId),
+  );
 }
 
 /** Every qualifying detection for this user. Muted subjects NOT yet

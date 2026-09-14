@@ -334,7 +334,7 @@ describe('acceptGraduationDecision — happy path on a supported field', () => {
     );
     expect(insertRuleFieldUsageMock).toHaveBeenCalledWith(USER_ID, 'drv.risk_pct', 'rule-1');
     expect(createFindingRuleLinkMock).toHaveBeenCalledWith(USER_ID, 'finding-1', 'rule-1', 0.3, 40);
-    expect(markPromptAcceptedMock).toHaveBeenCalledWith(USER_ID, PROMPT_ID, 'rule-1', 'Never risk more than 1% per trade.');
+    expect(markPromptAcceptedMock).toHaveBeenCalledWith(USER_ID, PROMPT_ID, 'graduation', 'rule-1', 'Never risk more than 1% per trade.');
     expect(revalidatePathMock).toHaveBeenCalledWith('/review');
     expect(revalidatePathMock).toHaveBeenCalledWith('/review/decisions');
     expect(revalidatePathMock).toHaveBeenCalledWith('/rules');

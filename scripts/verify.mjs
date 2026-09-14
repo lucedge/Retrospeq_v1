@@ -33,7 +33,11 @@ if (tier >= 1) {
   steps.push(['tsc', 'npx tsc --noEmit'], ['eslint (changed files)', changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).length ? `npx eslint ${changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).map((f) => JSON.stringify(f)).join(' ')}` : 'true']);
   if (scope) steps.push([`unit${scopeNote}`, `npx vitest run ${scope} --exclude "**/*.live.test.ts"`]);
 }
-if (tier >= 2 && scope) steps.push([`live DB${scopeNote}`, `npx vitest run live.test ${scope} --maxWorkers=1`]);
+// Live DB tests: only the live test files this change added or edited. A whole
+// feature folder's live suite still ran 60+ min against the shared dev DB
+// (2026-09-15); broader live coverage is the tester gate's job, full suite at phase end.
+const changedLive = changed.filter((f) => /\.live\.test\.ts$/.test(f));
+if (tier >= 2 && changedLive.length) steps.push([`live DB (${changedLive.length} changed file${changedLive.length === 1 ? '' : 's'})`, `npx vitest run ${changedLive.map((f) => JSON.stringify(f)).join(' ')} --maxWorkers=1`]);
 if (tier >= 3) steps.push(['security bundle', 'npm run check:security']);
 
 let failed = false;
