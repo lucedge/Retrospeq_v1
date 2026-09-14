@@ -4,11 +4,10 @@ import { listTradingAccounts } from '@/lib/broker/accounts-repository';
 import { computeServerDay } from '@/lib/ingestion/server-day';
 import { fetchActiveGlobalRuleVersionsForOperand } from '@/lib/rules/rules-repository';
 import { determineCurrentWeeklyReviewPeriod } from '@/lib/review/current-period';
-import { fetchWeeklyReviewByPeriodStart, deriveCoversWeeks } from '@/lib/review/reviews-repository';
+import { fetchWeeklyReviewByPeriodStart } from '@/lib/review/reviews-repository';
 import { fetchPeriodConsistency } from '@/lib/review/period-consistency';
-import { fetchPeriodAdherence, type PeriodAdherence } from '@/lib/review/period-adherence';
+import { fetchPeriodAdherence } from '@/lib/review/period-adherence';
 import { fetchPendingPromptCount } from '@/lib/review/review-prompts-repository';
-import { addDaysToServerDay } from '@/lib/rules/week-boundary';
 import { resolveDashboardKind, type DashboardKind } from './dashboard-state';
 
 /**
@@ -39,20 +38,21 @@ import { resolveDashboardKind, type DashboardKind } from './dashboard-state';
  *    NOT run for the common open/closeout cases above (§7.1's own strict
  *    ranking means they'd be discarded anyway).
  *
- * **Reconciliation, logged in the decision log**: Module 04 §3.3's "two
- * numbers, never blended" governs the DETAIL screens (`/rulebook`'s own
- * `AdherenceSection`, `/review`'s `AdherencePanel`) — both keep hard/soft
- * fully separate, unchanged by this slice. Home's own `rq-cmp`/`rq-dots`
- * ambient glance (frames 1.12/1.13/1.15, `brand/docs/screens/home-
- * onboarding.html`) show ONE combined count instead, matching the
- * mockup's own explicit visual language for a summary screen — this file
- * computes that single number as `hard.followed + soft.followed` of
- * `hard.total + soft.total`, real materialised integers, never an
- * average or a bare percentage. "Last week" is the SAME combined
- * calculation over the immediately preceding, equally-sized period (a
- * second `fetchPeriodAdherence` call), not `fetchPeriodAdherence`'s own
- * `priorSoft` (soft-only — would silently compare non-equivalent units
- * against a hard+soft "this" figure).
+ * **Hard/soft are never blended, no summary-screen exemption** (locked
+ * design decision, `retrospeq-design-decisions.md` §6; `09-design-
+ * system.md` §0: "Adherence is always a side-by-side stat pair. A single
+ * ring/gauge/percentage is the explicit anti-pattern"; `retrospeq-
+ * rules.md` hard rule 10). An earlier version of this file blended
+ * hard+soft into one ambient count for Home, reasoning from mockup frames
+ * 1.12/1.15 — those frames were wrong and have been corrected; reverted
+ * here. `DashboardReviewReadyState.adherence` therefore carries `hard`
+ * and `soft` as their own separate fractions (this period only), plus
+ * `priorSoft` — `fetchPeriodAdherence`'s own soft-only prior comparator,
+ * the correct like-for-like unit for a week-over-week trend (comparing a
+ * hard+soft blend against a soft-only prior would silently compare
+ * non-equivalent units, a second reason never to blend). One
+ * `fetchPeriodAdherence` call per period is enough; there is no second
+ * "prior period" query in this file.
  *
  * The teaser's "N decisions" is genuinely never fabricated: only rendered
  * when a `reviews` row already exists for the period (its own stored
@@ -159,13 +159,19 @@ export interface DashboardReviewAdherenceCount {
 
 export interface DashboardReviewReadyState {
   consistency: { daysTraded: number; daysClosed: number };
-  /** Combined hard+soft, real materialised integers — see this file's own
-   *  header, "Reconciliation," for why Home's ambient glance blends what
-   *  `/rulebook`/`/review` keep separate. `lastPeriod` is `null` when the
-   *  immediately preceding, equally-sized period has no materialised
-   *  adherence at all (a brand-new trader's first-ever period) — omitted,
-   *  never a fabricated 0-of-0 baseline. */
-  adherence: { thisPeriod: DashboardReviewAdherenceCount; lastPeriod: DashboardReviewAdherenceCount | null };
+  /** Hard and soft, ALWAYS separate — see this file's own header, "Hard/soft
+   *  are never blended." `hard`/`soft` are this period's own real
+   *  materialised fractions; `priorSoft` is the immediately preceding,
+   *  equally-sized period's SOFT fraction only (the one like-for-like
+   *  comparator `fetchPeriodAdherence` itself already computes), `null`
+   *  when that prior period has no materialised adherence at all (a
+   *  brand-new trader's first-ever period) — omitted, never a fabricated
+   *  0-of-0 baseline. */
+  adherence: {
+    hard: DashboardReviewAdherenceCount;
+    soft: DashboardReviewAdherenceCount;
+    priorSoft: DashboardReviewAdherenceCount | null;
+  };
   /** `null` whenever no `reviews` row is materialised yet for this period
    *  (the overwhelmingly common case — nothing pre-materialises a review
    *  ahead of a trader opening `/review`) — per this dispatch's own
@@ -224,11 +230,6 @@ async function fetchRiskCapPct(userId: string): Promise<string | null> {
   return Math.min(...caps).toString();
 }
 
-function combineAdherence(a: PeriodAdherence): DashboardReviewAdherenceCount | null {
-  if (a.status !== 'ready') return null;
-  return { followed: a.hard.followed + a.soft.followed, total: a.hard.total + a.soft.total };
-}
-
 /** See this file's own header, "Review ready — derived honestly." `null`
  *  whenever the period isn't genuinely ready to review. */
 async function computeReviewReadyState(userId: string, now: Date): Promise<DashboardReviewReadyState | null> {
@@ -243,14 +244,9 @@ async function computeReviewReadyState(userId: string, now: Date): Promise<Dashb
   if (existingReview?.openedAt) return null;
   if (outcome.tradeCount === 0) return null;
 
-  const coversWeeks = deriveCoversWeeks(period.periodStart, period.periodEnd);
-  const priorPeriodEnd = addDaysToServerDay(period.periodStart, -1);
-  const priorPeriodStart = addDaysToServerDay(priorPeriodEnd, -7 * coversWeeks + 1);
-
-  const [consistency, thisAdherence, priorAdherence] = await Promise.all([
+  const [consistency, adherence] = await Promise.all([
     fetchPeriodConsistency(userId, period.periodStart, period.periodEnd),
     fetchPeriodAdherence(userId, period.periodStart, period.periodEnd),
-    fetchPeriodAdherence(userId, priorPeriodStart, priorPeriodEnd),
   ]);
 
   let teaser: DashboardReviewReadyState['teaser'] = null;
@@ -259,9 +255,17 @@ async function computeReviewReadyState(userId: string, now: Date): Promise<Dashb
     teaser = { findingsCount: existingReview.readPayload.findings.length, pendingDecisions };
   }
 
+  // Hard/soft, ALWAYS separate -- see this file's own header. A prior
+  // period with no materialised row at all (`priorSoft === null`) is
+  // omitted, never a fabricated 0-of-0 baseline.
+  const adherenceState: DashboardReviewReadyState['adherence'] =
+    adherence.status === 'ready'
+      ? { hard: adherence.hard, soft: adherence.soft, priorSoft: adherence.priorSoft }
+      : { hard: { followed: 0, total: 0 }, soft: { followed: 0, total: 0 }, priorSoft: null };
+
   return {
     consistency: { daysTraded: consistency.daysTraded, daysClosed: consistency.daysClosed },
-    adherence: { thisPeriod: combineAdherence(thisAdherence) ?? { followed: 0, total: 0 }, lastPeriod: combineAdherence(priorAdherence) },
+    adherence: adherenceState,
     teaser,
   };
 }

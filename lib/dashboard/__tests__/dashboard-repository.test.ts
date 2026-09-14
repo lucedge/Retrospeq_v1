@@ -242,24 +242,48 @@ describe('getDashboardStateForUser', () => {
     fetchWeeklyReviewByPeriodStartMock.mockResolvedValue(null);
     fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 5, daysTradedCount: 4, totalR: '3.2000' });
     fetchPeriodConsistencyMock.mockResolvedValue({ daysTraded: 4, daysClosed: 4, streakWeeks: 3 });
-    fetchPeriodAdherenceMock.mockResolvedValueOnce({
+    fetchPeriodAdherenceMock.mockResolvedValue({
       status: 'ready',
       hard: { followed: 10, total: 10 },
       soft: { followed: 21, total: 24 },
-      priorSoft: null,
+      priorSoft: { followed: 18, total: 24 },
       attribution: null,
     });
-    fetchPeriodAdherenceMock.mockResolvedValueOnce({ status: 'insufficient_history' });
 
     const state = await getDashboardStateForUser(USER_ID, NOW);
     expect(state.kind).toBe('review');
     if (state.kind === 'review') {
       expect(state.review.consistency).toEqual({ daysTraded: 4, daysClosed: 4 });
-      expect(state.review.adherence.thisPeriod).toEqual({ followed: 31, total: 34 });
-      expect(state.review.adherence.lastPeriod).toBeNull();
+      // Hard and soft ALWAYS separate -- no blended figure anywhere
+      // (retrospeq-design-decisions §6; never a summary-screen exemption).
+      expect(state.review.adherence.hard).toEqual({ followed: 10, total: 10 });
+      expect(state.review.adherence.soft).toEqual({ followed: 21, total: 24 });
+      expect(state.review.adherence.priorSoft).toEqual({ followed: 18, total: 24 });
       expect(state.review.teaser).toBeNull();
     }
+    expect(fetchPeriodAdherenceMock).toHaveBeenCalledTimes(1);
     expect(fetchPendingPromptCountMock).not.toHaveBeenCalled();
+  });
+
+  it('review adherence reads insufficient_history honestly as zero fractions with no prior comparator, never fabricated', async () => {
+    listOpenTradesMock.mockResolvedValue([]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    determineCurrentWeeklyReviewPeriodMock.mockResolvedValue({ status: 'ready', periodStart: '2026-06-01', periodEnd: '2026-06-07' });
+    fetchWeeklyReviewByPeriodStartMock.mockResolvedValue(null);
+    fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 5, daysTradedCount: 4, totalR: '3.2000' });
+    fetchPeriodConsistencyMock.mockResolvedValue({ daysTraded: 4, daysClosed: 4, streakWeeks: 3 });
+    fetchPeriodAdherenceMock.mockResolvedValue({ status: 'insufficient_history' });
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state.kind).toBe('review');
+    if (state.kind === 'review') {
+      expect(state.review.adherence).toEqual({
+        hard: { followed: 0, total: 0 },
+        soft: { followed: 0, total: 0 },
+        priorSoft: null,
+      });
+    }
   });
 
   it('falls through to Clear -- not review -- when the period is ready but already opened by the trader', async () => {

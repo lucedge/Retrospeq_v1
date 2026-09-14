@@ -208,7 +208,7 @@ test.describe('Dashboard (Module 08 §7/§8)', () => {
     await expect(page.locator('.dash[data-state="clear"]')).toBeVisible({ timeout: 10_000 });
   });
 
-  test('Clear: no trades outstanding renders "Nothing to close out." with a real combined adherence dot count and a real (zero) streak, honestly omits the findings projection line, and shows no currency/R anywhere', async ({
+  test('Clear: no trades outstanding renders "Nothing to close out." with real, SEPARATE hard/soft adherence dot rows and a real (zero) streak, honestly omits the findings projection line, and shows no currency/R anywhere', async ({
     page,
   }) => {
     const user = await createConfirmedUser('dash-clear');
@@ -237,14 +237,17 @@ test.describe('Dashboard (Module 08 §7/§8)', () => {
     await expect(page.locator('.dash[data-state="clear"]')).toBeVisible();
     await expect(page.locator('.dash__headline')).toHaveText('Nothing to close out.');
 
-    // Real combined adherence dots (hard 9/10 + soft 4/4 = 13 of 14),
-    // Module 04's own already-materialised `adherence_weekly` row, summed
-    // -- not re-derived, not fabricated. Home's own ambient glance blends
-    // hard+soft into one count (documented reconciliation,
-    // `dashboard-repository.ts`'s header); `/rulebook`/`/review` keep them
-    // separate, unchanged.
-    await expect(page.locator('.rq-dots')).toBeVisible();
-    await expect(page.getByText(/13 of 14/)).toBeVisible();
+    // Real hard/soft adherence dots, ALWAYS SEPARATE -- no blended
+    // figure anywhere, no summary-screen exemption (retrospeq-design-
+    // decisions §6; 09-design-system §0; retrospeq-rules.md hard rule
+    // 10). Module 04's own already-materialised `adherence_weekly` row
+    // (hard 9/10, soft 4/4), read as two rows, not summed.
+    await expect(page.locator('.rq-dots')).toHaveCount(2);
+    await expect(page.getByText('Hard').first()).toBeVisible();
+    await expect(page.getByText(/9 of 10/)).toBeVisible();
+    await expect(page.getByText('Soft').first()).toBeVisible();
+    await expect(page.getByText(/4 of 4/)).toBeVisible();
+    await expect(page.getByText(/13 of 14/)).toHaveCount(0);
 
     // Streak is real now (this slice) -- a fresh user has a real,
     // materialised (zero) streak, not an omitted line.

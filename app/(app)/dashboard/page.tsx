@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { getDashboardStateForUser, type DashboardOpenPositionSummary, type DashboardReviewReadyState } from '@/lib/dashboard/dashboard-repository';
 import { fetchAdherenceDisplay } from '../rules/actions';
-import type { AdherenceDisplay } from '@/lib/rules/adherence-display';
+import type { AdherenceDisplay, AdherenceFraction } from '@/lib/rules/adherence-display';
 import { fetchEngagementSummaryForUser } from '@/lib/engagement/streak-repository';
 import { fetchRecentWeekCompletenessForUser, type RecentWeekBar } from '@/lib/engagement/week-completeness-repository';
 import { weekStartForServerDay } from '@/lib/rules/week-boundary';
@@ -26,35 +26,40 @@ import { formatDayOfWeek } from './format';
  *
  * **Streak and the Clear-state dots are real, as of this slice.** Streak:
  * `fetchEngagementSummaryForUser`/`fetchRecentWeekCompletenessForUser`
- * (Module 07, already materialised). Adherence dots: see the
- * `combinedAdherenceCount` helper below for why this deliberately blends
- * hard+soft into ONE ambient glance count (documented reconciliation with
- * Module 04 §3.3's "never blended," which still governs `/rulebook` and
- * `/review` unchanged). The quiet "next finding" projection line remains
- * honestly omitted — no source exists anywhere in this repo for it yet
- * (Module 05's findings machinery has no such projection built).
+ * (Module 07, already materialised). Adherence dots: hard and soft render
+ * as their OWN separate rows (`AdherenceDotRows` below) — hard/soft are
+ * never blended into one count, anywhere, no summary-screen exemption
+ * (locked design decision, `retrospeq-design-decisions.md` §6; `09-
+ * design-system.md` §0; `retrospeq-rules.md` hard rule 10). The quiet
+ * "next finding" projection line remains honestly omitted — no source
+ * exists anywhere in this repo for it yet (Module 05's findings machinery
+ * has no such projection built).
  */
 
 const STREAK_STRIP_WEEKS = 12;
 
-/** Module 04 §3.3's "two numbers, never blended" governs the DETAIL
- *  screens (`/rulebook`, `/review`) — unchanged. Home's own `rq-dots`/
- *  `rq-cmp` ambient glance (frames 1.12/1.13/1.15/1.16) shows a single
- *  combined count instead, matching the mockup's own visual language for
- *  a summary screen — see `lib/dashboard/dashboard-repository.ts`'s
- *  header for the identical reconciliation applied to the review-ready
- *  state's own comparison. Both numbers are real materialised integers
- *  (`hard.followed + soft.followed` of `hard.total + soft.total`), never
- *  an average or a bare percentage. */
-function combinedAdherenceCount(display: AdherenceDisplay): { followed: number; total: number } | null {
+/** Hard and soft, each their own `rq-dots` row, never merged — see this
+ *  file's own header. The hard row is heavier (`.adherence__hard`, the
+ *  same weight `/rulebook`'s own `AdherenceSection` already uses) and
+ *  rendered first; it is OMITTED entirely when `hard.total === 0` (no
+ *  hard rule has an applicable evaluation this week) rather than shown as
+ *  a fabricated "0 of 0" row. Soft always renders (lighter,
+ *  `.adherence__soft`). */
+function AdherenceDotRows({ display }: { display: AdherenceDisplay }) {
   if (display.status !== 'ready') return null;
-  return { followed: display.hard.followed + display.soft.followed, total: display.hard.total + display.soft.total };
+  const { hard, soft } = display;
+  return (
+    <>
+      {hard.total > 0 ? <AdherenceDotRow label="Hard" count={hard} weightClass="adherence__hard" /> : null}
+      <AdherenceDotRow label="Soft" count={soft} weightClass="adherence__soft" />
+    </>
+  );
 }
 
-function AdherenceDots({ label, count }: { label: string; count: { followed: number; total: number } }) {
+function AdherenceDotRow({ label, count, weightClass }: { label: string; count: AdherenceFraction; weightClass: string }) {
   return (
     <div>
-      <p className="rq-label">
+      <p className={`rq-label ${weightClass}`}>
         {label} · <span className="rq-num">{count.followed} of {count.total}</span>
       </p>
       <div className="rq-dots">
@@ -127,17 +132,32 @@ function ConsistencyRing({ daysClosed, daysTraded }: { daysClosed: number; daysT
   );
 }
 
+/**
+ * Hard and soft, ALWAYS separate — no summary-screen exemption (see this
+ * file's own header). `rq-cmp` compares SOFT this week vs SOFT last week
+ * only — the one like-for-like unit `fetchPeriodAdherence`'s own
+ * `priorSoft` already provides (comparing a hard+soft blend against a
+ * soft-only prior would silently compare non-equivalent units). Hard
+ * gets its own plain "Hard rules: N of M." line, no trend claimed for it
+ * (no comparable prior figure is computed for hard here), omitted
+ * entirely when `hard.total === 0`.
+ */
 function ReviewAdherenceCmp({ review }: { review: DashboardReviewReadyState }) {
-  const { thisPeriod, lastPeriod } = review.adherence;
-  const thisPct = thisPeriod.total > 0 ? Math.round((thisPeriod.followed / thisPeriod.total) * 100) : 0;
-  const lastPct = lastPeriod && lastPeriod.total > 0 ? Math.round((lastPeriod.followed / lastPeriod.total) * 100) : 0;
+  const { hard, soft, priorSoft } = review.adherence;
+  const thisPct = soft.total > 0 ? Math.round((soft.followed / soft.total) * 100) : 0;
+  const lastPct = priorSoft && priorSoft.total > 0 ? Math.round((priorSoft.followed / priorSoft.total) * 100) : 0;
   return (
     <div>
-      <p className="rq-label">
-        Adherence · <span className="rq-num">{thisPeriod.followed} of {thisPeriod.total}</span>
-        {lastPeriod ? (
+      {hard.total > 0 ? (
+        <p className="rq-body adherence__hard">
+          Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
+        </p>
+      ) : null}
+      <p className="rq-label adherence__soft">
+        Soft · <span className="rq-num">{soft.followed} of {soft.total}</span>
+        {priorSoft ? (
           <>
-            , up from <span className="rq-num">{lastPeriod.followed}</span>
+            , up from <span className="rq-num">{priorSoft.followed}</span>
           </>
         ) : null}
       </p>
@@ -147,15 +167,15 @@ function ReviewAdherenceCmp({ review }: { review: DashboardReviewReadyState }) {
           <div className="rq-cmp__track">
             <i className="rq-cmp__fill" style={{ width: `${thisPct}%` }} />
           </div>
-          <span className="rq-cmp__val rq-num">{thisPeriod.followed}</span>
+          <span className="rq-cmp__val rq-num">{soft.followed}</span>
         </div>
-        {lastPeriod ? (
+        {priorSoft ? (
           <div className="rq-cmp__row">
             <span className="rq-cmp__lbl">Last week</span>
             <div className="rq-cmp__track">
               <i className="rq-cmp__fill" style={{ width: `${lastPct}%` }} />
             </div>
-            <span className="rq-cmp__val rq-num">{lastPeriod.followed}</span>
+            <span className="rq-cmp__val rq-num">{priorSoft.followed}</span>
           </div>
         ) : null}
       </div>
@@ -337,9 +357,6 @@ export default async function DashboardPage() {
     fetchRecentWeekCompletenessForUser(user.id, currentWeekStart, STREAK_STRIP_WEEKS),
   ]);
 
-  const combinedAdherence =
-    adherenceResult.success && adherenceResult.display ? combinedAdherenceCount(adherenceResult.display) : null;
-
   return (
     <main className="dash" data-state="clear">
       <p className="dash__day">{day}</p>
@@ -356,8 +373,8 @@ export default async function DashboardPage() {
         <p className="rq-sub">Not enough data yet for a streak.</p>
       )}
 
-      {combinedAdherence ? (
-        <AdherenceDots label="Adherence" count={combinedAdherence} />
+      {adherenceResult.success && adherenceResult.display && adherenceResult.display.status === 'ready' ? (
+        <AdherenceDotRows display={adherenceResult.display} />
       ) : (
         <p className="rq-sub" role={adherenceResult.success ? undefined : 'alert'}>
           {adherenceResult.success
