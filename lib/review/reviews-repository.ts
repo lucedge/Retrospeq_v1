@@ -270,10 +270,16 @@ export type MarkReviewCompletedResult =
 
 export async function markReviewCompleted(userId: string, periodStart: string): Promise<MarkReviewCompletedResult> {
   return withUserConnection(userId, async (client) => {
+    // Lock the review row FIRST (security-reviewer FAIL 2026-09-14: the
+    // earlier check-then-update let a concurrent `writeReviewPrompts` insert
+    // a pending prompt between the check and the close). `writeReviewPrompts`
+    // takes this same row lock before touching prompts, so the two are
+    // serialised: whichever commits first, the other sees its result.
     const reviewRes = await client.query<{ id: string; completed_at: string | null }>(
       `select id, completed_at::text as completed_at
          from retrospeq.reviews
-        where user_id = $1 and period_kind = 'weekly' and period_start = $2`,
+        where user_id = $1 and period_kind = 'weekly' and period_start = $2
+        for update`,
       [userId, periodStart],
     );
     const review = reviewRes.rows[0];
@@ -282,23 +288,20 @@ export async function markReviewCompleted(userId: string, periodStart: string): 
       return { status: 'completed', reviewId: review.id, alreadyCompleted: true };
     }
 
-    const pendingRes = await client.query<{ has_pending: boolean }>(
-      `select exists(
-         select 1 from retrospeq.review_prompts
-          where user_id = $1 and review_id = $2 and state = 'pending'
-       ) as has_pending`,
+    // One atomic conditional UPDATE under the lock: closes only when no
+    // pending prompt exists. Zero rows affected = a pending prompt blocked it.
+    const closeRes = await client.query<{ id: string }>(
+      `update retrospeq.reviews r
+          set completed_at = coalesce(r.completed_at, now())
+        where r.user_id = $1 and r.id = $2
+          and not exists (
+            select 1 from retrospeq.review_prompts p
+             where p.user_id = $1 and p.review_id = r.id and p.state = 'pending'
+          )
+        returning r.id`,
       [userId, review.id],
     );
-    if (pendingRes.rows[0]?.has_pending) {
-      return { status: 'pending_prompts' };
-    }
-
-    await client.query(
-      `update retrospeq.reviews
-          set completed_at = coalesce(completed_at, now())
-        where user_id = $1 and id = $2`,
-      [userId, review.id],
-    );
+    if (closeRes.rowCount === 0) return { status: 'pending_prompts' };
     return { status: 'completed', reviewId: review.id, alreadyCompleted: false };
   });
 }

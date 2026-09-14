@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Client } from 'pg';
+import { Client } from 'pg';
 import {
   createTestAuthUser,
   connectAsOwner,
@@ -51,6 +51,19 @@ async function insertPrompt(
      values ($1, $2, 'graduation', 1, 'finding', gen_random_uuid(), '{}'::jsonb, $3)`,
     [userId, reviewId, state],
   );
+}
+
+async function waitForBlockedQuery(ownerConn: Client, queryPattern: string, timeoutMs = 8000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await ownerConn.query<{ pid: number }>(
+      `select pid from pg_stat_activity where query ilike $1 and wait_event_type = 'Lock'`,
+      [queryPattern],
+    );
+    if (res.rows.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`waitForBlockedQuery: nothing matching ${queryPattern} waited on a lock within ${timeoutMs}ms`);
 }
 
 describe.skipIf(!env)('markReviewCompleted (live DB)', () => {
@@ -167,4 +180,30 @@ describe.skipIf(!env)('markReviewCompleted (live DB)', () => {
     const afterA = await fetchWeeklyReviewByPeriodStart(userA.id, weekStart);
     expect(afterA?.completedAt).toBeNull();
   }, 30_000);
+
+  it('GENUINE race: a concurrent prompt materialisation holding the review row lock blocks close, and close then refuses (security-reviewer FAIL 2026-09-14)', async () => {
+    const user = await createTestAuthUser(envBundle, 'mark-close-race');
+    cleanupUserIds.push(user.id);
+    const review = await upsertWeeklyReview(user.id, weekStart, weekEnd, fakePayload({ periodStart: weekStart, periodEnd: weekEnd }));
+
+    const raceConn = new Client({ connectionString: envBundle.SUPABASE_DB_URL });
+    await raceConn.connect();
+    try {
+      // What writeReviewPrompts does: lock the review row, insert a pending prompt, not yet committed.
+      await raceConn.query('begin');
+      await raceConn.query('select id from retrospeq.reviews where id = $1 for update', [review.id]);
+      await insertPrompt(raceConn, user.id, review.id, 'pending');
+
+      const closing = markReviewCompleted(user.id, weekStart);
+      await waitForBlockedQuery(db, '%from retrospeq.reviews%for update%');
+      await raceConn.query('commit');
+
+      await expect(closing).resolves.toEqual({ status: 'pending_prompts' });
+      const after = await fetchWeeklyReviewByPeriodStart(user.id, weekStart);
+      expect(after?.completedAt).toBeNull();
+    } finally {
+      await raceConn.query('rollback').catch(() => {});
+      await raceConn.end();
+    }
+  }, 45_000);
 });

@@ -75,6 +75,18 @@ export async function writeReviewPrompts(
   ranked: readonly RankedPromptCandidate[],
 ): Promise<WrittenReviewPrompt[]> {
   return withServiceRoleConnection(async (client) => {
+    // Same row lock `markReviewCompleted` takes, so prompt materialisation
+    // and closing the week serialise. A review closed in the meantime gets
+    // no new pending prompts: a closed week is frozen (§4.8 / ADR 0039).
+    const locked = await client.query<{ completed_at: string | null }>(
+      `select completed_at::text as completed_at
+         from retrospeq.reviews
+        where user_id = $1 and id = $2
+        for update`,
+      [userId, reviewId],
+    );
+    if (locked.rows[0]?.completed_at) return [];
+
     await client.query(
       `delete from retrospeq.review_prompts
         where user_id = $1 and review_id = $2 and state = 'pending'`,
