@@ -218,6 +218,103 @@ export async function fetchRulesForUser(userId: string): Promise<RuleListItem[]>
 }
 
 // ---------------------------------------------------------------------
+// fetchRuleVersionChangesForUser — Module 06 §4.7's "annotates the
+// adherence timeline" render, Slice 8
+// ---------------------------------------------------------------------
+
+export interface RuleVersionChange {
+  ruleId: string;
+  operandId: string;
+  op: RuleOperator;
+  /** The superseded version's own `value` — decoded from jsonb, same
+   *  shape `fetchCurrentRuleForEdit`'s own `value` field already carries
+   *  (a bare number for a threshold, an array for a `between` pair, etc). */
+  oldValue: unknown;
+  newValue: unknown;
+  /** The NEW version's own `rendered` sentence — already stored verbatim
+   *  at write time (`applyRuleEdit`'s own `rendered` argument), never
+   *  re-derived here. */
+  rendered: string;
+  /** `rule_versions.created_at`, ISO timestamptz text — the moment THIS
+   *  version (the change) took effect, per §4.7's "on 3 March" (the edit
+   *  date, not the rule's original creation date). */
+  changedAt: string;
+}
+
+/**
+ * Module 06 §4.7: "Adjusting creates a new rule version (Module 04),
+ * which annotates the adherence timeline." ADR 0041's own §4.7 paragraph
+ * (docs/adr/0041) is explicit that `rule_versions` already carries every
+ * fact this needs — a new row, `created_at` real, its predecessor's own
+ * `value` still readable — and that no UI reads it yet. This is that
+ * read, still nothing new WRITTEN.
+ *
+ * **Version >= 2 excludes rule CREATION** (version 1 has no predecessor
+ * row to join against — the inner join to `vOld` alone does that, no
+ * extra `where` needed) — matching this slice's own dispatch ("Exclude
+ * rule creation (version 1) and retirement"). **Retirement is excluded
+ * for a different, structural reason**: retiring a rule only ever
+ * touches `rules.state`/`rules.retired_at` (`retireRule`, unchanged by
+ * this slice) — it never inserts a `rule_versions` row at all, so this
+ * query (which only ever sees `rule_versions` rows) cannot surface a
+ * retirement even accidentally.
+ *
+ * `vOld.user_id = $1` is a defensive, redundant restatement of what RLS
+ * (`rule_versions_owner_select`) and the join itself (same `rule_id`,
+ * and every version of a given rule is always written under that rule's
+ * one owner) already guarantee — same "two independent checks" posture
+ * this file's own `fetchCurrentRuleForEdit` documents.
+ *
+ * `rangeStart`/`rangeEnd` are plain calendar dates (`YYYY-MM-DD`),
+ * compared against `created_at::date` — the same plain-UTC-date
+ * convention `adherence-display.ts`'s own header documents for exactly
+ * this kind of user-level (not per-account) date range, applied here to
+ * an edit timestamp instead of a trading day.
+ *
+ * Ordered most-recent-first — callers that only want the newest few
+ * (the render's own "max 3" cap) can `slice` directly without an extra
+ * sort.
+ */
+export async function fetchRuleVersionChangesForUser(
+  userId: string,
+  rangeStart: string,
+  rangeEnd: string,
+): Promise<RuleVersionChange[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{
+      rule_id: string;
+      operand_id: string;
+      op: RuleOperator;
+      old_value: unknown;
+      new_value: unknown;
+      rendered: string;
+      changed_at: string;
+    }>(
+      `select vnew.rule_id, vnew.operand_id, vnew.op,
+              vold.value as old_value, vnew.value as new_value,
+              vnew.rendered, vnew.created_at::text as changed_at
+         from retrospeq.rule_versions vnew
+         join retrospeq.rule_versions vold
+           on vold.rule_id = vnew.rule_id and vold.version = vnew.version - 1 and vold.user_id = $1
+        where vnew.user_id = $1
+          and vnew.version >= 2
+          and vnew.created_at::date between $2::date and $3::date
+        order by vnew.created_at desc`,
+      [userId, rangeStart, rangeEnd],
+    );
+    return res.rows.map((row) => ({
+      ruleId: row.rule_id,
+      operandId: row.operand_id,
+      op: row.op,
+      oldValue: row.old_value,
+      newValue: row.new_value,
+      rendered: row.rendered,
+      changedAt: row.changed_at,
+    }));
+  });
+}
+
+// ---------------------------------------------------------------------
 // createRule's write
 // ---------------------------------------------------------------------
 

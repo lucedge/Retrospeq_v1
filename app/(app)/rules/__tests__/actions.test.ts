@@ -44,6 +44,7 @@ const {
   getAmbientAccountStateMock,
   getAdherenceDisplayForUserMock,
   fetchRulesForUserMock,
+  fetchRuleVersionChangesForUserMock,
 } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   createClientMock: vi.fn(),
@@ -68,6 +69,7 @@ const {
   getAmbientAccountStateMock: vi.fn(),
   getAdherenceDisplayForUserMock: vi.fn(),
   fetchRulesForUserMock: vi.fn(),
+  fetchRuleVersionChangesForUserMock: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -95,6 +97,7 @@ vi.mock('@/lib/rules/rules-repository', async (importOriginal) => {
     insertRuleAndVersion: insertRuleAndVersionMock,
     applyRuleEdit: applyRuleEditMock,
     fetchRulesForUser: fetchRulesForUserMock,
+    fetchRuleVersionChangesForUser: fetchRuleVersionChangesForUserMock,
   };
 });
 vi.mock('@/lib/rules/preview', () => ({
@@ -181,6 +184,7 @@ beforeEach(() => {
   getAmbientAccountStateMock.mockReset();
   getAdherenceDisplayForUserMock.mockReset();
   fetchRulesForUserMock.mockReset();
+  fetchRuleVersionChangesForUserMock.mockReset().mockResolvedValue([]);
 });
 
 describe('createRule', () => {

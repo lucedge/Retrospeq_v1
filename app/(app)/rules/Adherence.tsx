@@ -1,4 +1,5 @@
 import type { AdherenceDisplay } from '@/lib/rules/adherence-display';
+import type { RuleChangeAnnotation } from '@/lib/rules/rule-change-annotations';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.6 / §6.1's own reference markup —
@@ -27,7 +28,34 @@ function pluralize(n: number, singular: string): string {
   return n === 1 ? singular : `${singular}s`;
 }
 
-export function AdherenceSection({ display }: { display: AdherenceDisplay }) {
+/**
+ * Module 06 §4.7's "annotates the adherence timeline" — a quiet,
+ * attribution-weight line per changed rule, never a button, never a
+ * colour (AGENTS.md; this dispatch's own instruction). Renders nothing
+ * at all when `annotations` is empty — an unedited rulebook this week is
+ * the common case, not an omission to apologise for.
+ */
+function RuleChangeAnnotations({ annotations }: { annotations: RuleChangeAnnotation[] }) {
+  if (annotations.length === 0) return null;
+  return (
+    <ul className="adherence__attribution list-none pl-0 flex flex-col gap-1">
+      {annotations.map((a) => (
+        <li key={a.ruleId + a.date}>
+          You changed {a.subjectPhrase}
+          {a.change ? (
+            <>
+              {' '}
+              from <span className="rq-num">{a.change.from}</span> to <span className="rq-num">{a.change.to}</span>
+            </>
+          ) : null}{' '}
+          on {a.date}.
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function AdherenceSection({ display, annotations }: { display: AdherenceDisplay; annotations: RuleChangeAnnotation[] }) {
   if (display.status === 'insufficient_history') {
     // A genuine, honest "not enough data yet" state (AGENTS.md) — not an
     // error, and never a fabricated "0 of 0." Reasons this is correct and
@@ -41,6 +69,7 @@ export function AdherenceSection({ display }: { display: AdherenceDisplay }) {
       <section className="adherence" aria-labelledby="adh-h">
         <h2 id="adh-h">Adherence</h2>
         <p className="rq-sub">Not enough data yet — this fills in once you&apos;ve confirmed a trade this week.</p>
+        <RuleChangeAnnotations annotations={annotations} />
       </section>
     );
   }
@@ -94,6 +123,7 @@ export function AdherenceSection({ display }: { display: AdherenceDisplay }) {
         // celebratory language, no streak-style framing, just the fact.
         <p className="adherence__attribution">No rules were broken this week.</p>
       ) : null}
+      <RuleChangeAnnotations annotations={annotations} />
     </section>
   );
 }

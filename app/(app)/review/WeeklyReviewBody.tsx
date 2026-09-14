@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useActionState } from 'react';
 import type { WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
 import type { FindingPayload } from '@/lib/analytics/findings-payload';
+import type { RuleChangeAnnotation } from '@/lib/rules/rule-change-annotations';
 import { formatRMultiple } from '../trades/format';
 import { fractionTrend } from './format';
 import { closeWeeklyReview, type CloseWeeklyReviewResult } from './actions';
@@ -45,6 +46,7 @@ export function WeeklyReviewBody({
   outcome,
   consistency,
   adherence,
+  ruleChangeAnnotations,
   findings,
   pendingCount,
 }: {
@@ -52,6 +54,7 @@ export function WeeklyReviewBody({
   outcome: WeeklyReadPayload['outcome'];
   consistency: WeeklyReadPayload['consistency'];
   adherence: WeeklyReadPayload['adherence'];
+  ruleChangeAnnotations: RuleChangeAnnotation[];
   findings: WeeklyReadPayload['findings'];
   pendingCount: number;
 }) {
@@ -93,7 +96,7 @@ export function WeeklyReviewBody({
 
       <ConsistencyPanel daysTraded={consistency.daysTraded} daysClosed={consistency.daysClosed} streakWeeks={consistency.streakWeeks} />
 
-      <AdherencePanel adherence={adherence} />
+      <AdherencePanel adherence={adherence} ruleChangeAnnotations={ruleChangeAnnotations} />
 
       <FindingsPanel findings={findings} />
 
@@ -171,7 +174,45 @@ function ConsistencyPanel({ daysTraded, daysClosed, streakWeeks }: { daysTraded:
   );
 }
 
-function AdherencePanel({ adherence }: { adherence: WeeklyReadPayload['adherence'] }) {
+/**
+ * Module 06 §4.7's "annotates the adherence timeline" — a quiet
+ * attribution-weight `<ul>` under the adherence numbers, one line per
+ * rule threshold change that fell inside THIS review's own period, most
+ * recent first, max 3 (`buildRuleChangeAnnotations`'s own cap). Renders
+ * nothing when there are none — the common case (most weeks touch no
+ * rule at all) is not an omission to apologise for. Never a button,
+ * never a colour — same posture as `Adherence.tsx`'s own identical
+ * component on `/rules` (deliberately duplicated rather than shared:
+ * that file's version lives in a Server Component's own module tree and
+ * this one in a Client Component's, and the JSX itself is four lines).
+ */
+function RuleChangeAnnotations({ annotations }: { annotations: RuleChangeAnnotation[] }) {
+  if (annotations.length === 0) return null;
+  return (
+    <ul className="adherence__attribution list-none pl-0 flex flex-col gap-1">
+      {annotations.map((a) => (
+        <li key={a.ruleId + a.date}>
+          You changed {a.subjectPhrase}
+          {a.change ? (
+            <>
+              {' '}
+              from <span className="rq-num">{a.change.from}</span> to <span className="rq-num">{a.change.to}</span>
+            </>
+          ) : null}{' '}
+          on {a.date}.
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AdherencePanel({
+  adherence,
+  ruleChangeAnnotations,
+}: {
+  adherence: WeeklyReadPayload['adherence'];
+  ruleChangeAnnotations: RuleChangeAnnotation[];
+}) {
   if (adherence.status === 'insufficient_history') {
     return (
       <section className="rq-card flex flex-col gap-2" aria-labelledby="p-adherence">
@@ -179,6 +220,7 @@ function AdherencePanel({ adherence }: { adherence: WeeklyReadPayload['adherence
           Adherence
         </h2>
         <p className="rq-sub">Not enough data yet.</p>
+        <RuleChangeAnnotations annotations={ruleChangeAnnotations} />
       </section>
     );
   }
@@ -209,6 +251,7 @@ function AdherencePanel({ adherence }: { adherence: WeeklyReadPayload['adherence
           <span className="rq-num">{attribution.ofBreaks}</span> {attribution.severity} breaks.
         </p>
       )}
+      <RuleChangeAnnotations annotations={ruleChangeAnnotations} />
     </section>
   );
 }

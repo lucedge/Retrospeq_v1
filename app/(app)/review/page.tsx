@@ -164,7 +164,7 @@ export default async function WeeklyReviewPage() {
     periodEnd,
     coversWeeks,
   );
-  const { outcome, consistency, adherence, findings } = readPayload;
+  const { outcome, consistency, adherence, findings, ruleChangeAnnotations } = readPayload;
 
   if (completedAt !== null) {
     // Part 3 "close" (§5.1's own reference markup, frame 4.12). Genuinely
@@ -215,6 +215,7 @@ export default async function WeeklyReviewPage() {
         outcome={outcome}
         consistency={consistency}
         adherence={adherence}
+        ruleChangeAnnotations={ruleChangeAnnotations ?? []}
         findings={findings}
         pendingCount={pendingCount}
       />

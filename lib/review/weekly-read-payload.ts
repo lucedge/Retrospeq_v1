@@ -3,6 +3,8 @@ import { fetchPeriodOutcome, type PeriodOutcome } from '@/lib/ingestion/trades-r
 import { fetchPeriodConsistency, type PeriodConsistency } from './period-consistency';
 import { fetchPeriodAdherence, type PeriodAdherence } from './period-adherence';
 import { assembleWeeklyFindings, type WeeklyFindingEntry, WEEKLY_FINDINGS_CAP } from './weekly-findings';
+import { fetchRuleVersionChangesForUser } from '@/lib/rules/rules-repository';
+import { buildRuleChangeAnnotations, type RuleChangeAnnotation } from '@/lib/rules/rule-change-annotations';
 
 /**
  * Module 06 (Review & Graduation) Slice 2 — §4.2's Part 1 "the read," the
@@ -55,6 +57,18 @@ export interface WeeklyReadPayload {
   consistency: PeriodConsistency;
   adherence: PeriodAdherence;
   findings: WeeklyFindingEntry[];
+  /** Module 06 §4.7's "annotates the adherence timeline" — rule threshold
+   *  changes (Module 04 `editRule`) that fell inside THIS review's own
+   *  period, most recent first, max 3. See `lib/rules/rules-repository.ts`'s
+   *  `fetchRuleVersionChangesForUser` for the read and
+   *  `lib/rules/rule-change-annotations.ts` for the pure formatting step
+   *  ADR 0041's §4.7 paragraph names both were still missing. A FIFTH
+   *  element alongside this file's own §4.2 table's four — not itself one
+   *  of "outcome/consistency/adherence/findings" (it isn't a statistic
+   *  Module 06 computes; it's Module 04's own history, surfaced here) —
+   *  which is why it's a plain sibling field rather than folded into
+   *  `adherence` above. */
+  ruleChangeAnnotations: RuleChangeAnnotation[];
 }
 
 export async function assembleWeeklyReadPayload(
@@ -62,12 +76,21 @@ export async function assembleWeeklyReadPayload(
   periodStart: string,
   periodEnd: string,
 ): Promise<WeeklyReadPayload> {
-  const [outcome, consistency, adherence, findings] = await Promise.all([
+  const [outcome, consistency, adherence, findings, ruleVersionChanges] = await Promise.all([
     fetchPeriodOutcome(userId, periodStart, periodEnd),
     fetchPeriodConsistency(userId, periodStart, periodEnd),
     fetchPeriodAdherence(userId, periodStart, periodEnd),
     assembleWeeklyFindings(userId, WEEKLY_FINDINGS_CAP),
+    fetchRuleVersionChangesForUser(userId, periodStart, periodEnd),
   ]);
 
-  return { periodStart, periodEnd, outcome, consistency, adherence, findings };
+  return {
+    periodStart,
+    periodEnd,
+    outcome,
+    consistency,
+    adherence,
+    findings,
+    ruleChangeAnnotations: buildRuleChangeAnnotations(ruleVersionChanges),
+  };
 }

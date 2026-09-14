@@ -27,6 +27,7 @@ import {
   fetchActiveGlobalRuleVersionsForOperand,
   fetchCurrentRuleForEdit,
   fetchRulesForUser,
+  fetchRuleVersionChangesForUser,
   applyRuleEdit,
   type RuleListItem,
 } from '@/lib/rules/rules-repository';
@@ -62,6 +63,8 @@ import {
 } from '@/lib/rules/rule-overrides-repository';
 import { AmbientAccountNotFoundError, getAmbientAccountState, type AmbientAccountState } from '@/lib/rules/ambient-state';
 import { getAdherenceDisplayForUser, type AdherenceDisplay } from '@/lib/rules/adherence-display';
+import { weekStartForServerDay, addDaysToServerDay } from '@/lib/rules/week-boundary';
+import { buildRuleChangeAnnotations, type RuleChangeAnnotation } from '@/lib/rules/rule-change-annotations';
 
 export type { RuleActionResult, RuleActionState };
 
@@ -1009,6 +1012,15 @@ export interface AdherenceDisplayActionResult {
   error?: { code: string; user_message: string; retryable: boolean };
   success?: boolean;
   display?: AdherenceDisplay;
+  /** Module 06 §4.7's "annotates the adherence timeline" — rule threshold
+   *  changes (Module 04 `editRule`) over this week + last week, most
+   *  recent first, max 3. Always present alongside `display` (even
+   *  `status: 'insufficient_history'`) — a rule edit is a fact independent
+   *  of whether `adherence_weekly` has materialised a row yet, so it is
+   *  fetched unconditionally rather than only when `display` is `ready`.
+   *  See `lib/rules/rule-change-annotations.ts` for the pure formatting
+   *  step and `fetchRuleVersionChangesForUser` for the read. */
+  annotations?: RuleChangeAnnotation[];
 }
 
 export async function fetchAdherenceDisplay(): Promise<AdherenceDisplayActionResult> {
@@ -1016,8 +1028,23 @@ export async function fetchAdherenceDisplay(): Promise<AdherenceDisplayActionRes
   if (isErrorState(user)) return user;
 
   try {
-    const display = await getAdherenceDisplayForUser(user.id);
-    return { success: true, display };
+    const now = new Date();
+    // "This week + last week" — the same two-week window the display
+    // itself already reasons about (`priorSoft`'s "up from" comparison).
+    // Computed with `week-boundary.ts`'s own canonical helpers directly
+    // (the SAME ones `adherence-display.ts`'s `currentWeekStartFor`/
+    // `priorWeekStartFor` are themselves built from) rather than
+    // importing those two re-exports — this keeps the date math testable
+    // independently of whatever this file's own test suite mocks
+    // `@/lib/rules/adherence-display` down to (that mock intentionally
+    // only stubs `getAdherenceDisplayForUser` itself).
+    const rangeEnd = now.toISOString().slice(0, 10);
+    const rangeStart = addDaysToServerDay(weekStartForServerDay(rangeEnd), -7);
+    const [display, changes] = await Promise.all([
+      getAdherenceDisplayForUser(user.id),
+      fetchRuleVersionChangesForUser(user.id, rangeStart, rangeEnd),
+    ]);
+    return { success: true, display, annotations: buildRuleChangeAnnotations(changes) };
   } catch (err) {
     console.error('[rules/actions:fetchAdherenceDisplay] read failed:', err);
     return {

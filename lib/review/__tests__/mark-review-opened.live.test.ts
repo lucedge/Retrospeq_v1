@@ -32,6 +32,7 @@ function fakePayload(overrides: Partial<WeeklyReadPayload> = {}): WeeklyReadPayl
     consistency: { daysTraded: 5, daysClosed: 5, streakWeeks: 12 },
     adherence: { status: 'insufficient_history' },
     findings: [],
+    ruleChangeAnnotations: [],
     ...overrides,
   };
 }

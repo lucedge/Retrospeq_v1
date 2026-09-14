@@ -92,7 +92,7 @@ export default async function RulesPage() {
       </h1>
 
       {adherenceResult.success && adherenceResult.display ? (
-        <AdherenceSection display={adherenceResult.display} />
+        <AdherenceSection display={adherenceResult.display} annotations={adherenceResult.annotations ?? []} />
       ) : (
         <p className="rq-sub" role="alert">
           {adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.'}
