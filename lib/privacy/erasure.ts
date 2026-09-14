@@ -21,6 +21,7 @@ import { deleteAllRecoveryCodes } from '@/lib/auth/mfa-recovery-repository';
 import { deleteSubscriptionForUser } from '@/lib/entitlements/subscription-repository';
 import { deleteAllFieldsForUser } from '@/lib/fields/fields-repository';
 import { deleteAllRulesForUser } from '@/lib/rules/rules-repository';
+import { deleteAllEngagementEventsForUser } from '@/lib/engagement/events-repository';
 
 /**
  * Module 01 stories 5.2/5.3, §4.6's full erasure flow. This is the
@@ -275,6 +276,8 @@ export async function executeErasure(
   await deleteAllTradingAccountsForUser(userId);
   await deleteAllRulesForUser(userId);
   await deleteAllFieldsForUser(userId);
+  // Module 07: `engagement_events` has its own forbid-delete trigger.
+  await deleteAllEngagementEventsForUser(userId);
   await deleteSubscriptionForUser(userId);
 
   // --- §4.6 step 3c ------------------------------------------------------

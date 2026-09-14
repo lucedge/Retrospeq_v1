@@ -410,3 +410,21 @@ export async function fetchRecentMilestoneForUser(userId: string, now: Date): Pr
     return { milestoneId: row.milestone_id as MilestoneId, reachedAt: row.reached_at };
   });
 }
+
+/**
+ * Erasure step 3b (Module 01 §4.6, docs/adr/0010). `engagement_events`
+ * has a `BEFORE DELETE` forbid-mutation trigger, so the final
+ * `auth.admin.deleteUser` cascade from `profiles` (a different connection,
+ * no escape hatch) would abort erasure the moment a user has one row —
+ * the same bug class the ADR's addendum found for `fields` and `rules`.
+ * Deletes explicitly with `retrospeq.erasure_in_progress` set local to this
+ * transaction. `milestones` has no trigger but goes in the same pass so the
+ * ledger and what it earned are erased together.
+ */
+export async function deleteAllEngagementEventsForUser(userId: string): Promise<void> {
+  await withServiceRoleConnection(async (client) => {
+    await client.query("select set_config('retrospeq.erasure_in_progress', 'true', true)");
+    await client.query('delete from retrospeq.milestones where user_id = $1', [userId]);
+    await client.query('delete from retrospeq.engagement_events where user_id = $1', [userId]);
+  });
+}
