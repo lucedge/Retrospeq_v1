@@ -1,7 +1,7 @@
 import 'server-only';
 import type { PoolClient } from 'pg';
-import { withServiceRoleConnection } from '@/lib/supabase/direct';
-import { weekEndForServerDay, weekStartForServerDay } from '@/lib/rules/week-boundary';
+import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
+import { addDaysToServerDay, weekEndForServerDay, weekStartForServerDay } from '@/lib/rules/week-boundary';
 
 /**
  * Module 07 (Engagement) §5.2 — the `week_completeness` materialisation.
@@ -220,6 +220,50 @@ export async function recomputeWeekCompletenessForUser(
   weekStart: string,
 ): Promise<WeekCompletenessRecord> {
   return withServiceRoleConnection((client) => recomputeWeekCompleteness(client, userId, weekStart));
+}
+
+/**
+ * Module 08 (Onboarding & Home) §7.3 — the Clear state's own logging-
+ * streak strip (frames 1.12/1.16, `brand/docs/screens/home-
+ * onboarding.html`): a real bar per ISO week over `weekCount` weeks
+ * ending at (and including) `throughWeekStart`, oldest first. A week with
+ * no materialised row at all (never recomputed — e.g. before this
+ * trader's very first confirmation, or a genuine gap) reads as zero
+ * activity, an honest "not enough data yet" zero, never fabricated —
+ * same posture `period-consistency.ts` already documents for the
+ * identical missing-row case. `withUserConnection`, a genuine page-view-
+ * time read behind a real session, matching every other Module 07 read
+ * this dispatch reuses (`fetchEngagementSummaryForUser`).
+ */
+export interface RecentWeekBar {
+  weekStart: string;
+  daysTraded: number;
+  daysClosed: number;
+  /** `false` when `daysTraded === 0` — a week with no trading at all is
+   *  rendered as a visual gap in the strip, not a "0 of 0, complete" bar. */
+  hasActivity: boolean;
+}
+
+export async function fetchRecentWeekCompletenessForUser(
+  userId: string,
+  throughWeekStart: string,
+  weekCount: number,
+): Promise<RecentWeekBar[]> {
+  assertCanonicalWeekStart(throughWeekStart);
+  const fromWeekStart = addDaysToServerDay(throughWeekStart, -7 * (weekCount - 1));
+
+  return withUserConnection(userId, async (client) => {
+    const rows = await fetchWeekCompletenessRowsInRange(client, userId, fromWeekStart, throughWeekStart);
+    const bars: RecentWeekBar[] = [];
+    let cursor = fromWeekStart;
+    for (let i = 0; i < weekCount; i++) {
+      const row = rows.get(cursor);
+      const daysTraded = row?.daysTraded ?? 0;
+      bars.push({ weekStart: cursor, daysTraded, daysClosed: row?.daysClosed ?? 0, hasActivity: daysTraded > 0 });
+      cursor = addDaysToServerDay(cursor, 7);
+    }
+    return bars;
+  });
 }
 
 /**

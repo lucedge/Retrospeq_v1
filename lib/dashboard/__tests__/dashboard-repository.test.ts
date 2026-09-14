@@ -12,19 +12,66 @@ vi.mock('server-only', () => ({}));
  * degrade-on-failure) work," not a re-proof of the underlying reads.
  */
 
-const { listOpenTradesMock, listClosedUnconfirmedTradesMock, listTradingAccountsMock } = vi.hoisted(() => ({
+const {
+  listOpenTradesMock,
+  listClosedUnconfirmedTradesMock,
+  listTradingAccountsMock,
+  fetchPeriodOutcomeMock,
+  fetchActiveGlobalRuleVersionsForOperandMock,
+  determineCurrentWeeklyReviewPeriodMock,
+  fetchWeeklyReviewByPeriodStartMock,
+  fetchPeriodConsistencyMock,
+  fetchPeriodAdherenceMock,
+  fetchPendingPromptCountMock,
+} = vi.hoisted(() => ({
   listOpenTradesMock: vi.fn(),
   listClosedUnconfirmedTradesMock: vi.fn(),
   listTradingAccountsMock: vi.fn(),
+  fetchPeriodOutcomeMock: vi.fn(),
+  fetchActiveGlobalRuleVersionsForOperandMock: vi.fn(),
+  determineCurrentWeeklyReviewPeriodMock: vi.fn(),
+  fetchWeeklyReviewByPeriodStartMock: vi.fn(),
+  fetchPeriodConsistencyMock: vi.fn(),
+  fetchPeriodAdherenceMock: vi.fn(),
+  fetchPendingPromptCountMock: vi.fn(),
 }));
 
 vi.mock('@/lib/ingestion/trades-repository', () => ({
   listOpenTrades: listOpenTradesMock,
   listClosedUnconfirmedTrades: listClosedUnconfirmedTradesMock,
+  fetchPeriodOutcome: fetchPeriodOutcomeMock,
 }));
 
 vi.mock('@/lib/broker/accounts-repository', () => ({
   listTradingAccounts: listTradingAccountsMock,
+}));
+
+vi.mock('@/lib/rules/rules-repository', () => ({
+  fetchActiveGlobalRuleVersionsForOperand: fetchActiveGlobalRuleVersionsForOperandMock,
+}));
+
+vi.mock('@/lib/review/current-period', () => ({
+  determineCurrentWeeklyReviewPeriod: determineCurrentWeeklyReviewPeriodMock,
+}));
+
+vi.mock('@/lib/review/reviews-repository', () => ({
+  fetchWeeklyReviewByPeriodStart: fetchWeeklyReviewByPeriodStartMock,
+  deriveCoversWeeks: (periodStart: string, periodEnd: string) => {
+    const days = Math.round((Date.parse(periodEnd) - Date.parse(periodStart)) / 86400000) + 1;
+    return days / 7;
+  },
+}));
+
+vi.mock('@/lib/review/period-consistency', () => ({
+  fetchPeriodConsistency: fetchPeriodConsistencyMock,
+}));
+
+vi.mock('@/lib/review/period-adherence', () => ({
+  fetchPeriodAdherence: fetchPeriodAdherenceMock,
+}));
+
+vi.mock('@/lib/review/review-prompts-repository', () => ({
+  fetchPendingPromptCount: fetchPendingPromptCountMock,
 }));
 
 import { getDashboardStateForUser } from '../dashboard-repository';
@@ -62,6 +109,17 @@ describe('getDashboardStateForUser', () => {
     listOpenTradesMock.mockReset();
     listClosedUnconfirmedTradesMock.mockReset();
     listTradingAccountsMock.mockReset();
+    fetchPeriodOutcomeMock.mockReset();
+    fetchActiveGlobalRuleVersionsForOperandMock.mockReset().mockResolvedValue([]);
+    // Default: no new period to review -- keeps every pre-existing
+    // open/closeout/clear test below from needing to mock the rest of the
+    // review-ready chain, since `computeReviewReadyState` short-circuits
+    // on a non-'ready' status before touching any other dependency.
+    determineCurrentWeeklyReviewPeriodMock.mockReset().mockResolvedValue({ status: 'caught_up', nextPeriodStart: '2026-06-08' });
+    fetchWeeklyReviewByPeriodStartMock.mockReset();
+    fetchPeriodConsistencyMock.mockReset();
+    fetchPeriodAdherenceMock.mockReset();
+    fetchPendingPromptCountMock.mockReset();
   });
 
   it('resolves clear when there are no open positions and nothing to close today', async () => {
@@ -82,8 +140,32 @@ describe('getDashboardStateForUser', () => {
     expect(state.kind).toBe('open');
     if (state.kind === 'open') {
       expect(state.positions).toEqual([
-        { id: 't-open', instrument: 'EURUSD', direction: 'long', openedAt: '2026-06-10T09:00:00.000Z', riskPct: '2.250000' },
+        {
+          id: 't-open',
+          instrument: 'EURUSD',
+          direction: 'long',
+          openedAt: '2026-06-10T09:00:00.000Z',
+          riskPct: '2.250000',
+          riskCapPct: null,
+        },
       ]);
+    }
+  });
+
+  it('open position carries the most restrictive active risk-cap rule value, when one exists', async () => {
+    listOpenTradesMock.mockResolvedValue([trade({ id: 't-open', risk_pct: '2.250000' })]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    fetchActiveGlobalRuleVersionsForOperandMock.mockResolvedValue([
+      { ruleId: 'r-1', op: 'lte', value: 2.0, rendered: 'Risk stays under 2.0%.' },
+      { ruleId: 'r-2', op: 'lte', value: 1.5, rendered: 'Risk stays under 1.5%.' },
+      { ruleId: 'r-3', op: 'gte', value: 0.5, rendered: 'irrelevant operator' },
+    ]);
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state.kind).toBe('open');
+    if (state.kind === 'open') {
+      expect(state.positions[0]?.riskCapPct).toBe('1.5');
     }
   });
 
@@ -150,6 +232,98 @@ describe('getDashboardStateForUser', () => {
       // picker), never an arbitrary guess.
       expect(state.target).toBeNull();
     }
+  });
+
+  it('resolves review when the current period is ready, has a confirmed trade, and no reviews row is opened for it', async () => {
+    listOpenTradesMock.mockResolvedValue([]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    determineCurrentWeeklyReviewPeriodMock.mockResolvedValue({ status: 'ready', periodStart: '2026-06-01', periodEnd: '2026-06-07' });
+    fetchWeeklyReviewByPeriodStartMock.mockResolvedValue(null);
+    fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 5, daysTradedCount: 4, totalR: '3.2000' });
+    fetchPeriodConsistencyMock.mockResolvedValue({ daysTraded: 4, daysClosed: 4, streakWeeks: 3 });
+    fetchPeriodAdherenceMock.mockResolvedValueOnce({
+      status: 'ready',
+      hard: { followed: 10, total: 10 },
+      soft: { followed: 21, total: 24 },
+      priorSoft: null,
+      attribution: null,
+    });
+    fetchPeriodAdherenceMock.mockResolvedValueOnce({ status: 'insufficient_history' });
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state.kind).toBe('review');
+    if (state.kind === 'review') {
+      expect(state.review.consistency).toEqual({ daysTraded: 4, daysClosed: 4 });
+      expect(state.review.adherence.thisPeriod).toEqual({ followed: 31, total: 34 });
+      expect(state.review.adherence.lastPeriod).toBeNull();
+      expect(state.review.teaser).toBeNull();
+    }
+    expect(fetchPendingPromptCountMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to Clear -- not review -- when the period is ready but already opened by the trader', async () => {
+    listOpenTradesMock.mockResolvedValue([]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    determineCurrentWeeklyReviewPeriodMock.mockResolvedValue({ status: 'ready', periodStart: '2026-06-01', periodEnd: '2026-06-07' });
+    fetchWeeklyReviewByPeriodStartMock.mockResolvedValue({
+      id: 'rev-1',
+      userId: USER_ID,
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-07',
+      coversWeeks: 1,
+      openedAt: '2026-06-08T10:00:00.000Z',
+      completedAt: null,
+      computedAt: '2026-06-08T09:00:00.000Z',
+      readPayload: {} as never,
+    });
+    fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 5, daysTradedCount: 4, totalR: '3.2000' });
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state).toEqual({ kind: 'clear', syncDegraded: false });
+    expect(fetchPeriodConsistencyMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to Clear -- not review -- when the period is ready but has zero confirmed trades', async () => {
+    listOpenTradesMock.mockResolvedValue([]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    determineCurrentWeeklyReviewPeriodMock.mockResolvedValue({ status: 'ready', periodStart: '2026-06-01', periodEnd: '2026-06-07' });
+    fetchWeeklyReviewByPeriodStartMock.mockResolvedValue(null);
+    fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 0, daysTradedCount: 0, totalR: '0' });
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state).toEqual({ kind: 'clear', syncDegraded: false });
+  });
+
+  it('review teaser reports "N decisions" only when a reviews row already exists for the period -- never fabricated', async () => {
+    listOpenTradesMock.mockResolvedValue([]);
+    listClosedUnconfirmedTradesMock.mockResolvedValue([]);
+    listTradingAccountsMock.mockResolvedValue([account()]);
+    determineCurrentWeeklyReviewPeriodMock.mockResolvedValue({ status: 'ready', periodStart: '2026-06-01', periodEnd: '2026-06-07' });
+    fetchWeeklyReviewByPeriodStartMock.mockResolvedValue({
+      id: 'rev-2',
+      userId: USER_ID,
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-07',
+      coversWeeks: 1,
+      openedAt: null,
+      completedAt: null,
+      computedAt: '2026-06-08T09:00:00.000Z',
+      readPayload: { findings: [{}, {}] } as never,
+    });
+    fetchPeriodOutcomeMock.mockResolvedValue({ tradeCount: 5, daysTradedCount: 4, totalR: '3.2000' });
+    fetchPeriodConsistencyMock.mockResolvedValue({ daysTraded: 4, daysClosed: 4, streakWeeks: 3 });
+    fetchPeriodAdherenceMock.mockResolvedValue({ status: 'insufficient_history' });
+    fetchPendingPromptCountMock.mockResolvedValue(2);
+
+    const state = await getDashboardStateForUser(USER_ID, NOW);
+    expect(state.kind).toBe('review');
+    if (state.kind === 'review') {
+      expect(state.review.teaser).toEqual({ findingsCount: 2, pendingDecisions: 2 });
+    }
+    expect(fetchPendingPromptCountMock).toHaveBeenCalledWith(USER_ID, 'rev-2');
   });
 
   it('degrades to Clear with syncDegraded=true, never throwing, when an underlying read fails (§12 DASH_STATE_UNRESOLVED)', async () => {

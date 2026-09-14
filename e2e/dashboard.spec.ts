@@ -4,11 +4,18 @@ import { uniqueTestEmail } from './helpers';
 import { weekStartForServerDay } from '../lib/rules/week-boundary';
 
 /**
- * Module 08 (Onboarding & Home) §7/§8 — the dashboard E2E, THIS DISPATCH'S
- * SCOPE ONLY (`open`/`closeout`/`clear` — never the Module-06-blocked
- * `Review ready`). Follows `e2e/onboarding.spec.ts`'s/`e2e/rules-adherence
- * .spec.ts`'s own conventions exactly (real dev server, real Supabase Auth
- * project, a real `pg` connection for setup/verification, screenshots to
+ * Module 08 (Onboarding & Home) §7/§8 — the dashboard E2E. Covers
+ * `open`/`closeout`/`clear` end-to-end; `review` (this slice's own new
+ * state, derived honestly from `lib/review/current-period.ts` with no
+ * scheduler) has unit + live-DB coverage in
+ * `lib/dashboard/__tests__/dashboard-repository*.test.ts` rather than a
+ * fifth E2E scenario here, given the multi-week seeding
+ * (`adherence_weekly`/`week_completeness`/`trades` across two periods)
+ * an E2E-level proof would need for no additional real-browser risk over
+ * the already-covered `open`/`closeout` deep-link flows. Follows
+ * `e2e/onboarding.spec.ts`'s/`e2e/rules-adherence.spec.ts`'s own
+ * conventions exactly (real dev server, real Supabase Auth project, a
+ * real `pg` connection for setup/verification, screenshots to
  * `tmp/dev-screenshots/`).
  *
  * `/dashboard` does NOT gate on `onboarding_state.stage` — any
@@ -201,7 +208,7 @@ test.describe('Dashboard (Module 08 §7/§8)', () => {
     await expect(page.locator('.dash[data-state="clear"]')).toBeVisible({ timeout: 10_000 });
   });
 
-  test('Clear: no trades outstanding renders "Nothing to close out." with real adherence numbers, honestly omits streak and the findings projection line, and shows no currency/R anywhere', async ({
+  test('Clear: no trades outstanding renders "Nothing to close out." with a real combined adherence dot count and a real (zero) streak, honestly omits the findings projection line, and shows no currency/R anywhere', async ({
     page,
   }) => {
     const user = await createConfirmedUser('dash-clear');
@@ -230,19 +237,23 @@ test.describe('Dashboard (Module 08 §7/§8)', () => {
     await expect(page.locator('.dash[data-state="clear"]')).toBeVisible();
     await expect(page.locator('.dash__headline')).toHaveText('Nothing to close out.');
 
-    // Real adherence numbers, reused verbatim from Module 04's own already-
-    // built display, not re-derived.
-    const adherence = page.locator('.adherence');
-    await expect(adherence).toBeVisible();
-    await expect(adherence.locator('.adherence__hard')).toContainText('9 of 10');
-    await expect(adherence.locator('.adherence__attribution')).toContainText(
-      'Never let your total open risk exceed 1%.',
-    );
+    // Real combined adherence dots (hard 9/10 + soft 4/4 = 13 of 14),
+    // Module 04's own already-materialised `adherence_weekly` row, summed
+    // -- not re-derived, not fabricated. Home's own ambient glance blends
+    // hard+soft into one count (documented reconciliation,
+    // `dashboard-repository.ts`'s header); `/rulebook`/`/review` keep them
+    // separate, unchanged.
+    await expect(page.locator('.rq-dots')).toBeVisible();
+    await expect(page.getByText(/13 of 14/)).toBeVisible();
 
-    // Honestly omitted, not faked (§7's own spec shows both; both are
-    // blocked on modules that don't exist yet — see this dispatch's own
-    // scope notes in app/(app)/dashboard/page.tsx).
-    await expect(page.getByText(/streak/i)).toHaveCount(0);
+    // Streak is real now (this slice) -- a fresh user has a real,
+    // materialised (zero) streak, not an omitted line.
+    await expect(page.getByText(/logging streak/i)).toBeVisible();
+    await expect(page.locator('.rq-strip')).toBeVisible();
+
+    // The findings projection line stays honestly omitted -- no source in
+    // this repo computes it yet (see this dispatch's own scope notes in
+    // app/(app)/dashboard/page.tsx).
     await expect(page.getByText(/next finding/i)).toHaveCount(0);
 
     // AGENTS.md's non-negotiable, re-asserted for this specific screen: no

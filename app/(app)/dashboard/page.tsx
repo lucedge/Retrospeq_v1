@@ -1,53 +1,222 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { getDashboardStateForUser } from '@/lib/dashboard/dashboard-repository';
+import { getDashboardStateForUser, type DashboardOpenPositionSummary, type DashboardReviewReadyState } from '@/lib/dashboard/dashboard-repository';
 import { fetchAdherenceDisplay } from '../rules/actions';
-import { AdherenceSection } from '../rules/Adherence';
+import type { AdherenceDisplay } from '@/lib/rules/adherence-display';
+import { fetchEngagementSummaryForUser } from '@/lib/engagement/streak-repository';
+import { fetchRecentWeekCompletenessForUser, type RecentWeekBar } from '@/lib/engagement/week-completeness-repository';
+import { weekStartForServerDay } from '@/lib/rules/week-boundary';
 import { formatAge, formatClockTime, formatDirection, formatRiskPct } from '../trades/format';
 import { formatDayOfWeek } from './format';
 
 /**
- * Module 08 (Onboarding & Home) §7/§8 — the dashboard, THIS DISPATCH'S
- * SCOPE ONLY. Builds exactly two of §7.1's four ranked states in full
- * (`Trades to close` / `Clear`), plus a minimal, honest indicator for a
- * genuine open position (never a silent "Clear" for a trader with a live
- * position — see `lib/dashboard/dashboard-state.ts`'s own header for the
- * full reasoning). `Review ready` is not reachable (blocked on Module 06)
- * and is not rendered as a branch here at all.
- *
- * **ROUTE CHOICE**: a new, dedicated `/dashboard` route — NOT composed
- * inline into `app/page.tsx`. `app/page.tsx` (Slice 08b) is a pure
- * REDIRECTOR (`resolveOnboardingDestination` returns a path string, and
- * `/` calls `redirect(path)`) for every stage, including the completed
- * ones that used to point at `/rules` as a placeholder — that file's own
- * header already flagged this exact spot ("Documented here so a future
- * real-dashboard slice has an unambiguous single call site to redirect
- * from instead"). This dispatch is that slice: `router.ts`'s final branch
- * now returns `/dashboard` instead of `/rules`, and this file is what it
- * points to. Keeping `/` as a pure redirector (rather than having it
- * conditionally render the dashboard inline for advanced stages) preserves
- * the one-pattern-per-concern split every other onboarding-adjacent route
- * in this repo already follows, and gives the dashboard a stable URL a nav
- * link (`app/(app)/layout.tsx`'s new "Home" entry) can point to directly.
+ * Module 08 (Onboarding & Home) §7/§8 — the dashboard, all four §7.1
+ * states now real: `open` / `closeout` / `review` / `clear`. See
+ * `lib/dashboard/dashboard-repository.ts`'s own header for exactly how
+ * "review ready" is derived honestly (no scheduler exists) and what
+ * `open`'s own card still omits and why (no live current-R, no price
+ * feed; conviction dots deferred — a documented, flagged scope gap, not a
+ * silent one).
  *
  * **No currency P&L, no equity curve, no win rate, no setup pie chart**
- * anywhere on this screen (§7.2, AGENTS.md's own non-negotiable) — R-
- * multiple appears nowhere in this dispatch's own built states at all
- * (the one place §7's spec shows it, the open position's LIVE "Now"
- * figure, is exactly the piece this dispatch defers — see the repository
- * module's own header).
+ * anywhere on this screen (§7.2, AGENTS.md's own non-negotiable). No `R`
+ * anywhere either — the one place §7's spec shows it (the open position's
+ * LIVE "Now" row) is omitted entirely, never a placeholder, per the
+ * repository module's own header.
  *
- * **Streak and the quiet projection line are honestly omitted, not
- * faked.** §7's own Clear-state markup shows "Logging streak: 12 weeks"
- * and "Next finding in about 8 trades on this setup" — both need modules
- * that don't exist yet (streak: Module 07; the projection: Module 05's
- * findings machinery). Reusing `unlock_state.weeks_active` as a stand-in
- * for streak would be exactly the kind of quiet substitution AGENTS.md
- * forbids (`onboarding-state-repository.ts`'s own header already warns
- * against this specific confusion). No honest equivalent for either line
- * exists today, so both are simply absent — the Clear state renders real
- * adherence numbers and nothing else beneath the headline.
+ * **Streak and the Clear-state dots are real, as of this slice.** Streak:
+ * `fetchEngagementSummaryForUser`/`fetchRecentWeekCompletenessForUser`
+ * (Module 07, already materialised). Adherence dots: see the
+ * `combinedAdherenceCount` helper below for why this deliberately blends
+ * hard+soft into ONE ambient glance count (documented reconciliation with
+ * Module 04 §3.3's "never blended," which still governs `/rulebook` and
+ * `/review` unchanged). The quiet "next finding" projection line remains
+ * honestly omitted — no source exists anywhere in this repo for it yet
+ * (Module 05's findings machinery has no such projection built).
  */
+
+const STREAK_STRIP_WEEKS = 12;
+
+/** Module 04 §3.3's "two numbers, never blended" governs the DETAIL
+ *  screens (`/rulebook`, `/review`) — unchanged. Home's own `rq-dots`/
+ *  `rq-cmp` ambient glance (frames 1.12/1.13/1.15/1.16) shows a single
+ *  combined count instead, matching the mockup's own visual language for
+ *  a summary screen — see `lib/dashboard/dashboard-repository.ts`'s
+ *  header for the identical reconciliation applied to the review-ready
+ *  state's own comparison. Both numbers are real materialised integers
+ *  (`hard.followed + soft.followed` of `hard.total + soft.total`), never
+ *  an average or a bare percentage. */
+function combinedAdherenceCount(display: AdherenceDisplay): { followed: number; total: number } | null {
+  if (display.status !== 'ready') return null;
+  return { followed: display.hard.followed + display.soft.followed, total: display.hard.total + display.soft.total };
+}
+
+function AdherenceDots({ label, count }: { label: string; count: { followed: number; total: number } }) {
+  return (
+    <div>
+      <p className="rq-label">
+        {label} · <span className="rq-num">{count.followed} of {count.total}</span>
+      </p>
+      <div className="rq-dots">
+        {Array.from({ length: count.total }, (_, i) => (
+          <i key={i} className={i < count.followed ? undefined : 'off'} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StreakStrip({ streakWeeks, bars }: { streakWeeks: number; bars: RecentWeekBar[] }) {
+  return (
+    <div>
+      <p className="rq-label">
+        Logging streak · <span className="rq-num">{streakWeeks}</span> {streakWeeks === 1 ? 'week' : 'weeks'}
+      </p>
+      <div className="rq-strip" style={{ ['--rq-strip-h' as string]: '28px' }}>
+        {bars.map((bar) => {
+          // Height is an honest ratio of THIS week's own materialised
+          // counts (§5.2's own formula: days_closed can exceed
+          // days_traded on a deliberate-no-trade week, clamped to 100%
+          // for the bar itself; a week with no trading at all reads as a
+          // real, visible gap, never a fabricated full bar).
+          const heightPct = bar.hasActivity ? Math.min(100, Math.round((bar.daysClosed / bar.daysTraded) * 100)) : 30;
+          return <i key={bar.weekStart} style={{ height: `${heightPct}%` }} className={bar.hasActivity ? undefined : 'gap'} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ConsistencyRing({ daysClosed, daysTraded }: { daysClosed: number; daysTraded: number }) {
+  const ratio = daysTraded > 0 ? Math.min(1, daysClosed / daysTraded) : 0;
+  const circumference = 138;
+  return (
+    <div className="rq-card" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div className="rq-ring">
+        <svg width="52" height="52">
+          <circle cx="26" cy="26" r="22" fill="none" stroke="var(--rq-mark-dim)" strokeWidth="4" />
+          <circle
+            cx="26"
+            cy="26"
+            r="22"
+            fill="none"
+            stroke="var(--rq-mark)"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - ratio)}
+          />
+        </svg>
+        <span className="rq-ring__text rq-num">
+          {daysClosed}/{daysTraded}
+        </span>
+      </div>
+      <div>
+        <p className="rq-label" style={{ margin: '0 0 3px' }}>
+          Consistency
+        </p>
+        <p className="rq-body" style={{ margin: 0 }}>
+          {daysTraded === 0
+            ? 'No trading days yet this period.'
+            : daysClosed >= daysTraded
+              ? 'Every day closed out.'
+              : `${daysClosed} of ${daysTraded} days closed out.`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ReviewAdherenceCmp({ review }: { review: DashboardReviewReadyState }) {
+  const { thisPeriod, lastPeriod } = review.adherence;
+  const thisPct = thisPeriod.total > 0 ? Math.round((thisPeriod.followed / thisPeriod.total) * 100) : 0;
+  const lastPct = lastPeriod && lastPeriod.total > 0 ? Math.round((lastPeriod.followed / lastPeriod.total) * 100) : 0;
+  return (
+    <div>
+      <p className="rq-label">
+        Adherence · <span className="rq-num">{thisPeriod.followed} of {thisPeriod.total}</span>
+        {lastPeriod ? (
+          <>
+            , up from <span className="rq-num">{lastPeriod.followed}</span>
+          </>
+        ) : null}
+      </p>
+      <div className="rq-cmp">
+        <div className="rq-cmp__row hot">
+          <span className="rq-cmp__lbl">This week</span>
+          <div className="rq-cmp__track">
+            <i className="rq-cmp__fill" style={{ width: `${thisPct}%` }} />
+          </div>
+          <span className="rq-cmp__val rq-num">{thisPeriod.followed}</span>
+        </div>
+        {lastPeriod ? (
+          <div className="rq-cmp__row">
+            <span className="rq-cmp__lbl">Last week</span>
+            <div className="rq-cmp__track">
+              <i className="rq-cmp__fill" style={{ width: `${lastPct}%` }} />
+            </div>
+            <span className="rq-cmp__val rq-num">{lastPeriod.followed}</span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Gauge scale is a documented, deliberate headroom multiplier (2x the
+ *  cap) so a trader crossing the cap reads as "the bar moved," not "the
+ *  gauge broke" (§7.1's own cap example, "the gauge is always on") —
+ *  there is no spec-given formula for exactly where the cap tick sits, so
+ *  this picks a fixed, visible headroom rather than clamping the scale to
+ *  the cap itself (which would make crossing it unrenderable). */
+function RiskGauge({ riskPct, capPct }: { riskPct: string | null; capPct: string }) {
+  const risk = Number(riskPct);
+  const cap = Number(capPct);
+  const scaleMax = cap * 2;
+  const fillPct = Number.isFinite(risk) && scaleMax > 0 ? Math.min(100, Math.max(0, (risk / scaleMax) * 100)) : 0;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="rq-gauge">
+        <i className="rq-gauge__fill" style={{ width: `${fillPct}%` }} />
+        <i className="rq-gauge__cap" style={{ left: '50%' }} />
+      </div>
+      <div className="rq-gauge__lbl">
+        <span>
+          Risk <span className="rq-num">{formatRiskPct(riskPct)}</span>
+        </span>
+        <span>
+          Cap <span className="rq-num">{formatRiskPct(capPct)}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function OpenPositionCard({ position, now }: { position: DashboardOpenPositionSummary; now: Date }) {
+  return (
+    <article className="open-position rq-card">
+      <div className="open-position__head">
+        <span className="instrument">
+          {position.instrument} {formatDirection(position.direction)}
+        </span>
+        <time className="rq-num rq-sub" dateTime={position.openedAt}>
+          {formatAge(position.openedAt, now)}
+        </time>
+      </div>
+      {position.riskCapPct ? (
+        <RiskGauge riskPct={position.riskPct} capPct={position.riskCapPct} />
+      ) : (
+        <dl className="open-position__facts">
+          <div>
+            <dt>Risk</dt>
+            <dd className="rq-num">{formatRiskPct(position.riskPct)}</dd>
+          </div>
+        </dl>
+      )}
+    </article>
+  );
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
   const {
@@ -80,26 +249,11 @@ export default async function DashboardPage() {
         <ul className="dash__trades">
           {state.positions.map((p) => (
             <li key={p.id}>
-              <article className="open-position">
-                <div className="open-position__head">
-                  <span className="instrument">
-                    {p.instrument} {formatDirection(p.direction)}
-                  </span>
-                  <time className="rq-sub" dateTime={p.openedAt}>
-                    {formatAge(p.openedAt, now)}
-                  </time>
-                </div>
-                <dl className="open-position__facts">
-                  <div>
-                    <dt>Risk</dt>
-                    <dd className="rq-num">{formatRiskPct(p.riskPct)}</dd>
-                  </div>
-                </dl>
-              </article>
+              <OpenPositionCard position={p} now={now} />
             </li>
           ))}
         </ul>
-        <p className="dash__quiet">Nothing to do until it closes.</p>
+        <p className="dash__quiet push">Nothing to do until it closes.</p>
       </main>
     );
   }
@@ -124,10 +278,50 @@ export default async function DashboardPage() {
             </li>
           ))}
         </ul>
-        <Link href={closeOutHref} className="rq-btn">
-          Close out the day
-        </Link>
-        <p className="dash__quiet">About thirty seconds.</p>
+        <div className="push">
+          <Link href={closeOutHref} className="rq-btn rq-btn--block">
+            Close out the day
+          </Link>
+          <p className="rq-label" style={{ textAlign: 'center', marginTop: 10 }}>
+            About thirty seconds
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (state.kind === 'review') {
+    const { review } = state;
+    return (
+      <main className="dash" data-state="review">
+        <p className="dash__day">{day}</p>
+        <h1 className="dash__headline">Your week is ready to read.</h1>
+
+        <ConsistencyRing daysClosed={review.consistency.daysClosed} daysTraded={review.consistency.daysTraded} />
+
+        <ReviewAdherenceCmp review={review} />
+
+        <div>
+          <p className="rq-label">What your trades say</p>
+          {review.teaser ? (
+            <p className="rq-sub">
+              <span className="rq-num">{review.teaser.findingsCount}</span>{' '}
+              {review.teaser.findingsCount === 1 ? 'finding' : 'findings'} ·{' '}
+              <b style={{ color: 'var(--rq-ink)' }}>
+                <span className="rq-num">{review.teaser.pendingDecisions}</span>{' '}
+                {review.teaser.pendingDecisions === 1 ? 'decision' : 'decisions'}
+              </b>
+            </p>
+          ) : (
+            <p className="rq-sub">Open to see what your trades say.</p>
+          )}
+        </div>
+
+        <div className="push">
+          <Link href="/review" className="rq-btn rq-btn--block">
+            Start review
+          </Link>
+        </div>
       </main>
     );
   }
@@ -136,27 +330,48 @@ export default async function DashboardPage() {
   // "still syncing" note replaces the fabricated-nothing-wrong headline
   // exactly when the underlying reads failed (§12's DASH_STATE_UNRESOLVED),
   // never an error screen.
-  const adherenceResult = await fetchAdherenceDisplay();
+  const currentWeekStart = weekStartForServerDay(now.toISOString().slice(0, 10));
+  const [adherenceResult, engagementSummary, recentWeeks] = await Promise.all([
+    fetchAdherenceDisplay(),
+    fetchEngagementSummaryForUser(user.id),
+    fetchRecentWeekCompletenessForUser(user.id, currentWeekStart, STREAK_STRIP_WEEKS),
+  ]);
+
+  const combinedAdherence =
+    adherenceResult.success && adherenceResult.display ? combinedAdherenceCount(adherenceResult.display) : null;
 
   return (
     <main className="dash" data-state="clear">
       <p className="dash__day">{day}</p>
       <h1 className="dash__headline">Nothing to close out.</h1>
       {state.syncDegraded ? (
-        <p className="dash__sub" role="status">
-          Still syncing — this may not reflect your latest activity.
-        </p>
+        <p className="dash__sub">Your week is complete through today.</p>
       ) : (
         <p className="dash__sub">Your day is clear.</p>
       )}
 
-      {adherenceResult.success && adherenceResult.display ? (
-        <AdherenceSection display={adherenceResult.display} />
+      {engagementSummary ? (
+        <StreakStrip streakWeeks={engagementSummary.streakWeeks} bars={recentWeeks} />
       ) : (
-        <p className="rq-sub" role="alert">
-          {adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.'}
+        <p className="rq-sub">Not enough data yet for a streak.</p>
+      )}
+
+      {combinedAdherence ? (
+        <AdherenceDots label="Adherence" count={combinedAdherence} />
+      ) : (
+        <p className="rq-sub" role={adherenceResult.success ? undefined : 'alert'}>
+          {adherenceResult.success
+            ? 'Not enough data yet — this fills in once you’ve confirmed a trade this week.'
+            : (adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.')}
         </p>
       )}
+
+      {/* The quiet "next finding" projection line (§7.3's own worked
+          example) stays honestly omitted -- no source in this repo
+          computes it yet (Module 05 has no such projection built). Never
+          fabricated, per AGENTS.md. */}
+
+      {state.syncDegraded ? <p className="sync push">Syncing — this may not reflect your latest activity.</p> : null}
     </main>
   );
 }

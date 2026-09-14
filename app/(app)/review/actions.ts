@@ -7,7 +7,7 @@ import { RateLimitExceededError } from '@/lib/rate-limit/errors';
 import type { RateLimitScope } from '@/lib/rate-limit/config';
 import { determineCurrentWeeklyReviewPeriod } from '@/lib/review/current-period';
 import { assembleWeeklyReadPayload, type WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
-import { upsertWeeklyReview, fetchWeeklyReviewByPeriodStart } from '@/lib/review/reviews-repository';
+import { upsertWeeklyReview, fetchWeeklyReviewByPeriodStart, markReviewOpened } from '@/lib/review/reviews-repository';
 import { computeAndWriteReviewPrompts } from '@/lib/review/review-prompts';
 import { fetchPendingPromptCount } from '@/lib/review/review-prompts-repository';
 
@@ -148,6 +148,27 @@ export type WeeklyReviewReadActionResult =
  * so there is no argument surface for one caller to smuggle in another
  * user's id even in principle.
  */
+/**
+ * Module 08 §7.1's "Materialised review unopened" condition needs a real
+ * `opened_at` write somewhere the first time a trader actually views their
+ * period's review — this is that call site (the only page that renders a
+ * period's `read_payload` for a real trader today). Best-effort, matching
+ * this repo's own established posture for a secondary write that must
+ * never fail the primary read it rides along with (`insertRuleFieldUsage`'s
+ * own header, `lib/fields/fields-repository.ts`): a lost `opened_at` write
+ * only means the dashboard might keep showing "review ready" for a period
+ * the trader has, in fact, already opened — annoying, never data-corrupting,
+ * and never worth downgrading an otherwise-successful `/review` render to
+ * `status: 'unavailable'` over.
+ */
+async function markOpenedBestEffort(userId: string, periodStart: string): Promise<void> {
+  try {
+    await markReviewOpened(userId, periodStart);
+  } catch (err) {
+    console.error('[review/actions:fetchWeeklyReviewRead] markReviewOpened failed (non-fatal):', err);
+  }
+}
+
 export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionResult> {
   const user = await requireSessionAndRateLimit('weeklyReview');
   if (isErrorState(user)) return user;
@@ -167,6 +188,7 @@ export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionRes
       // A completed review is frozen — ADR 0039 decision 2 — never
       // recomputed, its own stored payload/prompt count read as-is.
       const pendingCount = await fetchPendingPromptCount(user.id, existing.id);
+      await markOpenedBestEffort(user.id, periodStart);
       return {
         success: true,
         status: 'ready',
@@ -185,6 +207,7 @@ export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionRes
     const payload = await assembleWeeklyReadPayload(user.id, periodStart, periodEnd);
     const record = await upsertWeeklyReview(user.id, periodStart, periodEnd, payload);
     const written = await computeAndWriteReviewPrompts(user.id, record.id, now);
+    await markOpenedBestEffort(user.id, periodStart);
     return {
       success: true,
       status: 'ready',

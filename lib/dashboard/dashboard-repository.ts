@@ -1,15 +1,85 @@
 import 'server-only';
-import { listOpenTrades, listClosedUnconfirmedTrades } from '@/lib/ingestion/trades-repository';
+import { listOpenTrades, listClosedUnconfirmedTrades, fetchPeriodOutcome } from '@/lib/ingestion/trades-repository';
 import { listTradingAccounts } from '@/lib/broker/accounts-repository';
 import { computeServerDay } from '@/lib/ingestion/server-day';
+import { fetchActiveGlobalRuleVersionsForOperand } from '@/lib/rules/rules-repository';
+import { determineCurrentWeeklyReviewPeriod } from '@/lib/review/current-period';
+import { fetchWeeklyReviewByPeriodStart, deriveCoversWeeks } from '@/lib/review/reviews-repository';
+import { fetchPeriodConsistency } from '@/lib/review/period-consistency';
+import { fetchPeriodAdherence, type PeriodAdherence } from '@/lib/review/period-adherence';
+import { fetchPendingPromptCount } from '@/lib/review/review-prompts-repository';
+import { addDaysToServerDay } from '@/lib/rules/week-boundary';
 import { resolveDashboardKind, type DashboardKind } from './dashboard-state';
 
 /**
  * Module 08 (Onboarding & Home) §7 — the real (composing, not computing,
- * per §13) data behind the dashboard. See `dashboard-state.ts`'s own
- * header for why this dispatch's state space is `open`/`closeout`/`clear`
- * only, and for why `open` gets a minimal honest indicator rather than
- * either a full §7.1 card or a silent drop to `clear`.
+ * per §13) data behind the dashboard, now all four §7.1 states.
+ *
+ * ## Review ready — derived honestly, no scheduler exists
+ *
+ * Nothing in this repo materialises a review ahead of time (§4.10's
+ * weekly job is unbuilt, `docs/infra-gaps.md`). "Review ready" is
+ * therefore computed AT READ TIME from primitives Module 06 already built
+ * for `/review`'s own compute-on-view path (`current-period.ts`,
+ * `reviews-repository.ts`, `period-consistency.ts`, `period-adherence.ts`,
+ * `review-prompts-repository.ts`) — never a second copy of that logic:
+ *
+ * 1. `determineCurrentWeeklyReviewPeriod` — if `status !== 'ready'`
+ *    (`caught_up`), there is no period to review right now.
+ * 2. If a `reviews` row already exists for that `periodStart` AND its
+ *    `opened_at` is set, the trader already started this review — §7.1's
+ *    condition is explicitly "unopened," so this falls through to Clear
+ *    (this resolver has no fifth "in progress" state; Part 3 close is a
+ *    later slice).
+ * 3. `fetchPeriodOutcome`'s own `tradeCount` must be >= 1 — a period with
+ *    zero confirmed trades has nothing to review, so it is not "ready,"
+ *    it just hasn't arrived yet (honest, not an error).
+ * 4. Only once "ready" is confirmed does this read the two panel teasers
+ *    (`fetchPeriodConsistency`, `fetchPeriodAdherence`) — deliberately
+ *    NOT run for the common open/closeout cases above (§7.1's own strict
+ *    ranking means they'd be discarded anyway).
+ *
+ * **Reconciliation, logged in the decision log**: Module 04 §3.3's "two
+ * numbers, never blended" governs the DETAIL screens (`/rulebook`'s own
+ * `AdherenceSection`, `/review`'s `AdherencePanel`) — both keep hard/soft
+ * fully separate, unchanged by this slice. Home's own `rq-cmp`/`rq-dots`
+ * ambient glance (frames 1.12/1.13/1.15, `brand/docs/screens/home-
+ * onboarding.html`) show ONE combined count instead, matching the
+ * mockup's own explicit visual language for a summary screen — this file
+ * computes that single number as `hard.followed + soft.followed` of
+ * `hard.total + soft.total`, real materialised integers, never an
+ * average or a bare percentage. "Last week" is the SAME combined
+ * calculation over the immediately preceding, equally-sized period (a
+ * second `fetchPeriodAdherence` call), not `fetchPeriodAdherence`'s own
+ * `priorSoft` (soft-only — would silently compare non-equivalent units
+ * against a hard+soft "this" figure).
+ *
+ * The teaser's "N decisions" is genuinely never fabricated: only rendered
+ * when a `reviews` row already exists for the period (its own stored
+ * `read_payload.findings` and a real `fetchPendingPromptCount` query),
+ * omitted entirely otherwise (per this dispatch's own instruction).
+ *
+ * ## What §7.1's worked "Position open" card still omits, and why
+ *
+ * No live current-R — no price feed exists anywhere in this repo (the
+ * "Now" row is omitted entirely, never a placeholder). Conviction dots
+ * are ALSO still omitted this slice: §7.1's own example needs "a value
+ * captured pre-entry," but trades carry no `strategy_id` column and
+ * fields are user-defined per strategy with no fixed "conviction"
+ * identity — resolving "the" conviction field for an arbitrary open
+ * position generically, correctly, without guessing which of a trader's
+ * own rating-type fields it is, is real, separate scope (a trade ->
+ * strategy -> field-registry join this repo has no precedent for). Per
+ * AGENTS.md ("never fake it"), shipping a guess here would be worse than
+ * this documented omission — flagged for a follow-up slice, not silently
+ * dropped. `riskPct` vs a real risk-cap RULE, by contrast, IS built this
+ * slice (`fetchActiveGlobalRuleVersionsForOperand(userId, 'risk_pct')`,
+ * already-built Module 04 machinery) — when no active `lte` rule on that
+ * operand exists, `riskCapPct` is `null` and the page renders risk as a
+ * plain stat, never a capless gauge.
+ *
+ * See `dashboard-state.ts`'s own header for the ranking these four states
+ * are resolved under.
  *
  * ## "Today," for the close-out count — the account-level `server_day`
  * convention, not a new one
@@ -66,6 +136,15 @@ export interface DashboardTradeSummary {
  */
 export interface DashboardOpenPositionSummary extends DashboardTradeSummary {
   riskPct: string | null;
+  /** The trader's own active risk-cap rule value (an active GLOBAL `lte`
+   *  rule on the `risk_pct` operand — Module 04's own authoring
+   *  machinery, `fetchActiveGlobalRuleVersionsForOperand`), or `null`
+   *  when no such rule exists. Shared across every position this read
+   *  returns (one rulebook, not per-trade) — computed once per call, not
+   *  once per position. `page.tsx` renders the gauge ONLY when this is
+   *  non-null (never a capless gauge); `riskPct` alone still renders as a
+   *  plain stat either way. */
+  riskCapPct: string | null;
 }
 
 export interface CloseoutTarget {
@@ -73,8 +152,30 @@ export interface CloseoutTarget {
   serverDay: string;
 }
 
+export interface DashboardReviewAdherenceCount {
+  followed: number;
+  total: number;
+}
+
+export interface DashboardReviewReadyState {
+  consistency: { daysTraded: number; daysClosed: number };
+  /** Combined hard+soft, real materialised integers — see this file's own
+   *  header, "Reconciliation," for why Home's ambient glance blends what
+   *  `/rulebook`/`/review` keep separate. `lastPeriod` is `null` when the
+   *  immediately preceding, equally-sized period has no materialised
+   *  adherence at all (a brand-new trader's first-ever period) — omitted,
+   *  never a fabricated 0-of-0 baseline. */
+  adherence: { thisPeriod: DashboardReviewAdherenceCount; lastPeriod: DashboardReviewAdherenceCount | null };
+  /** `null` whenever no `reviews` row is materialised yet for this period
+   *  (the overwhelmingly common case — nothing pre-materialises a review
+   *  ahead of a trader opening `/review`) — per this dispatch's own
+   *  instruction, "never fabricate a count." */
+  teaser: { findingsCount: number; pendingDecisions: number } | null;
+}
+
 export type DashboardState =
   | { kind: 'open'; positions: DashboardOpenPositionSummary[] }
+  | { kind: 'review'; review: DashboardReviewReadyState }
   | {
       kind: 'closeout';
       trades: DashboardTradeSummary[];
@@ -96,14 +197,73 @@ function toSummary(t: { id: string; instrument: string; direction: string; opene
   return { id: t.id, instrument: t.instrument, direction: t.direction, openedAt: t.opened_at };
 }
 
-function toOpenPositionSummary(t: {
-  id: string;
-  instrument: string;
-  direction: string;
-  opened_at: string;
-  risk_pct: string | null;
-}): DashboardOpenPositionSummary {
-  return { ...toSummary(t), riskPct: t.risk_pct };
+function toOpenPositionSummary(
+  t: {
+    id: string;
+    instrument: string;
+    direction: string;
+    opened_at: string;
+    risk_pct: string | null;
+  },
+  riskCapPct: string | null,
+): DashboardOpenPositionSummary {
+  return { ...toSummary(t), riskPct: t.risk_pct, riskCapPct };
+}
+
+/** The most restrictive (smallest) active GLOBAL `lte` rule value on the
+ *  `risk_pct` operand, or `null` if the trader has no such rule — see
+ *  this file's own header. `rule.value` is `unknown` (jsonb) at this
+ *  layer; only a finite number is ever accepted as a real cap. */
+async function fetchRiskCapPct(userId: string): Promise<string | null> {
+  const rules = await fetchActiveGlobalRuleVersionsForOperand(userId, 'risk_pct');
+  const caps = rules
+    .filter((r) => r.op === 'lte')
+    .map((r) => Number(r.value))
+    .filter((n) => Number.isFinite(n));
+  if (caps.length === 0) return null;
+  return Math.min(...caps).toString();
+}
+
+function combineAdherence(a: PeriodAdherence): DashboardReviewAdherenceCount | null {
+  if (a.status !== 'ready') return null;
+  return { followed: a.hard.followed + a.soft.followed, total: a.hard.total + a.soft.total };
+}
+
+/** See this file's own header, "Review ready — derived honestly." `null`
+ *  whenever the period isn't genuinely ready to review. */
+async function computeReviewReadyState(userId: string, now: Date): Promise<DashboardReviewReadyState | null> {
+  const period = await determineCurrentWeeklyReviewPeriod(userId, now);
+  if (period.status !== 'ready') return null;
+
+  const [existingReview, outcome] = await Promise.all([
+    fetchWeeklyReviewByPeriodStart(userId, period.periodStart),
+    fetchPeriodOutcome(userId, period.periodStart, period.periodEnd),
+  ]);
+
+  if (existingReview?.openedAt) return null;
+  if (outcome.tradeCount === 0) return null;
+
+  const coversWeeks = deriveCoversWeeks(period.periodStart, period.periodEnd);
+  const priorPeriodEnd = addDaysToServerDay(period.periodStart, -1);
+  const priorPeriodStart = addDaysToServerDay(priorPeriodEnd, -7 * coversWeeks + 1);
+
+  const [consistency, thisAdherence, priorAdherence] = await Promise.all([
+    fetchPeriodConsistency(userId, period.periodStart, period.periodEnd),
+    fetchPeriodAdherence(userId, period.periodStart, period.periodEnd),
+    fetchPeriodAdherence(userId, priorPeriodStart, priorPeriodEnd),
+  ]);
+
+  let teaser: DashboardReviewReadyState['teaser'] = null;
+  if (existingReview) {
+    const pendingDecisions = await fetchPendingPromptCount(userId, existingReview.id);
+    teaser = { findingsCount: existingReview.readPayload.findings.length, pendingDecisions };
+  }
+
+  return {
+    consistency: { daysTraded: consistency.daysTraded, daysClosed: consistency.daysClosed },
+    adherence: { thisPeriod: combineAdherence(thisAdherence) ?? { followed: 0, total: 0 }, lastPeriod: combineAdherence(priorAdherence) },
+    teaser,
+  };
 }
 
 /** Exported for direct unit testing (mocked-repository style, matching this
@@ -127,10 +287,22 @@ export async function getDashboardStateForUser(userId: string, now: Date = new D
       return today !== undefined && t.server_day === today;
     });
 
-    const kind: DashboardKind = resolveDashboardKind(openTrades.length > 0, tradesToCloseToday.length > 0);
+    const hasOpenPosition = openTrades.length > 0;
+    const hasTradesToCloseToday = tradesToCloseToday.length > 0;
+
+    // Review-ready is rank 3 (§7.1) -- only worth computing (extra reads:
+    // period selection, trade count, consistency, adherence) when neither
+    // higher-ranked signal already wins.
+    let reviewState: DashboardReviewReadyState | null = null;
+    if (!hasOpenPosition && !hasTradesToCloseToday) {
+      reviewState = await computeReviewReadyState(userId, now);
+    }
+
+    const kind: DashboardKind = resolveDashboardKind(hasOpenPosition, hasTradesToCloseToday, reviewState !== null);
 
     if (kind === 'open') {
-      return { kind: 'open', positions: openTrades.map(toOpenPositionSummary) };
+      const riskCapPct = await fetchRiskCapPct(userId);
+      return { kind: 'open', positions: openTrades.map((t) => toOpenPositionSummary(t, riskCapPct)) };
     }
 
     if (kind === 'closeout') {
@@ -140,6 +312,10 @@ export async function getDashboardStateForUser(userId: string, now: Date = new D
           ? { accountId: tradesToCloseToday[0].account_id, serverDay: tradesToCloseToday[0].server_day }
           : null;
       return { kind: 'closeout', trades: tradesToCloseToday.map(toSummary), target };
+    }
+
+    if (kind === 'review' && reviewState) {
+      return { kind: 'review', review: reviewState };
     }
 
     return { kind: 'clear', syncDegraded: false };

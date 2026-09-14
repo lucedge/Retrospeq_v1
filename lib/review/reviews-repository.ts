@@ -181,6 +181,37 @@ export async function fetchLatestCompletedWeeklyReviewPeriodEnd(userId: string):
   });
 }
 
+/**
+ * Module 08 (Onboarding & Home) §7.1 — the first real write to
+ * `opened_at` anywhere in this repo (grep-confirmed at this slice's own
+ * dispatch time; this file's own header already documented that
+ * `upsertWeeklyReview` deliberately never touches it). `withUserConnection`,
+ * not `withServiceRoleConnection`: called from `/review`'s own rate-limited
+ * Server Action (`app/(app)/review/actions.ts`), behind a genuine
+ * authenticated session — same posture this file's own Slice-5 reads
+ * already established, not the scheduled-job write posture above.
+ *
+ * `coalesce(opened_at, now())` makes this idempotent AND non-destructive:
+ * a trader re-visiting `/review` the same week must not have their real
+ * first-open timestamp overwritten by a later view. A no-op (0 rows
+ * affected, no error) if this exact `(userId, periodStart)` row does not
+ * exist yet — every real call site invokes this only AFTER the row has
+ * already been assembled/upserted for the same request, so this should
+ * never actually race the write, but this function does not assume it:
+ * an update matching zero rows is a normal, silent success here, not an
+ * error to surface.
+ */
+export async function markReviewOpened(userId: string, periodStart: string): Promise<void> {
+  await withUserConnection(userId, async (client) => {
+    await client.query(
+      `update retrospeq.reviews
+          set opened_at = coalesce(opened_at, now())
+        where user_id = $1 and period_kind = 'weekly' and period_start = $2`,
+      [userId, periodStart],
+    );
+  });
+}
+
 export interface WeeklyReviewWithPayload extends WeeklyReviewRecord {
   readPayload: WeeklyReadPayload;
 }

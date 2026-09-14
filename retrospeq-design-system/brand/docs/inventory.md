@@ -19,11 +19,11 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 1.9 | `/onboarding/hook` | Honest fallback: "We've imported 214 trades. Nothing conclusive yet." | 08 §8 | new | ◐ |
 | 1.10 | calibration | Three seeded rules with sliders + live preview | 08 §5.3, §8 | S03 | ○ |
 | 1.11 | calibration | <20 trades: conservative defaults, "No history yet" preview | 08 §5.3 | new | ○ |
-| 1.12 | `/dashboard` | Clear: streak strip, adherence dots, quiet projection line | 08 §7, §8 | S04 | ◐ |
-| 1.13 | `/dashboard` | Position open: R, risk vs cap gauge, conviction, setup | 08 §7, §8; 02 §5.2 | S05 | ◐ minimal |
+| 1.12 | `/dashboard` | Clear: streak strip, adherence dots, quiet projection line | 08 §7, §8 | S04 | ● (projection line honestly omitted, no source) |
+| 1.13 | `/dashboard` | Position open: R, risk vs cap gauge, conviction, setup | 08 §7, §8; 02 §5.2 | S05 | ● (no live R -- no price feed; conviction still deferred, flagged) |
 | 1.14 | `/dashboard` | Trades to close: day's trades as R marks, "Close out the day" | 08 §7, §8 | S06 | ◐ |
-| 1.15 | `/dashboard` | Review ready: three panel teasers, "Start review" | 08 §7 | S07 | ○ |
-| 1.16 | `/dashboard` | Degraded: Clear + quiet sync indicator (never an error screen) | 08 §12 DASH_STATE_UNRESOLVED | new | ◐ |
+| 1.15 | `/dashboard` | Review ready: three panel teasers, "Start review" | 08 §7 | S07 | ● |
+| 1.16 | `/dashboard` | Degraded: Clear + quiet sync indicator (never an error screen) | 08 §12 DASH_STATE_UNRESOLVED | new | ● |
 | 1.17 | `/dashboard` | Grouping chip on open position (same / separate / later) | 02 §5.2 | new | ◐ (trades) |
 | 1.18 | `/dashboard` | Milestone inline (`role=status`), never a modal | 07 §6.1 | new | ○ |
 | 1.19 | `/dashboard` | Field-introduction offer (after month one, framed by a finding) | 08 §5.5, §8 | new | ○ |
