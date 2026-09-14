@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { fetchMonthlyTrend } from "./actions";
-import { formatAdherenceSequence, buildSparklinePoints, softRatios } from "@/lib/review/monthly-adherence";
+import { buildSparklinePoints, softRatios, type MonthlyAdherencePoint } from "@/lib/review/monthly-adherence";
 import { formatR } from "@/lib/review/monthly-strategy-weight";
 
 /**
@@ -51,8 +51,6 @@ export default async function MonthlyReviewTrendPage() {
 
   const { periodLabel, adherence, edgeStability, strategyWeight } = result;
   const sparklinePoints = buildSparklinePoints(softRatios(adherence));
-  const softLine = formatAdherenceSequence("Soft rules held", adherence, "soft");
-  const hardLine = formatAdherenceSequence("Hard", adherence, "hard");
 
   return (
     <section className="review flex flex-col gap-6" aria-labelledby="month-h">
@@ -79,8 +77,8 @@ export default async function MonthlyReviewTrendPage() {
         ) : (
           <p className="finding__statement">Not enough data yet.</p>
         )}
-        <p className="panel__meta">{softLine}</p>
-        <p className="panel__meta">{hardLine}</p>
+        <AdherenceSequence label="Soft rules held" points={adherence} pick="soft" />
+        <AdherenceSequence label="Hard" points={adherence} pick="hard" />
       </section>
 
       <section className="panel" aria-labelledby="p-edge-stability">
@@ -141,5 +139,32 @@ export default async function MonthlyReviewTrendPage() {
         <Link href="/review">Back to your review</Link>
       </p>
     </section>
+  );
+}
+
+/** "Soft rules held: 12 of 14 → 15 of 18 → 19 of 20." with every number in
+ *  `.rq-num` (design rule 7); "no data" for a month without rows. Hard and
+ *  soft are always separate lines. */
+function AdherenceSequence({ label, points, pick }: { label: string; points: readonly MonthlyAdherencePoint[]; pick: "hard" | "soft" }) {
+  return (
+    <p className="panel__meta">
+      {label}:{" "}
+      {points.map((p, i) => {
+        const f = pick === "hard" ? p.hard : p.soft;
+        return (
+          <span key={p.key}>
+            {i > 0 ? " → " : null}
+            {f ? (
+              <>
+                <span className="rq-num">{f.followed}</span> of <span className="rq-num">{f.total}</span>
+              </>
+            ) : (
+              "no data"
+            )}
+          </span>
+        );
+      })}
+      .
+    </p>
   );
 }

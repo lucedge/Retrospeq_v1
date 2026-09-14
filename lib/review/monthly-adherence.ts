@@ -1,5 +1,5 @@
 import 'server-only';
-import { fetchAdherenceWeekly } from '@/lib/rules/adherence-repository';
+import { fetchAdherenceWeeklyRange } from '@/lib/rules/adherence-repository';
 import { addDaysToServerDay, weekStartForServerDay } from '@/lib/rules/week-boundary';
 import type { MonthRange } from './monthly-period';
 
@@ -62,7 +62,9 @@ export async function fetchMonthlyAdherenceTrend(
   const overallEnd = months[months.length - 1]!.end;
   const weekStarts = weekStartsInRange(weekStartForServerDay(overallStart), weekStartForServerDay(overallEnd));
 
-  const weeks = await Promise.all(weekStarts.map((w) => fetchAdherenceWeekly(userId, w)));
+  const rows = await fetchAdherenceWeeklyRange(userId, weekStarts[0]!, weekStarts[weekStarts.length - 1]!);
+  const byWeek = new Map(rows.map((r) => [r.weekStart, r]));
+  const weeks = weekStarts.map((w) => byWeek.get(w) ?? null);
 
   interface Accumulator {
     hardFollowed: number;

@@ -447,6 +447,42 @@ interface AdherenceWeeklyQueryRow {
 }
 
 /**
+ * Every materialised `adherence_weekly` row for this user with
+ * `week_start` in `[fromWeekStart, toWeekStart]`, in one owner-scoped query
+ * (the monthly review previously fired one read per week — qa perf note
+ * 2026-09-15). Weeks with no row are simply absent from the result.
+ */
+export async function fetchAdherenceWeeklyRange(
+  userId: string,
+  fromWeekStart: string,
+  toWeekStart: string,
+): Promise<AdherenceWeeklyRecord[]> {
+  assertCanonicalWeekStart(fromWeekStart);
+  assertCanonicalWeekStart(toWeekStart);
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<AdherenceWeeklyQueryRow>(
+      `select user_id, week_start::text as week_start, hard_followed, hard_total, soft_followed, soft_total,
+              top_break_rule_id, top_break_count, computed_at::text as computed_at
+         from retrospeq.adherence_weekly
+        where user_id = $1 and week_start between $2 and $3
+        order by week_start`,
+      [userId, fromWeekStart, toWeekStart],
+    );
+    return res.rows.map((row) => ({
+      userId: row.user_id,
+      weekStart: row.week_start,
+      hardFollowed: row.hard_followed,
+      hardTotal: row.hard_total,
+      softFollowed: row.soft_followed,
+      softTotal: row.soft_total,
+      topBreakRuleId: row.top_break_rule_id,
+      topBreakCount: row.top_break_count,
+      computedAt: row.computed_at,
+    }));
+  });
+}
+
+/**
  * Reads the MATERIALISED row only — never recomputes from raw
  * `rule_evaluations` at read time (§3.1's own table comment, §12's
  * performance budget). `null` when no row has been materialised yet for
