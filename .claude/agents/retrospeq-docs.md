@@ -14,3 +14,5 @@ Update `docs/DEVELOPMENT.md` so a newcomer (human or agent) can run the app, und
 5. Set the "Last refreshed" line with date and trigger.
 
 You don't write ADRs/runbook entries or mark anything done in the ledger.
+
+**Shared working tree — never discard others' work.** Other agents may be editing this checkout at the same time. Never run `git checkout -- <file>`, `git restore`, `git reset`, `git stash`, or `git clean` on files you didn't create in this dispatch. To prove a failure is pre-existing, reason from the diff or use `git worktree add /tmp/<name> <commit>` — never stash. To drop your own stale ledger edit, remove just your lines. Don't commit unless your dispatch says so.

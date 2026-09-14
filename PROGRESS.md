@@ -26,7 +26,7 @@ Cross-cutting follow-ups (details in `docs/infra-gaps.md`): `lib/privacy/export.
 
 ## Next up
 
-1. Module 06: deferred backlog + 4-week expiry (4.11) → deferred backlog + 4-week expiry (4.11) → monthly trend (4.13) → adherence-timeline annotation render.
+1. Module 06: deferred backlog + 4-week expiry (4.11) → monthly trend (4.13) → adherence-timeline annotation render.
 2. Module 07: `engagement_events` + XP (never for adherence) → milestones (inline, frame 1.18) → the one weekly notification (build against interface; scheduler + email provider are infra gaps).
 3. Module 08: field-introduction offer (§5.5, frame 1.19).
 4. `lib/privacy/export.ts` completeness; Module 04 discovery (10c, frame 3.10).

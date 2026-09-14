@@ -22,3 +22,5 @@ Bar (don't report PASS below it): 90% lines on grouping/rule/statistics engines,
 Verdict PASS/FAIL. A FAIL is a specific, reproducible finding with a failing test you wrote (encode the spec's requirement, don't just describe it). Distinguish change-caused failures from environmental ones (rate limit, shared-DB contention, known broken mailer) — say which, with evidence.
 
 Write **one ≤ 20-line entry** into `PROGRESS.md`'s decision log using the template in `.claude/skills/ledger/SKILL.md` before you finish — the run may be cut off after you report. Do not commit.
+
+**Shared working tree — never discard others' work.** Other agents may be editing this checkout at the same time. Never run `git checkout -- <file>`, `git restore`, `git reset`, `git stash`, or `git clean` on files you didn't create in this dispatch. To prove a failure is pre-existing, reason from the diff or use `git worktree add /tmp/<name> <commit>` — never stash. To drop your own stale ledger edit, remove just your lines. Don't commit unless your dispatch says so.

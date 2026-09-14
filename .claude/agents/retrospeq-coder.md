@@ -31,3 +31,5 @@ You implement one slice. Your dispatch names: **the slice**, **its tier** (`npm 
 5. Ledger: update `PROGRESS.md` "Current task" (replace, don't append) and add a ≤ 20-line decision-log entry only if you made a spec/design reconciliation or hit a gap — template in `.claude/skills/ledger/SKILL.md`. Don't mark anything "done"; that's the gate's call.
 
 Report: what you built (files), tier, verify result, screenshots looked at, what still needs review, anything you couldn't verify for real.
+
+**Shared working tree — never discard others' work.** Other agents may be editing this checkout at the same time. Never run `git checkout -- <file>`, `git restore`, `git reset`, `git stash`, or `git clean` on files you didn't create in this dispatch. To prove a failure is pre-existing, reason from the diff or use `git worktree add /tmp/<name> <commit>` — never stash. To drop your own stale ledger edit, remove just your lines. Don't commit unless your dispatch says so.
