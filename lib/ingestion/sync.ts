@@ -34,6 +34,7 @@ import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/reposi
 import { runDecayChecksForUser } from '@/lib/analytics/decay-engine/repository';
 import { recomputeDetectionsForUser } from '@/lib/analytics/detection-engine/repository';
 import { recomputeWeekdayCanaryForUser } from '@/lib/analytics/spec-weekday/repository';
+import { emitPreEntryVerifiedEvent } from '@/lib/engagement/events-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.1 — the sync pipeline's
@@ -256,6 +257,12 @@ export interface RunSyncResult {
   armEventsMatched: number;
   armEventsAmbiguous: number;
   armEventsNeverFilled: number;
+  /** Module 07 §5.1/§2.3 — every arm event this run matched, timestamps
+   *  included, for `runSync`'s own post-commit `pre_entry_verified`
+   *  emission (§2.3 "the capture timestamp precedes fill time —
+   *  provable"). Empty in the overwhelmingly common case (no `matched`
+   *  events this run). See `matchPendingArmEvents`'s own header. */
+  matchedArmEvents: { tradeId: string; armedAt: string; filledAt: string }[];
 }
 
 export type RunSyncOutcome = RunSyncResult | RunSyncSkippedResult;
@@ -657,6 +664,7 @@ async function writeSyncOutcome(
       armEventsMatched: armEventCounts.matched,
       armEventsAmbiguous: armEventCounts.ambiguous,
       armEventsNeverFilled: armEventCounts.neverFilled,
+      matchedArmEvents: armEventCounts.matchedDetails,
     };
   });
 }
@@ -665,6 +673,16 @@ interface ArmEventMatchCounts {
   matched: number;
   ambiguous: number;
   neverFilled: number;
+  /** Module 07 §5.1/§2.3 — every `matched` arm event this call resolved,
+   *  carrying both timestamps needed to decide `pre_entry_verified`
+   *  eligibility (`armedAt < filledAt`, strict) at the ONE call site that
+   *  ever has both values together. See `runSync`'s own post-commit
+   *  emission loop below for why the strict inequality is re-checked
+   *  there rather than filtered here — this array intentionally includes
+   *  every match, provable or not, so `RunSyncResult.matchedArmEvents`
+   *  stays a complete, honest record of this run's own matching outcome,
+   *  not a pre-filtered one. */
+  matchedDetails: { tradeId: string; armedAt: string; filledAt: string }[];
 }
 
 interface PendingArmEventRow {
@@ -693,7 +711,7 @@ interface CandidateEntryFillRow {
  * testability posture as the rest of this file.
  */
 async function matchPendingArmEvents(client: PoolClient, account: AccountRow, now: Date): Promise<ArmEventMatchCounts> {
-  const counts: ArmEventMatchCounts = { matched: 0, ambiguous: 0, neverFilled: 0 };
+  const counts: ArmEventMatchCounts = { matched: 0, ambiguous: 0, neverFilled: 0, matchedDetails: [] };
 
   const pendingRes = await client.query<PendingArmEventRow>(
     `select id, instrument, direction, armed_at, captures
@@ -751,6 +769,23 @@ async function matchPendingArmEvents(client: PoolClient, account: AccountRow, no
         captures: armRow.captures ?? {},
       });
       counts.matched += 1;
+      // Module 07 §5.1/§2.3 -- record BOTH timestamps this run's own
+      // matched fill actually carries, for the caller's post-commit
+      // `pre_entry_verified` emission decision (`armedAt < filledAt`,
+      // strict). `result.fillId` identifies exactly one of `candidates`
+      // (matchArmEvent only returns `state: 'matched'` for a single
+      // candidate) -- looked up here rather than threading `filledAt`
+      // through `ArmMatchResult` itself, since that type is Module 02's
+      // own pure decision surface and gains no new caller here besides
+      // this file.
+      const matchedFill = candidates.find((c) => c.fillId === result.fillId);
+      if (matchedFill) {
+        counts.matchedDetails.push({
+          tradeId: result.tradeId,
+          armedAt: armRow.armed_at,
+          filledAt: matchedFill.filledAt,
+        });
+      }
     } else if (result.state === 'ambiguous') {
       await client.query(`update retrospeq.arm_events set match_state = 'ambiguous', match_candidates = $2 where id = $1`, [
         armRow.id,
@@ -1157,10 +1192,34 @@ export async function runSync(
       armEventsMatched: 0,
       armEventsAmbiguous: 0,
       armEventsNeverFilled: 0,
+      matchedArmEvents: [],
     };
   }
 
   const result = await writeSyncOutcome(account, options.trigger, windowFrom, windowTo, fills, lastWindowTo === null);
+
+  // Module 07 §5.1/§2.3 -- `pre_entry_verified`, 5 XP per trade, ONLY when
+  // this run's own arm-event match proves the capture genuinely preceded
+  // the fill (`armedAt < filledAt`, STRICT -- an arm and fill at the exact
+  // same instant is not proof judgment preceded outcome). Post-commit,
+  // best-effort, one emission per matched trade this run (never blocks a
+  // genuinely successful sync -- same posture as every other post-write
+  // side effect in this function). `emitPreEntryVerifiedEvent` is itself
+  // idempotent (`trades.id` as its own stable subject id), so a resync
+  // that re-observes the same already-matched arm event costs nothing
+  // beyond a no-op insert.
+  for (const matched of result.matchedArmEvents) {
+    if (new Date(matched.armedAt).getTime() >= new Date(matched.filledAt).getTime()) continue;
+    try {
+      await emitPreEntryVerifiedEvent({ userId: account.user_id, tradeId: matched.tradeId, now });
+    } catch (err) {
+      console.error(
+        `[engagement] pre_entry_verified event emission failed for user ${account.user_id} (trade ${matched.tradeId}, syncRunId ${result.syncRunId}) -- ` +
+          `engagement_state.total_xp/milestones may read stale until the next successful emission:`,
+        err,
+      );
+    }
+  }
 
   // Module 08 (Onboarding & Home) §5.1 step 3 -- Slice 08b: reaching this
   // line at all means `writeSyncOutcome` committed a real (`ok`/`partial`,

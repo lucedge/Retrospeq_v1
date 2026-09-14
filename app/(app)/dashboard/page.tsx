@@ -15,6 +15,8 @@ import {
   fetchRecentWeekCompletenessForUser,
   type RecentWeekBar,
 } from "@/lib/engagement/week-completeness-repository";
+import { fetchRecentMilestoneForUser } from "@/lib/engagement/events-repository";
+import { copyForMilestone } from "@/lib/engagement/milestone-copy";
 import { weekStartForServerDay } from "@/lib/rules/week-boundary";
 import {
   formatAge,
@@ -49,6 +51,13 @@ import { formatDayOfWeek } from "./format";
  * "next finding" projection line remains honestly omitted — no source
  * exists anywhere in this repo for it yet (Module 05's findings machinery
  * has no such projection built).
+ *
+ * **Frame 1.18's milestone line, as of Module 07 Slice 2**: the Clear
+ * state also shows the single most-recently-reached milestone from the
+ * last 7 days (`fetchRecentMilestoneForUser`), one quiet `role="status"`
+ * line, never a modal/push. XP itself is deliberately NOT rendered
+ * anywhere on Home (§5.4: "may be shown quietly on a profile screen;
+ * nothing depends on it") — out of this slice's own scope entirely.
  */
 
 const STREAK_STRIP_WEEKS = 12;
@@ -474,15 +483,17 @@ export default async function DashboardPage() {
   const currentWeekStart = weekStartForServerDay(
     now.toISOString().slice(0, 10),
   );
-  const [adherenceResult, engagementSummary, recentWeeks] = await Promise.all([
-    fetchAdherenceDisplay(),
-    fetchEngagementSummaryForUser(user.id),
-    fetchRecentWeekCompletenessForUser(
-      user.id,
-      currentWeekStart,
-      STREAK_STRIP_WEEKS,
-    ),
-  ]);
+  const [adherenceResult, engagementSummary, recentWeeks, recentMilestone] =
+    await Promise.all([
+      fetchAdherenceDisplay(),
+      fetchEngagementSummaryForUser(user.id),
+      fetchRecentWeekCompletenessForUser(
+        user.id,
+        currentWeekStart,
+        STREAK_STRIP_WEEKS,
+      ),
+      fetchRecentMilestoneForUser(user.id, now),
+    ]);
 
   return (
     <main className="dash" data-state="clear">
@@ -518,6 +529,19 @@ export default async function DashboardPage() {
               "Adherence is unavailable right now.")}
         </p>
       )}
+
+      {/* Frame 1.18 -- the most recent milestone reached in the last 7
+          days, ONE quiet inline line, never a modal, never a push
+          (Module 07 §5.5/§6.1/§8.4). `fetchRecentMilestoneForUser` itself
+          already gates on the 7-day window; nothing renders when there is
+          none -- an honestly empty case, not a placeholder. */}
+      {recentMilestone ? (
+        <div className="milestone" role="status">
+          <p className="milestone__text">
+            {copyForMilestone(recentMilestone.milestoneId)}
+          </p>
+        </div>
+      ) : null}
 
       {/* The quiet "next finding" projection line (§7.3's own worked
           example) stays honestly omitted -- no source in this repo

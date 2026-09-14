@@ -1928,6 +1928,44 @@ simply keeps their last-computed streak forever (correct, not wrong —
 the streak measures review, not mere existence, per §3.3), not a symptom
 to chase.
 
+## Engagement event emission failing after a confirmation, sync, or review close
+
+**Source:** Module 07 (Engagement) §10 — same `ENGAGEMENT_RECOMPUTE_FAILED`
+posture as the streak entry above, applied to the append-only
+`engagement_events` ledger and `engagement_state.total_xp`/`milestones`
+built in Slice 2. Owning code: `lib/engagement/events-repository.ts`'s
+`emitDayClosedEvent`/`emitReviewCompletedEvent`/`emitPreEntryVerifiedEvent`,
+called post-commit from `lib/ingestion/confirm.ts`'s `confirmDay`,
+`lib/ingestion/sync.ts`'s `runSync` (arm-match time), and
+`app/(app)/review/actions.ts`'s `closeWeeklyReview` — all three wrap the
+call in their own try/catch and log
+`[engagement] <kind> event emission failed for user <id> ...`, never
+propagating back to the already-succeeded underlying action.
+
+**What this means operationally:** a failed emission leaves
+`engagement_state.total_xp` and `milestones` reading stale (possibly
+missing the XP/milestone this action should have credited) until the next
+successful emission for that user recomputes the full ledger sum. This is
+never destructive — `engagement_events` is append-only and idempotent
+(`engagement_events_idempotent`), so a later successful emission for a
+DIFFERENT action still correctly re-sums every row that landed, including
+ones from before the failure.
+
+**How to check:** grep application logs for `[engagement] .* event
+emission failed for user`. A live cross-check: compare
+`engagement_state.total_xp` against `select coalesce(sum(xp),0) from
+engagement_events where user_id = $1` for the affected user — a mismatch
+means the materialised column is stale relative to the ledger (the
+INSERT succeeded but the same-transaction `total_xp` UPDATE somehow
+didn't, or vice versa) and needs a manual `recomputeEngagementState`
+call or a service-role re-sum to correct.
+
+**Never treat a missing milestone as user-facing urgent** — §5.5's own
+milestones are "a quiet acknowledgment in place, not a modal... never a
+push notification"; a milestone that materialises a day late because of a
+transient emission failure is a cosmetic lag, not a trust-sensitive
+number the way `rule_evaluations`/adherence are.
+
 ## Weekly review materialisation has no deployed scheduler yet
 
 **Source:** Module 06 (Review & Graduation) §4.10 — "Reviews are

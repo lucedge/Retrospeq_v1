@@ -8,13 +8,19 @@ import {
   recomputeWeekCompleteness,
   type WeekCompletenessRecord,
 } from './week-completeness-repository';
+import { evaluateMilestones } from './events-repository';
 
 /**
  * Module 07 (Engagement) §3.5/§5.3 — the streak walk, materialised into
- * `engagement_state`. Slice 1 of Module 07, per this slice's own dispatch:
- * streak mechanism only, no `engagement_events` ledger, no XP accrual, no
- * milestones (all future Module 07 slices — see this repo's migration
- * header for the full scope note).
+ * `engagement_state`. Built in Slice 1 as the streak mechanism only,
+ * with no `engagement_events` ledger/XP/milestones — see
+ * `20260911030000_engagement_streak_schema.sql`'s own header. Slice 2
+ * (`events-repository.ts`, `20260915010000_engagement_events_schema.sql`)
+ * adds those: `total_xp` above is now a real materialised figure (written
+ * exclusively by `events-repository.ts`'s own emission path, read back
+ * here unchanged), and `recomputeEngagementState` now also calls
+ * `evaluateMilestones` after every walk (the only place `streak_weeks`
+ * is freshly known, for the two streak-length milestones).
  *
  * ## The walk, §5.3 verbatim
  *
@@ -337,7 +343,7 @@ export async function recomputeEngagementState(
   const longestStreakWeeks = Math.max(priorLongestStreakWeeks, streakWeeks);
   const graceUsedAtParam = graceUsedThisWalk ? now.toISOString() : null;
 
-  const res = await client.query<{ grace_used_at: string | null; computed_at: string }>(
+  const res = await client.query<{ grace_used_at: string | null; computed_at: string; total_xp: number }>(
     `insert into retrospeq.engagement_state
        (user_id, streak_weeks, longest_streak_weeks, current_week_start, current_week_complete,
         grace_used_at, computed_at)
@@ -353,21 +359,34 @@ export async function recomputeEngagementState(
            -- reasoning).
            grace_used_at         = coalesce($6, retrospeq.engagement_state.grace_used_at),
            computed_at           = excluded.computed_at
-       -- total_xp deliberately untouched -- this slice never writes it
-       -- (see the migration's own header; the XP ledger is a future
-       -- Module 07 slice).
-     returning grace_used_at::text as grace_used_at, computed_at::text as computed_at`,
+       -- total_xp deliberately untouched HERE -- it is written
+       -- exclusively by events-repository.ts's own emission path (a full
+       -- re-sum of the ledger on every new event), never by this streak
+       -- recompute. Selected back below (unchanged by this statement) so
+       -- this function's own return value stays a real, current figure
+       -- rather than a stale hardcoded 0 (Module 07 Slice 2).
+     returning grace_used_at::text as grace_used_at, computed_at::text as computed_at, total_xp`,
     [userId, streakWeeks, longestStreakWeeks, currentWeekStart, currentWeekRecord.complete, graceUsedAtParam],
   );
 
   const row = res.rows[0]!;
+
+  // Module 07 Slice 2 (§5.5) — `4wk_streak`/`12wk_streak` are the only two
+  // milestones that depend on `streak_weeks`, which is only freshly known
+  // right here. The other three (`first_closeout`/`first_review`/
+  // `50_verified_captures`) are also re-checked on every call (cheap,
+  // idempotent via `milestones`' own primary key) rather than trying to
+  // predict which specific milestone a given recompute could possibly
+  // affect — see `events-repository.ts`'s own header.
+  await evaluateMilestones(client, userId, now);
+
   return {
     userId,
     streakWeeks,
     longestStreakWeeks,
     currentWeekStart,
     currentWeekComplete: currentWeekRecord.complete,
-    totalXp: 0, // this slice never reads/writes total_xp meaningfully -- see header
+    totalXp: row.total_xp,
     graceUsedAt: row.grace_used_at,
     computedAt: row.computed_at,
   };
@@ -466,9 +485,11 @@ export interface EngagementSummary {
    *  this user) -- a correct "not enough data yet" reading, not an error
    *  (AGENTS.md). Matches §6's own `EngagementState.current_week` shape. */
   currentWeek: { weekStart: string | null; daysTraded: number; daysClosed: number; complete: boolean };
-  /** Real column, always 0 until a future Module 07 slice builds the XP
-   *  ledger -- see the migration's own header. Not a placeholder: it is
-   *  the genuine, currently-always-zero value of a real DB column. */
+  /** Real, materialised sum of every `engagement_events.xp` row for this
+   *  user (Module 07 Slice 2, `events-repository.ts`) -- never itself
+   *  summed at read time here. Not shown anywhere in this repo's UI yet
+   *  (§5.4: "may be shown quietly on a profile screen; nothing depends
+   *  on it" -- this slice's own dispatch explicitly skips XP UI). */
   totalXp: number;
   computedAt: string;
 }

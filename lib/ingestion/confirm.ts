@@ -11,6 +11,7 @@ import { freezeTriggerEvaluationsForTrade } from '@/lib/rules/freeze-trigger-eva
 import { recomputeAdherenceWeeklyForConfirmations } from '@/lib/rules/adherence-repository';
 import { recomputeUnlockStateForConfirmations } from '@/lib/onboarding/unlock-state-repository';
 import { recomputeEngagementForConfirmations } from '@/lib/engagement/streak-repository';
+import { emitDayClosedEvent } from '@/lib/engagement/events-repository';
 
 /**
  * Module 02 (Trade Ingestion & Model) §4.6 — "Confirmation and freeze —
@@ -381,10 +382,14 @@ export async function confirmDay(
   // post-commit adherence recompute (see this file's header) needs
   // `account.user_id`, which lives only inside that closure.
   let confirmedUserId: string | undefined;
+  // Module 07 §5.1's `day_closed` emission needs the account's own
+  // `platform` (broker_feed vs manual_entry) -- also set only on the
+  // success path.
+  let confirmedPlatform: string | undefined;
 
   const result = await withServiceRoleConnection(async (client) => {
-    const accountRes = await client.query<{ id: string; user_id: string; day_rollover: string }>(
-      `select id, user_id, day_rollover from retrospeq.trading_accounts where id = $1`,
+    const accountRes = await client.query<{ id: string; user_id: string; day_rollover: string; platform: string }>(
+      `select id, user_id, day_rollover, platform from retrospeq.trading_accounts where id = $1`,
       [accountId],
     );
     const account = accountRes.rows[0];
@@ -541,8 +546,9 @@ export async function confirmDay(
     );
     const dayCloseoutInserted = insertRes.rows.length > 0;
 
-    // emit day.closed -> Module 07 credits the streak. DOCUMENTED NO-OP:
-    // Module 07 doesn't exist in this repo yet.
+    // emit day.closed -> Module 07 credits the streak. The `day_closed`
+    // XP event itself is emitted POST-COMMIT below (best-effort, matching
+    // the engagement recompute call), not inside this transaction.
 
     const success: ConfirmDaySuccess = {
       confirmed: true,
@@ -552,6 +558,7 @@ export async function confirmDay(
       ruleEvaluationAnomalies,
     };
     confirmedUserId = account.user_id;
+    confirmedPlatform = account.platform;
     return success;
   });
 
@@ -577,6 +584,34 @@ export async function confirmDay(
   // logged decision").
   if (result.confirmed && (result.tradesConfirmed.length > 0 || result.dayCloseoutInserted) && confirmedUserId) {
     await recomputeEngagementForConfirmations([{ userId: confirmedUserId, serverDay }]);
+  }
+  // Post-commit, best-effort `day_closed` XP emission (Module 07 §5.1) --
+  // fires exactly when a NEW day_closeouts row was actually inserted this
+  // call (never on an idempotent re-confirm of an already-closed day --
+  // `dayClosedSubjectId`'s own idempotent constraint would no-op a
+  // duplicate anyway, but gating here avoids the extra round-trip on the
+  // common re-confirm path). `confirmDay` is the ONLY caller of
+  // `emitDayClosedEvent` anywhere in this repo -- `autoConfirmStaleTrades`
+  // never inserts a `day_closeouts` row at all (this file's own header,
+  // "auto-confirm does not earn streak"/§3.3), so there is no code path
+  // by which an auto-confirm sweep could ever reach this emission.
+  if (result.confirmed && result.dayCloseoutInserted && confirmedUserId && confirmedPlatform) {
+    try {
+      await emitDayClosedEvent({
+        userId: confirmedUserId,
+        accountId,
+        serverDay,
+        platform: confirmedPlatform,
+        now,
+      });
+    } catch (err) {
+      console.error(
+        `[engagement] day_closed event emission failed for user ${confirmedUserId} (account ${accountId}, day ${serverDay}) -- ` +
+          `engagement_state.total_xp/milestones may read stale until the next successful confirmation (Module 07 sec 10 ` +
+          `"ENGAGEMENT_RECOMPUTE_FAILED"; docs/runbook.md "engagement event emission failing after a confirmation"):`,
+        err,
+      );
+    }
   }
 
   return result;

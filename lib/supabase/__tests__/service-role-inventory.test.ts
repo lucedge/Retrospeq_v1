@@ -388,6 +388,22 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // own "added in the same commit/review that introduces the call"
   // cautionary note -- pending this slice's own security-reviewer gate.
   'lib/review/review-prompts-repository.ts',
+  // Module 07 (Engagement) Slice 2, the `engagement_events`/`milestones`
+  // ledger: `emitDayClosedEvent`/`emitReviewCompletedEvent`/
+  // `emitPreEntryVerifiedEvent` (`lib/engagement/events-repository.ts`)
+  // each open their own `withServiceRoleConnection`, called post-commit
+  // from `lib/ingestion/confirm.ts`/`lib/ingestion/sync.ts`/`app/(app)/
+  // review/actions.ts` — the identical "trusted background/best-effort
+  // recompute, no authenticated session at the call site" reason
+  // `streak-repository.ts`'s own entry above already documents (same
+  // module, same shape). Every write inside is parameterized on the
+  // caller-supplied `userId` (never trusting RLS, since it's bypassed
+  // here) — `engagement_events`/`engagement_state`/`milestones` all carry
+  // owner-SELECT-only RLS with no client write path at all, matching
+  // `week_completeness`'s own established shape. Added in the same commit
+  // that introduces the call, per every entry above's own cautionary
+  // note.
+  'lib/engagement/events-repository.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

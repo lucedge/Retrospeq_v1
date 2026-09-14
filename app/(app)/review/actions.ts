@@ -19,6 +19,7 @@ import {
   markReviewCompleted,
 } from "@/lib/review/reviews-repository";
 import { computeAndWriteReviewPrompts } from "@/lib/review/review-prompts";
+import { emitReviewCompletedEvent } from "@/lib/engagement/events-repository";
 import {
   fetchPendingPromptCount,
   fetchDecidedPromptOutcomes,
@@ -382,6 +383,24 @@ export async function closeWeeklyReview(): Promise<CloseWeeklyReviewResult> {
 
   const outcomes = await fetchDecidedPromptOutcomes(user.id, result.reviewId);
   const closeSummary = renderWeekCloseSummary(outcomes);
+
+  // Module 07 §5.1 — `review_completed`, 25 XP, ONLY on a real close
+  // (never a replay of an already-completed review — `alreadyCompleted`
+  // is `markReviewCompleted`'s own idempotent-second-submit signal).
+  // Post-commit, best-effort: never turns a genuinely successful close
+  // into a reported failure, matching every other Module 07 emission
+  // call site's posture.
+  if (!result.alreadyCompleted) {
+    try {
+      await emitReviewCompletedEvent({ userId: user.id, reviewId: result.reviewId, now: new Date() });
+    } catch (err) {
+      console.error(
+        `[engagement] review_completed event emission failed for user ${user.id} (review ${result.reviewId}) -- ` +
+          `engagement_state.total_xp/milestones may read stale until the next successful emission:`,
+        err,
+      );
+    }
+  }
 
   revalidatePath("/review");
   return {
