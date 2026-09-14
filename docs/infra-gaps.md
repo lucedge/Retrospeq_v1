@@ -1,5 +1,7 @@
 # Infra gaps — standing reference (not blocking current work)
 
+- [ ] **Review decisions: domain write runs before the guarded prompt-state UPDATE** (`acceptGraduationDecision`, `acceptPromotionDecision`, `acceptRetirementDecision` in `app/(app)/review/decisions/actions.ts`). A same-user double-submit of opposite choices (e.g. accept + decline in two tabs) could leave the rule changed while the prompt row records the other outcome. No cross-user or privilege path. Fix for all kinds at once: do the prompt transition and the domain write in one transaction, or transition the prompt first (guarded `state='pending'`) and only write the domain change if that succeeded. Found by security-reviewer 2026-09-15; pre-existing shape from slice 6.
+
 - [ ] **Shared dev project: 837 of 850 `auth.users` are orphaned test accounts (`retrospeq-*`/`e2e-*`/`qa-*@example.com`, older than 6h) as of 2026-09-14; stale unconfirmed trades down to 4.** Live tests that call the unscoped `autoConfirmStaleTrades()` (4 files) still time out / race under parallel workers. Purge needs owner go-ahead (destructive on the shared project) — `npm run test:user -- cleanup --hours 100000` would do it; after that, retest `check:live`. The 5 known-flaky tests: see PROGRESS.md 2026-09-14 gate entry.
 
 > Moved verbatim out of PROGRESS.md on 2026-09-14. `NEEDS_YOUR_INPUT.md` is for things blocking work *now*; this is the long-form register of known future needs and deferred follow-ups. Add new entries at the top; tick and strike resolved ones.
