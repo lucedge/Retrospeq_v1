@@ -417,14 +417,17 @@ error mid-flow) in exactly two cases worth distinguishing by severity:
 - **A failed confirmation email is never, by itself, a reason to
   investigate or block anything** — `executeErasure` sends it as a
   best-effort step and always proceeds to the final purge regardless
-  (see `sendErasureConfirmationEmail`'s own doc comment). This project
-  has no transactional email provider configured yet
-  (`lib/privacy/email-provider.ts`, `NEEDS_YOUR_INPUT.md`), so **every**
-  real erasure execution today logs a "could not send the confirmation
-  email" warning — this is the expected, 100%-of-attempts outcome until a
-  provider is wired in, the same standing-gap shape as this file's
-  "Every credentialed connect attempt fails because KMS isn't
-  configured" entry above. Not alert-worthy by itself.
+  (see `sendErasureConfirmationEmail`'s own doc comment). As of
+  2026-09-14, `lib/privacy/email-provider.ts` is wired to a real
+  provider (Resend) — a send failure now means either a genuine Resend
+  outage/rejection (`EmailSendFailedError`) or a request timeout, logged
+  as `[erasure] request <id>: confirmation email send failed:`. Neither
+  case is alert-worthy on its own (no user-facing impact: the deletion
+  itself always completes regardless) — only worth a glance if it starts
+  happening on every attempt, which would suggest the Resend account/key
+  itself broke (same shape as `NEEDS_YOUR_INPUT.md`'s "was the mailer
+  provider ever reconfigured" checks elsewhere in this file), not a
+  per-request issue.
 
 ---
 

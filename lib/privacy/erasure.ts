@@ -145,8 +145,8 @@ async function registerBackupReplayDeletion(requestId: string): Promise<void> {
 /** Best-effort — a failed confirmation email is never a reason to leave
  *  a trader's data un-erased. Logged loudly (never silently swallowed),
  *  per AGENTS.md's "fails loudly and visibly if attempted and
- *  unavailable." Always fails today — no transactional email provider is
- *  configured (see email-provider.ts). */
+ *  unavailable." Sent via Resend (email-provider.ts); throws
+ *  `EmailProviderNotConfiguredError` when its env vars are missing. */
 async function sendErasureConfirmationEmail(email: string, requestId: string): Promise<void> {
   try {
     const provider = getTransactionalEmailProvider();

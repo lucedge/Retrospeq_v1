@@ -99,10 +99,13 @@ it, don't assume this paragraph is current by the time you read it.
 - **Privacy/GDPR**: `lib/privacy/` — export, erasure, restriction.
   Erasure deletes explicitly, table by table, in FK-safe order rather
   than relying on `on delete cascade`
-  (`docs/adr/0010-erasure-explicit-delete-order.md`). No transactional
-  email provider is configured — `lib/privacy/email-provider.ts` throws
-  `EmailProviderNotConfiguredError` rather than faking a send; erasure's
-  confirmation email is best-effort and never gates the actual deletion.
+  (`docs/adr/0010-erasure-explicit-delete-order.md`). Transactional email
+  is wired to Resend (`lib/privacy/email-provider.ts`, plain `fetch`, no
+  SDK) — `getTransactionalEmailProvider()` still throws
+  `EmailProviderNotConfiguredError` (naming which var) if
+  `RESEND_API_KEY`/`EMAIL_FROM` is missing/invalid, rather than faking a
+  send; erasure's confirmation email is best-effort and never gates the
+  actual deletion.
 
 ### Module 02 — Trade Ingestion & Model (`lib/ingestion/`, `app/(app)/trades/`)
 
@@ -656,9 +659,6 @@ rather than faking success (per `AGENTS.md` → "never fake it"):
 - **`coverage_gaps` resolution.** Rows are written but nothing in this
   repo ever sets `resolved_at` — a gap is currently permanent once
   recorded. Tracked in `docs/runbook.md`, not silently dropped.
-- **A transactional email provider.** `lib/privacy/email-provider.ts`
-  throws unconditionally; erasure's confirmation email is best-effort
-  only and never gates deletion.
 - **`lib/privacy/export.ts`'s export bundle is stale — flagged as a
   likely data-rights gap, not just tech debt.** It still only exports
   `profile`/`tradingAccounts`/`subscription`/`mfa`: zero trades and
