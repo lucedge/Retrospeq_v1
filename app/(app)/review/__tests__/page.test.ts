@@ -43,10 +43,16 @@ const { getUserMock, createClientMock } = vi.hoisted(() => ({
 }));
 
 const fetchWeeklyReviewReadMock = vi.hoisted(() => vi.fn());
+const closeWeeklyReviewMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: createClientMock }));
 vi.mock('../actions', () => ({
   fetchWeeklyReviewRead: fetchWeeklyReviewReadMock,
+  // Referenced by `WeeklyReviewBody.tsx` (nested in the rendered tree
+  // below) as its `useActionState` target — never actually invoked by
+  // `renderToStaticMarkup` itself (no submit happens in these tests), just
+  // needs to exist as a real export for that Client Component's import.
+  closeWeeklyReview: closeWeeklyReviewMock,
 }));
 
 const FRESH_PAYLOAD = {
@@ -92,6 +98,8 @@ describe('/review compute-on-view trigger — adversarial', () => {
       coversWeeks: 1,
       pendingCount: 1,
       readPayload: FRESH_PAYLOAD,
+      completedAt: null,
+      closeSummary: null,
     });
 
     const html = await renderPage();
@@ -111,6 +119,8 @@ describe('/review compute-on-view trigger — adversarial', () => {
       coversWeeks: 1,
       pendingCount: 0,
       readPayload: FRESH_PAYLOAD,
+      completedAt: null,
+      closeSummary: null,
     });
 
     const html = await renderPage();
@@ -119,7 +129,7 @@ describe('/review compute-on-view trigger — adversarial', () => {
     expect(html).not.toContain('>4<'); // the frozen payload's own trade count text never appears
   });
 
-  it('ADVERSARIAL: a completed review — the action reports the exact stored (frozen) payload, and the page renders it untouched, never a fresh/implausible value', async () => {
+  it('ADVERSARIAL: a frozen-but-not-yet-closed review — the action reports the exact stored (frozen) payload, and the page renders it untouched, never a fresh/implausible value', async () => {
     fetchWeeklyReviewReadMock.mockResolvedValue({
       success: true,
       status: 'ready',
@@ -128,6 +138,8 @@ describe('/review compute-on-view trigger — adversarial', () => {
       coversWeeks: 1,
       pendingCount: 0,
       readPayload: FROZEN_PAYLOAD,
+      completedAt: null,
+      closeSummary: null,
     });
 
     const html = await renderPage();
@@ -135,15 +147,51 @@ describe('/review compute-on-view trigger — adversarial', () => {
     // Renders the FROZEN numbers, not any fresh/implausible value.
     expect(html).toContain('>4</span> trades');
     expect(html).not.toContain('999');
-    expect(html).toContain('Week closed'); // 0 pending prompts
+    expect(html).toContain('Week closed'); // 0 pending prompts, real form submit
   });
 
-  it('caught_up: renders the steady-state copy', async () => {
-    fetchWeeklyReviewReadMock.mockResolvedValue({ success: true, status: 'caught_up' });
+  it('Part 3 "close": a genuinely COMPLETED review renders frame 4.12, not the read/decisions view', async () => {
+    fetchWeeklyReviewReadMock.mockResolvedValue({
+      success: true,
+      status: 'ready',
+      periodStart: '2026-08-31',
+      periodEnd: '2026-09-13',
+      coversWeeks: 1,
+      pendingCount: 0,
+      readPayload: FROZEN_PAYLOAD,
+      completedAt: '2026-09-14T10:00:00.000Z',
+      closeSummary: 'One rule added.',
+    });
+
+    const html = await renderPage();
+
+    expect(html).toContain('Week closed.');
+    expect(html).toContain('One rule added.');
+    expect(html).toContain('Next review Sunday. Nothing to do until then.');
+    expect(html).toContain('Back to home');
+    expect(html).toContain('href="/dashboard"');
+    // Never the read view's own panels or decisions control on this screen.
+    expect(html).not.toContain('Consistency');
+    expect(html).not.toContain('4</span> trades');
+  });
+
+  it('caught_up with no closed review yet: renders the steady-state copy', async () => {
+    fetchWeeklyReviewReadMock.mockResolvedValue({ success: true, status: 'caught_up', lastCloseSummary: null });
 
     const html = await renderPage();
 
     expect(html).toContain("You&#x27;re caught up.");
+  });
+
+  it('caught_up after closing a week: renders frame 4.12 with the recorded summary, not the generic line', async () => {
+    fetchWeeklyReviewReadMock.mockResolvedValue({ success: true, status: 'caught_up', lastCloseSummary: 'One rule added.' });
+
+    const html = await renderPage();
+
+    expect(html).toContain('Week closed.');
+    expect(html).toContain('One rule added.');
+    expect(html).toContain('Next review Sunday. Nothing to do until then.');
+    expect(html).not.toContain("You&#x27;re caught up.");
   });
 
   it('the action reports a compute failure (status "unavailable") — REVIEW_NOT_READY copy only, never a half-built panel', async () => {

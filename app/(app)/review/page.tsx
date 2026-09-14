@@ -1,10 +1,8 @@
-import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
-import type { WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
-import type { FindingPayload } from '@/lib/analytics/findings-payload';
-import { formatRMultiple } from '../trades/format';
-import { formatReviewPeriodLine, fractionTrend } from './format';
-import { fetchWeeklyReviewRead } from './actions';
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import { formatReviewPeriodLine } from "./format";
+import { fetchWeeklyReviewRead } from "./actions";
+import { WeeklyReviewBody } from "./WeeklyReviewBody";
 
 /**
  * Module 06 (Review & Graduation) §4.2/§5.1 — the weekly review's PART 1
@@ -93,28 +91,47 @@ export default async function WeeklyReviewPage() {
     // `adherenceResult.error?.user_message` fallback.
     return (
       <p className="rq-sub" role="alert">
-        {result.error?.user_message ?? 'Your review is unavailable right now.'}
+        {result.error?.user_message ?? "Your review is unavailable right now."}
       </p>
     );
   }
 
-  if (result.status === 'caught_up') {
-    // §4.2 Part 3's own steady state ("Next review Sunday. Nothing to do
-    // until then.") — reached here whenever the trader has already
-    // completed a review covering every week up to the most recently
-    // ended one. Unreachable today (nothing sets `completed_at` yet, ADR
-    // 0039 decision 3) but written correctly for when Part 3 ships.
+  if (result.status === "caught_up") {
+    // §4.2 Part 3 steady state (frame 4.12): the latest closed week stays
+    // on screen until the next period is ready to read.
+    if (result.lastCloseSummary !== null) {
+      return (
+        <section
+          className="review review--close flex flex-col gap-3"
+          aria-labelledby="review-close-h"
+        >
+          <p className="review__step rq-sub">Done</p>
+          <h1 id="review-close-h" className="rq-h1">
+            Week closed.
+          </h1>
+          <p className="review__summary rq-body">{result.lastCloseSummary}</p>
+          <p className="review__next rq-sub">
+            Next review Sunday. Nothing to do until then.
+          </p>
+          <Link href="/dashboard" className="rq-btn rq-btn--ghost">
+            Back to home
+          </Link>
+        </section>
+      );
+    }
     return (
       <section className="flex flex-col gap-3" aria-labelledby="review-h">
         <h1 id="review-h" className="rq-h1">
           You&apos;re caught up.
         </h1>
-        <p className="rq-sub">Nothing to review yet — check back after this week closes.</p>
+        <p className="rq-sub">
+          Nothing to review yet — check back after this week closes.
+        </p>
       </section>
     );
   }
 
-  if (result.status === 'unavailable') {
+  if (result.status === "unavailable") {
     // §9 REVIEW_NOT_READY — "Engines haven't finished... Your review is
     // being prepared. Never a partial review." The very next page view
     // retries the whole compute from scratch (ADR 0039 decision 2's own
@@ -133,197 +150,72 @@ export default async function WeeklyReviewPage() {
   // TypeScript's own discriminated-union narrowing (on `result.status`)
   // guarantees `periodStart`/`periodEnd`/`coversWeeks`/`pendingCount`/
   // `readPayload` are all genuinely present here, not just optionally so.
-  const { periodStart, periodEnd, coversWeeks, pendingCount, readPayload } = result;
-  const periodLine = formatReviewPeriodLine(periodStart, periodEnd, coversWeeks);
+  const {
+    periodStart,
+    periodEnd,
+    coversWeeks,
+    pendingCount,
+    readPayload,
+    completedAt,
+    closeSummary,
+  } = result;
+  const periodLine = formatReviewPeriodLine(
+    periodStart,
+    periodEnd,
+    coversWeeks,
+  );
   const { outcome, consistency, adherence, findings } = readPayload;
 
-  return (
-    <section className="flex flex-col gap-6" aria-labelledby="review-h">
-      <div className="flex flex-col gap-1">
-        <p className="rq-sub">{periodLine}</p>
-        <h1 id="review-h" className="rq-h1">
-          <span className="rq-num">{outcome.tradeCount}</span> {outcome.tradeCount === 1 ? 'trade' : 'trades'} ·{' '}
-          <span className="rq-num">{outcome.daysTradedCount}</span> {outcome.daysTradedCount === 1 ? 'day' : 'days'} ·{' '}
-          <span className="rq-num">{formatRMultiple(outcome.totalR)}</span>
-        </h1>
-      </div>
-
-      <ConsistencyPanel daysTraded={consistency.daysTraded} daysClosed={consistency.daysClosed} streakWeeks={consistency.streakWeeks} />
-
-      <AdherencePanel adherence={adherence} />
-
-      <FindingsPanel findings={findings} />
-
-      <div className="flex flex-col gap-2">
-        {pendingCount > 0 ? (
-          <>
-            {/* Module 06 Slice 6: wired for real — Slice 5 shipped this
-                disabled ("Decisions and closing out this review aren't
-                available yet"). Links to `/review/decisions`, which
-                currently only renders GRADUATION-kind decisions (see that
-                route's own `actions.ts` header) — a pending count that
-                happens to be entirely relaxation/promotion/retirement/
-                detection prompts (no UI yet for any of those) lands on
-                that screen's own honest "Nothing to decide right now"
-                state rather than a broken/empty one. */}
-            <Link href="/review/decisions" className="rq-btn">
-              {pendingCount} {pendingCount === 1 ? 'decision' : 'decisions'}
-            </Link>
-            <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
-          </>
-        ) : (
-          <>
-            <button type="button" className="rq-btn" disabled aria-disabled="true" title="Closing out this review isn't available yet.">
-              Week closed
-            </button>
-            <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ConsistencyPanel({ daysTraded, daysClosed, streakWeeks }: { daysTraded: number; daysClosed: number; streakWeeks: number }) {
-  return (
-    <section className="rq-card flex flex-col gap-2" aria-labelledby="p-consistency">
-      <h2 id="p-consistency" className="rq-h2">
-        Consistency
-      </h2>
-      <p className="rq-body">
-        {daysTraded > 0 ? (
-          <>
-            <span className="rq-num">{daysClosed}</span> of <span className="rq-num">{daysTraded}</span> days closed out.
-          </>
-        ) : daysClosed > 0 ? (
-          <>
-            <span className="rq-num">{daysClosed}</span> {daysClosed === 1 ? 'day' : 'days'} closed out — no trading this period.
-          </>
-        ) : (
-          'No trading days this week.'
-        )}
-      </p>
-      <p className="rq-sub">
-        {streakWeeks > 0 ? (
-          <>
-            <span className="rq-num">{streakWeeks}</span>-week streak intact.
-          </>
-        ) : (
-          'Streak not started yet.'
-        )}
-      </p>
-    </section>
-  );
-}
-
-function AdherencePanel({ adherence }: { adherence: WeeklyReadPayload['adherence'] }) {
-  if (adherence.status === 'insufficient_history') {
+  if (completedAt !== null) {
+    // Part 3 "close" (§5.1's own reference markup, frame 4.12). Genuinely
+    // unreachable via this page's own read path today — see
+    // `./actions.ts`'s `closeWeeklyReview` header for the full reasoning
+    // (`determineCurrentWeeklyReviewPeriod`'s cursor always advances PAST a
+    // period the instant it closes, so this exact `periodStart` can never
+    // again be selected as "current") — but written correctly, same
+    // "unreachable today, correct for when it does apply" posture this
+    // file's own `caught_up` branch below already used before Part 3
+    // existed. `closeSummary` is never null here — `fetchWeeklyReviewRead`
+    // always sets it alongside `completedAt` in the same branch. The REAL,
+    // reachable close confirmation is `WeeklyReviewBody`'s own inline
+    // `useActionState` result card, rendered immediately after a real
+    // submit — not this branch.
     return (
-      <section className="rq-card flex flex-col gap-2" aria-labelledby="p-adherence">
-        <h2 id="p-adherence" className="rq-h2">
-          Adherence
-        </h2>
-        <p className="rq-sub">Not enough data yet.</p>
+      <section
+        className="review review--close flex flex-col gap-3"
+        aria-labelledby="review-h"
+      >
+        <p className="review__step rq-sub">Done</p>
+        <h1 id="review-h" className="rq-h1">
+          Week closed.
+        </h1>
+        <p className="review__summary rq-body">
+          {closeSummary ?? "Nothing changed."}
+        </p>
+        <p className="review__next rq-sub">
+          Next review Sunday. Nothing to do until then.
+        </p>
+        <Link href="/dashboard" className="rq-btn rq-btn--ghost">
+          Back to home
+        </Link>
       </section>
     );
   }
 
-  const { hard, soft, priorSoft, attribution } = adherence;
-  const trend = priorSoft ? fractionTrend(soft, priorSoft) : null;
-
+  // The normal, reachable "not yet closed" render — Parts 1 + 3, handed to
+  // a Client Component ONLY because Part 3's close confirmation needs
+  // `useActionState` (`WeeklyReviewBody.tsx`'s own header has the full
+  // reasoning). Every real data fetch already happened above, in this
+  // Server Component — `WeeklyReviewBody` receives already-resolved props,
+  // it performs no fetch of its own.
   return (
-    <section className="rq-card flex flex-col gap-2" aria-labelledby="p-adherence">
-      <h2 id="p-adherence" className="rq-h2">
-        Adherence
-      </h2>
-      <p className="rq-body">
-        Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
-      </p>
-      <p className="rq-body">
-        Soft: <span className="rq-num">{soft.followed}</span> of <span className="rq-num">{soft.total}</span>
-        {priorSoft && trend !== null ? (
-          <>
-            , {trend} from <span className="rq-num">{priorSoft.followed}</span> of <span className="rq-num">{priorSoft.total}</span>
-          </>
-        ) : null}
-        .
-      </p>
-      {attribution && (
-        <p className="rq-sub">
-          {attribution.rendered ?? 'One rule'} accounts for <span className="rq-num">{attribution.count}</span> of the{' '}
-          <span className="rq-num">{attribution.ofBreaks}</span> {attribution.severity} breaks.
-        </p>
-      )}
-    </section>
-  );
-}
-
-function FindingsPanel({ findings }: { findings: WeeklyReadPayload['findings'] }) {
-  return (
-    <section className="rq-card flex flex-col gap-3" aria-labelledby="p-findings">
-      <h2 id="p-findings" className="rq-h2">
-        What your trades say
-      </h2>
-      {findings.length === 0 ? (
-        // §5.1's own zero-prompt-week reference markup, reused verbatim
-        // (ADR 0039 decision 5) — a trader with no active strategies yet
-        // (every real trader today) legitimately has nothing here.
-        <div className="finding" data-confidence="insufficient">
-          <p className="finding__statement">Not enough data yet.</p>
-        </div>
-      ) : (
-        <ul className="findings flex flex-col gap-3">
-          {findings.map((f) => (
-            <li key={`${f.strategyId}:${f.fieldId}`}>
-              <FindingCard fieldName={f.fieldName} payload={f.payload} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/**
- * Duplicated, deliberately, from `strategies/[id]/page.tsx`'s own
- * `FindingCard`/`confidenceAttr` — same `.finding`/`.finding__statement`/
- * `.finding__meta` markup and CSS, not reinvented. See ADR 0039 decision 6
- * for why this is a small local copy rather than a shared component (this
- * repo has no shared `components/` directory yet, and extracting one
- * would mean touching an already-reviewed Module 03 file for a slice
- * scoped to Module 06).
- */
-function confidenceAttr(confidence: FindingPayload['confidence']): string {
-  return confidence === 'null_result' ? 'null-result' : confidence;
-}
-
-function FindingCard({ fieldName, payload }: { fieldName: string; payload: FindingPayload }) {
-  return (
-    <div className="finding" data-confidence={confidenceAttr(payload.confidence)} data-analytic={payload.analytic_id}>
-      <p className="rq-body font-semibold">{fieldName}</p>
-      <p className="finding__statement">{payload.statement}</p>
-      <FindingMeta payload={payload} />
-    </div>
-  );
-}
-
-function FindingMeta({ payload }: { payload: FindingPayload }) {
-  if (payload.confidence === 'insufficient') {
-    const remaining = payload.remaining ?? 0;
-    if (remaining <= 0) {
-      return <p className="finding__meta">More trades needed.</p>;
-    }
-    return (
-      <p className="finding__meta">
-        <span className="rq-num">{remaining}</span> more {remaining === 1 ? 'trade' : 'trades'} on this setup.
-      </p>
-    );
-  }
-
-  return (
-    <p className="finding__meta">
-      <span className="rq-num">{payload.n}</span> {payload.n === 1 ? 'trade' : 'trades'}
-      {payload.confidence !== 'null_result' ? ` · ${payload.confidence}` : ''}
-    </p>
+    <WeeklyReviewBody
+      periodLine={periodLine}
+      outcome={outcome}
+      consistency={consistency}
+      adherence={adherence}
+      findings={findings}
+      pendingCount={pendingCount}
+    />
   );
 }

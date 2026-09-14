@@ -182,6 +182,27 @@ export async function fetchLatestCompletedWeeklyReviewPeriodEnd(userId: string):
 }
 
 /**
+ * The most recently COMPLETED weekly review's id — for `/review`'s
+ * `caught_up` render, which shows that week's frame-4.12 close summary
+ * ("Week closed.", what changed) until the next period is ready, instead
+ * of a generic "caught up" line. Same owner-scoped read as
+ * `fetchLatestCompletedWeeklyReviewPeriodEnd` above.
+ */
+export async function fetchLatestCompletedWeeklyReviewId(userId: string): Promise<string | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `select id
+         from retrospeq.reviews
+        where user_id = $1 and period_kind = 'weekly' and completed_at is not null
+        order by period_end desc
+        limit 1`,
+      [userId],
+    );
+    return res.rows[0]?.id ?? null;
+  });
+}
+
+/**
  * Module 08 (Onboarding & Home) §7.1 — the first real write to
  * `opened_at` anywhere in this repo (grep-confirmed at this slice's own
  * dispatch time; this file's own header already documented that
@@ -209,6 +230,76 @@ export async function markReviewOpened(userId: string, periodStart: string): Pro
         where user_id = $1 and period_kind = 'weekly' and period_start = $2`,
       [userId, periodStart],
     );
+  });
+}
+
+/**
+ * Module 06 (Review & Graduation) Part 3 "close" (§4.2/§5.1) — the first
+ * write to `completed_at` anywhere in this repo (grep-confirmed at this
+ * slice's own dispatch time; this file's own header already documented
+ * that `upsertWeeklyReview` deliberately never touches it, same reasoning
+ * as `opened_at`). `withUserConnection`, same posture `markReviewOpened`
+ * above already established: a real authenticated session exists at every
+ * real call site (`/review`'s own rate-limited `closeWeeklyReview` Server
+ * Action), so RLS enforcement (`reviews_owner`'s "for all") is a real,
+ * available defense-in-depth layer, and every query below is additionally
+ * scoped explicitly to `user_id = $1`.
+ *
+ * A review only closes when every `review_prompts` row for it has moved
+ * OUT of `pending` — §4.2 Part 2's "decisions, one at a time" must be
+ * genuinely done first. A `deferred` prompt counts as decided for this
+ * purpose (§4.5: defer is itself a real outcome, "returns next review,
+ * still under the cap. No penalty" — it is not left dangling, it is
+ * re-surfaced by a future materialisation, per `markPromptDeferred`'s own
+ * header), so this check is exactly `state = 'pending'`, nothing wider.
+ *
+ * `completed_at = coalesce(completed_at, now())` mirrors `markReviewOpened`'s
+ * own idempotent-and-non-destructive shape: a second close attempt on an
+ * already-closed review (a double submit, or a trader revisiting a stale
+ * tab) is a normal, silent success, never an error and never a timestamp
+ * overwrite. One transaction (`withUserConnection` already wraps its
+ * callback in begin/commit — `lib/supabase/direct.ts`) covers the read,
+ * the pending-prompt check, and the write together, so no other request on
+ * this same connection can observe a review that passed the pending-prompt
+ * check but has not yet actually closed.
+ */
+export type MarkReviewCompletedResult =
+  | { status: 'completed'; reviewId: string; alreadyCompleted: boolean }
+  | { status: 'pending_prompts' }
+  | { status: 'not_found' };
+
+export async function markReviewCompleted(userId: string, periodStart: string): Promise<MarkReviewCompletedResult> {
+  return withUserConnection(userId, async (client) => {
+    const reviewRes = await client.query<{ id: string; completed_at: string | null }>(
+      `select id, completed_at::text as completed_at
+         from retrospeq.reviews
+        where user_id = $1 and period_kind = 'weekly' and period_start = $2`,
+      [userId, periodStart],
+    );
+    const review = reviewRes.rows[0];
+    if (!review) return { status: 'not_found' };
+    if (review.completed_at !== null) {
+      return { status: 'completed', reviewId: review.id, alreadyCompleted: true };
+    }
+
+    const pendingRes = await client.query<{ has_pending: boolean }>(
+      `select exists(
+         select 1 from retrospeq.review_prompts
+          where user_id = $1 and review_id = $2 and state = 'pending'
+       ) as has_pending`,
+      [userId, review.id],
+    );
+    if (pendingRes.rows[0]?.has_pending) {
+      return { status: 'pending_prompts' };
+    }
+
+    await client.query(
+      `update retrospeq.reviews
+          set completed_at = coalesce(completed_at, now())
+        where user_id = $1 and id = $2`,
+      [userId, review.id],
+    );
+    return { status: 'completed', reviewId: review.id, alreadyCompleted: false };
   });
 }
 

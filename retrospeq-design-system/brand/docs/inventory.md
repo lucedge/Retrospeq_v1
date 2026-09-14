@@ -77,7 +77,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | # | Route | Screen · state | Spec | Mockup | Built |
 |---|---|---|---|---|---|
 | 4.1 | `/review` | Part 1 the read: outcome line, Consistency, Adherence, ≤3 findings, "N decisions" | 06 §5.1 | S10 | ◐ |
-| 4.2 | `/review` | Zero-prompt week (normal case): "Week closed" | 06 §5.1 | new | ◐ |
+| 4.2 | `/review` | Zero-prompt week (normal case): "Week closed" | 06 §5.1 | new | ● close submit works |
 | 4.3 | `/review` | Week two: 3 of 3, 9 of 9, "about 22 more trades" | 06 §4.8 | new | ◐ |
 | 4.4 | `/review` | covers_weeks = 2 after a missed week | 06 §4.8 | new | ◐ |
 | 4.5 | `/review` | No-trade week: "Streak intact — nothing was owed" | 07 §6.1 | new | ◐ |
@@ -87,7 +87,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ○ |
 | 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ○ |
 | 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ○ |
-| 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ○ |
+| 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |
 | 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ○ |
 | 4.14 | notification | The one weekly notification (push + email) | 06 §4.10; 07 §5.6 | email template | ○ |
 

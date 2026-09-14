@@ -1,15 +1,29 @@
-'use server';
+"use server";
 
-import { createClient } from '@/lib/supabase/server';
-import { enforceRateLimit } from '@/lib/rate-limit/limiter';
-import { getClientIp } from '@/lib/rate-limit/http';
-import { RateLimitExceededError } from '@/lib/rate-limit/errors';
-import type { RateLimitScope } from '@/lib/rate-limit/config';
-import { determineCurrentWeeklyReviewPeriod } from '@/lib/review/current-period';
-import { assembleWeeklyReadPayload, type WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
-import { upsertWeeklyReview, fetchWeeklyReviewByPeriodStart, markReviewOpened } from '@/lib/review/reviews-repository';
-import { computeAndWriteReviewPrompts } from '@/lib/review/review-prompts';
-import { fetchPendingPromptCount } from '@/lib/review/review-prompts-repository';
+import { createClient } from "@/lib/supabase/server";
+import { enforceRateLimit } from "@/lib/rate-limit/limiter";
+import { getClientIp } from "@/lib/rate-limit/http";
+import { RateLimitExceededError } from "@/lib/rate-limit/errors";
+import type { RateLimitScope } from "@/lib/rate-limit/config";
+import { revalidatePath } from "next/cache";
+import { determineCurrentWeeklyReviewPeriod } from "@/lib/review/current-period";
+import {
+  assembleWeeklyReadPayload,
+  type WeeklyReadPayload,
+} from "@/lib/review/weekly-read-payload";
+import {
+  fetchLatestCompletedWeeklyReviewId,
+  upsertWeeklyReview,
+  fetchWeeklyReviewByPeriodStart,
+  markReviewOpened,
+  markReviewCompleted,
+} from "@/lib/review/reviews-repository";
+import { computeAndWriteReviewPrompts } from "@/lib/review/review-prompts";
+import {
+  fetchPendingPromptCount,
+  fetchDecidedPromptOutcomes,
+} from "@/lib/review/review-prompts-repository";
+import { renderWeekCloseSummary } from "./format";
 
 /**
  * Module 06 (Review & Graduation) §4.2/§5.1 — the `/review` page's own
@@ -57,7 +71,9 @@ interface ActionErrorState {
   error: { code: string; user_message: string; retryable: boolean };
 }
 
-async function requireSessionUser(): Promise<{ id: string } | ActionErrorState> {
+async function requireSessionUser(): Promise<
+  { id: string } | ActionErrorState
+> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -65,23 +81,36 @@ async function requireSessionUser(): Promise<{ id: string } | ActionErrorState> 
   } = await supabase.auth.getUser();
   if (userError || !user) {
     return {
-      error: { code: 'REVIEW_SESSION_MISSING', user_message: 'Your session expired. Please sign in again.', retryable: false },
+      error: {
+        code: "REVIEW_SESSION_MISSING",
+        user_message: "Your session expired. Please sign in again.",
+        retryable: false,
+      },
     };
   }
   return user;
 }
 
-function isErrorState(v: { id: string } | ActionErrorState): v is ActionErrorState {
-  return 'error' in v;
+function isErrorState(
+  v: { id: string } | ActionErrorState,
+): v is ActionErrorState {
+  return "error" in v;
 }
 
 function rateLimitedState(): ActionErrorState {
   return {
-    error: { code: 'REVIEW_RATE_LIMITED', user_message: 'Too many attempts. Please wait a few minutes and try again.', retryable: true },
+    error: {
+      code: "REVIEW_RATE_LIMITED",
+      user_message:
+        "Too many attempts. Please wait a few minutes and try again.",
+      retryable: true,
+    },
   };
 }
 
-async function requireSessionAndRateLimit(scope: RateLimitScope): Promise<{ id: string } | ActionErrorState> {
+async function requireSessionAndRateLimit(
+  scope: RateLimitScope,
+): Promise<{ id: string } | ActionErrorState> {
   const user = await requireSessionUser();
   if (isErrorState(user)) return user;
 
@@ -109,17 +138,31 @@ async function requireSessionAndRateLimit(scope: RateLimitScope): Promise<{ id: 
  * with which `status`.
  */
 export type WeeklyReviewReadActionResult =
-  | { success?: false; error: { code: string; user_message: string; retryable: boolean } }
-  | { success: true; status: 'caught_up' }
-  | { success: true; status: 'unavailable' }
+  | {
+      success?: false;
+      error: { code: string; user_message: string; retryable: boolean };
+    }
+  | { success: true; status: "caught_up"; lastCloseSummary: string | null }
+  | { success: true; status: "unavailable" }
   | {
       success: true;
-      status: 'ready';
+      status: "ready";
       periodStart: string;
       periodEnd: string;
       coversWeeks: number;
       pendingCount: number;
       readPayload: WeeklyReadPayload;
+      /** Part 3 "close" (§4.2/§5.1) — `null` until this review's own
+       *  `completed_at` is written (`closeWeeklyReview` below). Once set,
+       *  `page.tsx` renders frame 4.12's closed view instead of Parts 1/2. */
+      completedAt: string | null;
+      /** Only meaningful when `completedAt !== null` — the frozen "what
+       *  changed" line (`renderWeekCloseSummary`), computed from THIS
+       *  review's own already-recorded `accepted` prompts, never
+       *  recomputed after close (same freeze posture as `readPayload`
+       *  itself, ADR 0039 decision 2). `null` while the review is still
+       *  open, since Part 3 has nothing to summarise yet. */
+      closeSummary: string | null;
     };
 
 /**
@@ -161,23 +204,39 @@ export type WeeklyReviewReadActionResult =
  * and never worth downgrading an otherwise-successful `/review` render to
  * `status: 'unavailable'` over.
  */
-async function markOpenedBestEffort(userId: string, periodStart: string): Promise<void> {
+async function markOpenedBestEffort(
+  userId: string,
+  periodStart: string,
+): Promise<void> {
   try {
     await markReviewOpened(userId, periodStart);
   } catch (err) {
-    console.error('[review/actions:fetchWeeklyReviewRead] markReviewOpened failed (non-fatal):', err);
+    console.error(
+      "[review/actions:fetchWeeklyReviewRead] markReviewOpened failed (non-fatal):",
+      err,
+    );
   }
 }
 
 export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionResult> {
-  const user = await requireSessionAndRateLimit('weeklyReview');
+  const user = await requireSessionAndRateLimit("weeklyReview");
   if (isErrorState(user)) return user;
 
   const now = new Date();
   const period = await determineCurrentWeeklyReviewPeriod(user.id, now);
 
-  if (period.status === 'caught_up') {
-    return { success: true, status: 'caught_up' };
+  if (period.status === "caught_up") {
+    // Every week up to the last ended one is closed: show the latest
+    // closed week's frame-4.12 summary (never invented — from recorded
+    // prompt outcomes), so a submit's revalidation and a later revisit
+    // both land on "Week closed." rather than a generic line.
+    const lastReviewId = await fetchLatestCompletedWeeklyReviewId(user.id);
+    const lastCloseSummary = lastReviewId
+      ? renderWeekCloseSummary(
+          await fetchDecidedPromptOutcomes(user.id, lastReviewId),
+        )
+      : null;
+    return { success: true, status: "caught_up", lastCloseSummary };
   }
 
   const { periodStart, periodEnd } = period;
@@ -186,17 +245,23 @@ export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionRes
     const existing = await fetchWeeklyReviewByPeriodStart(user.id, periodStart);
     if (existing && existing.completedAt !== null) {
       // A completed review is frozen — ADR 0039 decision 2 — never
-      // recomputed, its own stored payload/prompt count read as-is.
+      // recomputed, its own stored payload/prompt count read as-is. Part 3
+      // "close" (§5.1): the summary line is likewise built only from THIS
+      // review's own already-recorded `accepted` prompts, never touched
+      // again after close.
       const pendingCount = await fetchPendingPromptCount(user.id, existing.id);
+      const outcomes = await fetchDecidedPromptOutcomes(user.id, existing.id);
       await markOpenedBestEffort(user.id, periodStart);
       return {
         success: true,
-        status: 'ready',
+        status: "ready",
         periodStart,
         periodEnd,
         coversWeeks: existing.coversWeeks,
         pendingCount,
         readPayload: existing.readPayload,
+        completedAt: existing.completedAt,
+        closeSummary: renderWeekCloseSummary(outcomes),
       };
     }
 
@@ -204,21 +269,124 @@ export async function fetchWeeklyReviewRead(): Promise<WeeklyReviewReadActionRes
     // REVIEW_NOT_READY: if any step below throws, nothing partial is
     // returned (see the catch block) — the whole compute succeeds or the
     // whole screen falls back to "being prepared," never a half-built read.
-    const payload = await assembleWeeklyReadPayload(user.id, periodStart, periodEnd);
-    const record = await upsertWeeklyReview(user.id, periodStart, periodEnd, payload);
+    const payload = await assembleWeeklyReadPayload(
+      user.id,
+      periodStart,
+      periodEnd,
+    );
+    const record = await upsertWeeklyReview(
+      user.id,
+      periodStart,
+      periodEnd,
+      payload,
+    );
     const written = await computeAndWriteReviewPrompts(user.id, record.id, now);
     await markOpenedBestEffort(user.id, periodStart);
     return {
       success: true,
-      status: 'ready',
+      status: "ready",
       periodStart,
       periodEnd,
       coversWeeks: record.coversWeeks,
       pendingCount: written.length, // every written row starts 'pending' by construction
       readPayload: payload,
+      completedAt: null,
+      closeSummary: null,
     };
   } catch (err) {
-    console.error('[review/actions:fetchWeeklyReviewRead] compute-on-view failed:', err);
-    return { success: true, status: 'unavailable' };
+    console.error(
+      "[review/actions:fetchWeeklyReviewRead] compute-on-view failed:",
+      err,
+    );
+    return { success: true, status: "unavailable" };
   }
+}
+
+/**
+ * Module 06 (Review & Graduation) Part 3 "close" (§4.2/§5.1) — the
+ * `/review` screen's own "Week closed" button.
+ *
+ * **Why this returns `closeSummary` inline, rather than the caller simply
+ * re-fetching `/review`:** `determineCurrentWeeklyReviewPeriod`'s own
+ * cursor (`current-period.ts`) ADVANCES past a period the instant its
+ * `completed_at` is set — the very next computation of "the current
+ * period" either lands on a brand-new, not-yet-computed period or
+ * `caught_up` (there is no week newer than the one just closed yet). A
+ * plain page reload after closing therefore NEVER re-observes this exact
+ * review's own `completedAt !== null` branch in `fetchWeeklyReviewRead`
+ * above (that branch is real and correctly written — see its own
+ * "Part 3 close" note — for the genuinely different case of a trader
+ * revisiting an ALREADY-closed period from a past week, which the
+ * `caught_up` cursor logic does not fold away the same way). Frame 4.12
+ * ("Week closed.") is therefore rendered as an immediate, ONE-TIME,
+ * client-side confirmation of THIS action's own result
+ * (`WeeklyReviewBody.tsx`, `useActionState`) — the same "the result card
+ * comes from the action's own return value, not a refetch" pattern
+ * `ConfirmDayForm.tsx` already established in this repo — not from a
+ * second server round trip.
+ *
+ * Takes NO arguments — same "nothing for a caller to legitimately vary"
+ * shape `fetchWeeklyReviewRead` above already documents; the period is
+ * re-derived server-side via the SAME `determineCurrentWeeklyReviewPeriod`
+ * call, never trusted from the client. `caught_up` here means there is no
+ * open period to close at all — reads identically to `already_closed` for
+ * this action's own purpose (nothing left to do), so it returns that
+ * status rather than a distinct one the caller would need to special-case.
+ *
+ * `markReviewCompleted`'s own `pending_prompts` refusal is a real,
+ * expected outcome (a trader can, in principle, reach this button in a
+ * stale tab after a decision re-opened new pending prompts on
+ * recompute) — surfaced as its own status, not an `error`, since it is not
+ * a system failure, just "not actually done yet."
+ */
+export type CloseWeeklyReviewResult =
+  | {
+      success?: false;
+      error: { code: string; user_message: string; retryable: boolean };
+    }
+  | { success: true; status: "closed"; closeSummary: string }
+  | { success: true; status: "already_closed"; closeSummary: string }
+  | { success: true; status: "pending_prompts" };
+
+export async function closeWeeklyReview(): Promise<CloseWeeklyReviewResult> {
+  const user = await requireSessionAndRateLimit("weeklyReview");
+  if (isErrorState(user)) return user;
+
+  const period = await determineCurrentWeeklyReviewPeriod(user.id, new Date());
+  if (period.status === "caught_up") {
+    // Nothing open to close at all — an honest, empty summary (never
+    // invented, matching `renderWeekCloseSummary`'s own "Nothing changed."
+    // for the zero-outcome case) rather than a fabricated one.
+    return {
+      success: true,
+      status: "already_closed",
+      closeSummary: "Nothing changed.",
+    };
+  }
+
+  const result = await markReviewCompleted(user.id, period.periodStart);
+
+  if (result.status === "not_found") {
+    return {
+      error: {
+        code: "REVIEW_NOT_READY",
+        user_message:
+          "Your review is being prepared. Please try again in a moment.",
+        retryable: true,
+      },
+    };
+  }
+  if (result.status === "pending_prompts") {
+    return { success: true, status: "pending_prompts" };
+  }
+
+  const outcomes = await fetchDecidedPromptOutcomes(user.id, result.reviewId);
+  const closeSummary = renderWeekCloseSummary(outcomes);
+
+  revalidatePath("/review");
+  return {
+    success: true,
+    status: result.alreadyCompleted ? "already_closed" : "closed",
+    closeSummary,
+  };
 }

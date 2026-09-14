@@ -42,3 +42,54 @@ export function fractionTrend(current: { followed: number; total: number }, prio
   if (currentRatio < priorRatio) return 'down';
   return 'unchanged';
 }
+
+/**
+ * Module 06 Part 3 "close" — §5.1's own reference markup: "One line
+ * summarising what changed" ("One rule added. Risk cap unchanged."). Built
+ * ONLY from `fetchDecidedPromptOutcomes`' already-recorded `accepted` rows
+ * (`review-prompts-repository.ts`) — every clause here traces to a real
+ * `review_prompts.payload` field this repo actually wrote
+ * (`markPromptAccepted`'s `ruleId`/`ruleRendered`,
+ * `markPromptRecommitted`'s `resolution: 'recommit'`,
+ * `markPromptAdjusted`'s `resolution: 'adjust'`), never a guess at WHICH
+ * rule or subject changed — deliberately generic ("N rules added"), not
+ * "Risk cap unchanged," since this repo has no way to name a relaxation
+ * prompt's own subject rule generically at this call site (AGENTS.md:
+ * "never invented"). "Nothing changed." (the exact §5.1 zero-decision
+ * copy) when no prompt was ever accepted this review — the normal,
+ * unremarkable case for most weeks.
+ */
+export function renderWeekCloseSummary(outcomes: ReadonlyArray<{ kind: string; payload: unknown }>): string {
+  let ruleAdded = 0;
+  let ruleChanged = 0;
+  let ruleKept = 0;
+
+  for (const outcome of outcomes) {
+    if (outcome.kind === 'graduation') {
+      ruleAdded += 1;
+    } else if (outcome.kind === 'relaxation') {
+      const resolution = (outcome.payload as { resolution?: string } | null)?.resolution;
+      if (resolution === 'adjust') {
+        ruleChanged += 1;
+      } else {
+        // `resolution === 'recommit'` is the only other real value this
+        // repo writes for an accepted relaxation prompt — an unrecognised
+        // resolution still reads as "kept," never silently dropped.
+        ruleKept += 1;
+      }
+    }
+  }
+
+  // "One rule added." for the single case (§5.1's own literal wording),
+  // a plain numeral once there is more than one — both honest counts of
+  // what was actually recorded, never a guess at WHICH rule.
+  const countWord = (n: number): string => (n === 1 ? 'One' : String(n));
+
+  const clauses: string[] = [];
+  if (ruleAdded > 0) clauses.push(`${countWord(ruleAdded)} ${ruleAdded === 1 ? 'rule' : 'rules'} added`);
+  if (ruleChanged > 0) clauses.push(`${countWord(ruleChanged)} ${ruleChanged === 1 ? 'rule' : 'rules'} changed`);
+  if (ruleKept > 0) clauses.push(`${countWord(ruleKept)} ${ruleKept === 1 ? 'rule' : 'rules'} unchanged`);
+
+  if (clauses.length === 0) return 'Nothing changed.';
+  return clauses.join('. ') + '.';
+}

@@ -134,3 +134,37 @@ export async function fetchPendingPromptCount(userId: string, reviewId: string):
     return Number(res.rows[0]?.count ?? '0');
   });
 }
+
+/**
+ * Module 06 Part 3 "close" (§5.1's own "Part 3: close" reference markup —
+ * "One line summarising what changed") — every ACCEPTED prompt for this
+ * review, kind + payload only. Deliberately `state = 'accepted'` only, not
+ * `declined`/`deferred`/`expired`: those states record that a decision was
+ * MADE, not what CHANGED (declined/deferred/expired are all "nothing
+ * changed" from the trader's own rules' point of view — no rule was added,
+ * kept, or edited by any of them), and no `declined` state is even
+ * reachable yet (no decline-writing function exists in this repo today,
+ * grep-confirmed). `app/(app)/review/format.ts`'s `renderWeekCloseSummary`
+ * turns these raw rows into the actual one-line sentence — this function
+ * has no opinion on wording, matching `fetchPendingDecisionPrompts`'s own
+ * "no opinion about either evidence shape" separation of concerns.
+ * `withUserConnection`: a real page-view-time read behind a real session
+ * (`/review`'s own `fetchWeeklyReviewRead`), same posture as every other
+ * read in this file.
+ */
+export interface DecidedPromptOutcomeRow {
+  kind: string;
+  payload: unknown;
+}
+
+export async function fetchDecidedPromptOutcomes(userId: string, reviewId: string): Promise<DecidedPromptOutcomeRow[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ kind: string; payload: unknown }>(
+      `select kind, payload
+         from retrospeq.review_prompts
+        where user_id = $1 and review_id = $2 and state = 'accepted'`,
+      [userId, reviewId],
+    );
+    return res.rows;
+  });
+}

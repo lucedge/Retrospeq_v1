@@ -222,9 +222,17 @@ test.describe('/review — weekly read screen (Module 06 §4.2/§4.8), independe
     // "Sign out" chrome button is app-shell furniture present on every
     // route in this app, not part of this view — same distinction already
     // established for every other already-reviewed screen in this repo).
+    // PRE-EXISTING BUG FOUND while updating this test for Module 06 Part 3
+    // "close" (dispatch: "update the disabled-button assertion"): three
+    // confident findings against this seed genuinely produce THREE pending
+    // graduation candidates (`computeAndWriteReviewPrompts`, unrelated to
+    // this slice's own change) — the button here was always the "3
+    // decisions" Link, never the zero-pending "Week closed" control, so
+    // the OLD `.toBeDisabled()` assertion could never have matched an `<a>`
+    // element either way. Fixed to assert the REAL rendered state.
     const reviewSection = page.locator('section[aria-labelledby="review-h"]');
     await expect(reviewSection.locator('.rq-btn')).toHaveCount(1);
-    await expect(reviewSection.locator('.rq-btn')).toBeDisabled();
+    await expect(reviewSection.locator('.rq-btn')).toHaveText('3 decisions');
 
     await page.screenshot({ path: 'tmp/dev-screenshots/review-populated-3-findings.png', fullPage: true });
   });
@@ -266,5 +274,57 @@ test.describe('/review — weekly read screen (Module 06 §4.2/§4.8), independe
     expect(row.rows[0].period_start).toBe(missedWeekStart);
 
     await page.screenshot({ path: 'tmp/dev-screenshots/review-missed-week-2span.png', fullPage: true });
+  });
+
+  test('3. Module 06 Part 3 "close": zero pending decisions — a real submit closes the week and renders frame 4.12', async ({ page }) => {
+    const user = await createConfirmedUser('review-close-week');
+    cleanupUserIds.push(user.id);
+    const accountId = await seedAccount(user.id);
+
+    // Deliberately NO strategy/field/finding seeding at all (§5.1's own
+    // "zero-prompt week" reference markup — findings=[], the normal case)
+    // and no adherence_weekly row (insufficient_history) — a real week
+    // with genuinely zero review_prompts written, so the "Week closed"
+    // button is a real, enabled form submit from the first render.
+    await seedConfirmedTrade(user.id, accountId, lastEndedWeekStart, '1.0000');
+    await seedWeekCompleteness(user.id, lastEndedWeekStart, 1, 1);
+    await seedStreak(user.id, 4);
+
+    await loginAs(page, user.email);
+    await page.goto('/review');
+    await page.waitForSelector('#review-h');
+
+    const reviewSection = page.locator('section[aria-labelledby="review-h"]');
+    await expect(reviewSection.locator('.rq-btn')).toHaveCount(1);
+    await expect(reviewSection.locator('.rq-btn')).toBeEnabled();
+    await expect(reviewSection.locator('.rq-btn')).toHaveText('Week closed');
+
+    await page.screenshot({ path: 'tmp/dev-screenshots/review-close-before-submit.png', fullPage: true });
+
+    await reviewSection.locator('.rq-btn').click();
+    await page.waitForURL((url) => url.pathname === '/review');
+
+    // Frame 4.12: "Done" / "Week closed." / an honest one-line summary /
+    // "Next review Sunday..." / one ghost link back to /dashboard — never
+    // the read/decisions panels again once closed.
+    const closeSection = page.locator('section.review--close');
+    // The close submit round-trips several queries against the remote dev DB (~120ms RTT) and revalidates /review.
+    await expect(closeSection).toBeVisible({ timeout: 30_000 });
+    await expect(closeSection.getByText('Week closed.')).toBeVisible();
+    await expect(closeSection.getByText('Nothing changed.')).toBeVisible(); // no accepted prompts — never invented
+    await expect(closeSection.getByText('Next review Sunday. Nothing to do until then.')).toBeVisible();
+    const backLink = closeSection.locator('a.rq-btn');
+    await expect(backLink).toHaveText('Back to home');
+    await expect(backLink).toHaveAttribute('href', '/dashboard');
+
+    // The underlying row genuinely records completed_at now.
+    const row = await db.query<{ completed_at: string | null }>(
+      `select completed_at::text as completed_at from retrospeq.reviews where user_id = $1 and period_start = $2`,
+      [user.id, lastEndedWeekStart],
+    );
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0].completed_at).not.toBeNull();
+
+    await page.screenshot({ path: 'tmp/dev-screenshots/review-close-after-submit.png', fullPage: true });
   });
 });
