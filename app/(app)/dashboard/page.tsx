@@ -1,13 +1,28 @@
-import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
-import { getDashboardStateForUser, type DashboardOpenPositionSummary, type DashboardReviewReadyState } from '@/lib/dashboard/dashboard-repository';
-import { fetchAdherenceDisplay } from '../rules/actions';
-import type { AdherenceDisplay, AdherenceFraction } from '@/lib/rules/adherence-display';
-import { fetchEngagementSummaryForUser } from '@/lib/engagement/streak-repository';
-import { fetchRecentWeekCompletenessForUser, type RecentWeekBar } from '@/lib/engagement/week-completeness-repository';
-import { weekStartForServerDay } from '@/lib/rules/week-boundary';
-import { formatAge, formatClockTime, formatDirection, formatRiskPct } from '../trades/format';
-import { formatDayOfWeek } from './format';
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import {
+  getDashboardStateForUser,
+  type DashboardOpenPositionSummary,
+  type DashboardReviewReadyState,
+} from "@/lib/dashboard/dashboard-repository";
+import { fetchAdherenceDisplay } from "../rules/actions";
+import type {
+  AdherenceDisplay,
+  AdherenceFraction,
+} from "@/lib/rules/adherence-display";
+import { fetchEngagementSummaryForUser } from "@/lib/engagement/streak-repository";
+import {
+  fetchRecentWeekCompletenessForUser,
+  type RecentWeekBar,
+} from "@/lib/engagement/week-completeness-repository";
+import { weekStartForServerDay } from "@/lib/rules/week-boundary";
+import {
+  formatAge,
+  formatClockTime,
+  formatDirection,
+  formatRiskPct,
+} from "../trades/format";
+import { formatDayOfWeek } from "./format";
 
 /**
  * Module 08 (Onboarding & Home) §7/§8 — the dashboard, all four §7.1
@@ -46,60 +61,112 @@ const STREAK_STRIP_WEEKS = 12;
  *  a fabricated "0 of 0" row. Soft always renders (lighter,
  *  `.adherence__soft`). */
 function AdherenceDotRows({ display }: { display: AdherenceDisplay }) {
-  if (display.status !== 'ready') return null;
+  if (display.status !== "ready") return null;
   const { hard, soft } = display;
   return (
     <>
-      {hard.total > 0 ? <AdherenceDotRow label="Hard" count={hard} weightClass="adherence__hard" /> : null}
-      <AdherenceDotRow label="Soft" count={soft} weightClass="adherence__soft" />
+      {hard.total > 0 ? (
+        <AdherenceDotRow
+          label="Hard"
+          count={hard}
+          weightClass="adherence__hard"
+        />
+      ) : null}
+      <AdherenceDotRow
+        label="Soft"
+        count={soft}
+        weightClass="adherence__soft"
+      />
     </>
   );
 }
 
-function AdherenceDotRow({ label, count, weightClass }: { label: string; count: AdherenceFraction; weightClass: string }) {
+function AdherenceDotRow({
+  label,
+  count,
+  weightClass,
+}: {
+  label: string;
+  count: AdherenceFraction;
+  weightClass: string;
+}) {
   return (
     <div>
       <p className={`rq-label ${weightClass}`}>
-        {label} · <span className="rq-num">{count.followed} of {count.total}</span>
+        {label} ·{" "}
+        <span className="rq-num">
+          {count.followed} of {count.total}
+        </span>
       </p>
       <div className="rq-dots">
         {Array.from({ length: count.total }, (_, i) => (
-          <i key={i} className={i < count.followed ? undefined : 'off'} />
+          <i key={i} className={i < count.followed ? undefined : "off"} />
         ))}
       </div>
     </div>
   );
 }
 
-function StreakStrip({ streakWeeks, bars }: { streakWeeks: number; bars: RecentWeekBar[] }) {
+function StreakStrip({
+  streakWeeks,
+  bars,
+}: {
+  streakWeeks: number;
+  bars: RecentWeekBar[];
+}) {
   return (
     <div>
       <p className="rq-label">
-        Logging streak · <span className="rq-num">{streakWeeks}</span> {streakWeeks === 1 ? 'week' : 'weeks'}
+        Logging streak · <span className="rq-num">{streakWeeks}</span>{" "}
+        {streakWeeks === 1 ? "week" : "weeks"}
       </p>
-      <div className="rq-strip" style={{ ['--rq-strip-h' as string]: '28px' }}>
+      <div className="rq-strip" style={{ ["--rq-strip-h" as string]: "28px" }}>
         {bars.map((bar) => {
           // Height is an honest ratio of THIS week's own materialised
           // counts (§5.2's own formula: days_closed can exceed
           // days_traded on a deliberate-no-trade week, clamped to 100%
           // for the bar itself; a week with no trading at all reads as a
           // real, visible gap, never a fabricated full bar).
-          const heightPct = bar.hasActivity ? Math.min(100, Math.round((bar.daysClosed / bar.daysTraded) * 100)) : 30;
-          return <i key={bar.weekStart} style={{ height: `${heightPct}%` }} className={bar.hasActivity ? undefined : 'gap'} />;
+          const heightPct = bar.hasActivity
+            ? Math.min(100, Math.round((bar.daysClosed / bar.daysTraded) * 100))
+            : 30;
+          return (
+            <i
+              key={bar.weekStart}
+              style={{ height: `${heightPct}%` }}
+              className={bar.hasActivity ? undefined : "gap"}
+            />
+          );
         })}
       </div>
     </div>
   );
 }
 
-function ConsistencyRing({ daysClosed, daysTraded }: { daysClosed: number; daysTraded: number }) {
+function ConsistencyRing({
+  daysClosed,
+  daysTraded,
+}: {
+  daysClosed: number;
+  daysTraded: number;
+}) {
   const ratio = daysTraded > 0 ? Math.min(1, daysClosed / daysTraded) : 0;
   const circumference = 138;
   return (
-    <div className="rq-card" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+    <div
+      className="rq-card"
+      style={{ display: "flex", alignItems: "center", gap: 14 }}
+    >
       <div className="rq-ring">
         <svg width="52" height="52">
-          <circle cx="26" cy="26" r="22" fill="none" stroke="var(--rq-mark-dim)" strokeWidth="4" />
+          <circle
+            cx="26"
+            cy="26"
+            r="22"
+            fill="none"
+            stroke="var(--rq-mark-dim)"
+            strokeWidth="4"
+          />
           <circle
             cx="26"
             cy="26"
@@ -117,14 +184,14 @@ function ConsistencyRing({ daysClosed, daysTraded }: { daysClosed: number; daysT
         </span>
       </div>
       <div>
-        <p className="rq-label" style={{ margin: '0 0 3px' }}>
+        <p className="rq-label" style={{ margin: "0 0 3px" }}>
           Consistency
         </p>
         <p className="rq-body" style={{ margin: 0 }}>
           {daysTraded === 0
-            ? 'No trading days yet this period.'
+            ? "No trading days yet this period."
             : daysClosed >= daysTraded
-              ? 'Every day closed out.'
+              ? "Every day closed out."
               : `${daysClosed} of ${daysTraded} days closed out.`}
         </p>
       </div>
@@ -143,42 +210,71 @@ function ConsistencyRing({ daysClosed, daysTraded }: { daysClosed: number; daysT
  * entirely when `hard.total === 0`.
  */
 function ReviewAdherenceCmp({ review }: { review: DashboardReviewReadyState }) {
+  if (
+    review.adherence === null ||
+    (review.adherence.hard.total === 0 && review.adherence.soft.total === 0)
+  ) {
+    return (
+      <div>
+        <p className="rq-label">Adherence</p>
+        <p className="rq-sub">Not enough data yet.</p>
+      </div>
+    );
+  }
   const { hard, soft, priorSoft } = review.adherence;
-  const thisPct = soft.total > 0 ? Math.round((soft.followed / soft.total) * 100) : 0;
-  const lastPct = priorSoft && priorSoft.total > 0 ? Math.round((priorSoft.followed / priorSoft.total) * 100) : 0;
+  const thisPct =
+    soft.total > 0 ? Math.round((soft.followed / soft.total) * 100) : 0;
+  const lastPct =
+    priorSoft && priorSoft.total > 0
+      ? Math.round((priorSoft.followed / priorSoft.total) * 100)
+      : 0;
   return (
     <div>
       {hard.total > 0 ? (
         <p className="rq-body adherence__hard">
-          Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
+          Hard rules: <span className="rq-num">{hard.followed}</span> of{" "}
+          <span className="rq-num">{hard.total}</span>.
         </p>
       ) : null}
-      <p className="rq-label adherence__soft">
-        Soft · <span className="rq-num">{soft.followed} of {soft.total}</span>
-        {priorSoft ? (
-          <>
-            , up from <span className="rq-num">{priorSoft.followed}</span>
-          </>
-        ) : null}
-      </p>
-      <div className="rq-cmp">
-        <div className="rq-cmp__row hot">
-          <span className="rq-cmp__lbl">This week</span>
-          <div className="rq-cmp__track">
-            <i className="rq-cmp__fill" style={{ width: `${thisPct}%` }} />
-          </div>
-          <span className="rq-cmp__val rq-num">{soft.followed}</span>
-        </div>
-        {priorSoft ? (
-          <div className="rq-cmp__row">
-            <span className="rq-cmp__lbl">Last week</span>
-            <div className="rq-cmp__track">
-              <i className="rq-cmp__fill" style={{ width: `${lastPct}%` }} />
+      {soft.total > 0 ? (
+        <>
+          <p className="rq-label adherence__soft">
+            Soft ·{" "}
+            <span className="rq-num">
+              {soft.followed} of {soft.total}
+            </span>
+            {priorSoft ? (
+              <>
+                , last week{" "}
+                <span className="rq-num">
+                  {priorSoft.followed} of {priorSoft.total}
+                </span>
+              </>
+            ) : null}
+          </p>
+          <div className="rq-cmp">
+            <div className="rq-cmp__row hot">
+              <span className="rq-cmp__lbl">This week</span>
+              <div className="rq-cmp__track">
+                <i className="rq-cmp__fill" style={{ width: `${thisPct}%` }} />
+              </div>
+              <span className="rq-cmp__val rq-num">{soft.followed}</span>
             </div>
-            <span className="rq-cmp__val rq-num">{priorSoft.followed}</span>
+            {priorSoft ? (
+              <div className="rq-cmp__row">
+                <span className="rq-cmp__lbl">Last week</span>
+                <div className="rq-cmp__track">
+                  <i
+                    className="rq-cmp__fill"
+                    style={{ width: `${lastPct}%` }}
+                  />
+                </div>
+                <span className="rq-cmp__val rq-num">{priorSoft.followed}</span>
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -189,16 +285,25 @@ function ReviewAdherenceCmp({ review }: { review: DashboardReviewReadyState }) {
  *  there is no spec-given formula for exactly where the cap tick sits, so
  *  this picks a fixed, visible headroom rather than clamping the scale to
  *  the cap itself (which would make crossing it unrenderable). */
-function RiskGauge({ riskPct, capPct }: { riskPct: string | null; capPct: string }) {
+function RiskGauge({
+  riskPct,
+  capPct,
+}: {
+  riskPct: string | null;
+  capPct: string;
+}) {
   const risk = Number(riskPct);
   const cap = Number(capPct);
   const scaleMax = cap * 2;
-  const fillPct = Number.isFinite(risk) && scaleMax > 0 ? Math.min(100, Math.max(0, (risk / scaleMax) * 100)) : 0;
+  const fillPct =
+    Number.isFinite(risk) && scaleMax > 0
+      ? Math.min(100, Math.max(0, (risk / scaleMax) * 100))
+      : 0;
   return (
     <div style={{ marginTop: 12 }}>
       <div className="rq-gauge">
         <i className="rq-gauge__fill" style={{ width: `${fillPct}%` }} />
-        <i className="rq-gauge__cap" style={{ left: '50%' }} />
+        <i className="rq-gauge__cap" style={{ left: "50%" }} />
       </div>
       <div className="rq-gauge__lbl">
         <span>
@@ -212,7 +317,13 @@ function RiskGauge({ riskPct, capPct }: { riskPct: string | null; capPct: string
   );
 }
 
-function OpenPositionCard({ position, now }: { position: DashboardOpenPositionSummary; now: Date }) {
+function OpenPositionCard({
+  position,
+  now,
+}: {
+  position: DashboardOpenPositionSummary;
+  now: Date;
+}) {
   return (
     <article className="open-position rq-card">
       <div className="open-position__head">
@@ -258,13 +369,14 @@ export default async function DashboardPage() {
   const state = await getDashboardStateForUser(user.id, now);
   const day = formatDayOfWeek(now);
 
-  if (state.kind === 'open') {
+  if (state.kind === "open") {
     const count = state.positions.length;
     return (
       <main className="dash" data-state="open">
         <p className="dash__day">{day}</p>
         <h1 className="dash__headline">
-          <span className="rq-num">{count}</span> position{count === 1 ? '' : 's'} open.
+          <span className="rq-num">{count}</span> position
+          {count === 1 ? "" : "s"} open.
         </h1>
         <ul className="dash__trades">
           {state.positions.map((p) => (
@@ -278,16 +390,17 @@ export default async function DashboardPage() {
     );
   }
 
-  if (state.kind === 'closeout') {
+  if (state.kind === "closeout") {
     const count = state.trades.length;
     const closeOutHref = state.target
       ? `/trades/close-out?account=${state.target.accountId}&day=${state.target.serverDay}`
-      : '/trades/close-out';
+      : "/trades/close-out";
     return (
       <main className="dash" data-state="closeout">
         <p className="dash__day">{day}</p>
         <h1 className="dash__headline">
-          <span className="rq-num">{count}</span> trade{count === 1 ? '' : 's'} to close out.
+          <span className="rq-num">{count}</span> trade{count === 1 ? "" : "s"}{" "}
+          to close out.
         </h1>
         <ul className="dash__trades">
           {state.trades.map((t) => (
@@ -302,7 +415,10 @@ export default async function DashboardPage() {
           <Link href={closeOutHref} className="rq-btn rq-btn--block">
             Close out the day
           </Link>
-          <p className="rq-label" style={{ textAlign: 'center', marginTop: 10 }}>
+          <p
+            className="rq-label"
+            style={{ textAlign: "center", marginTop: 10 }}
+          >
             About thirty seconds
           </p>
         </div>
@@ -310,14 +426,17 @@ export default async function DashboardPage() {
     );
   }
 
-  if (state.kind === 'review') {
+  if (state.kind === "review") {
     const { review } = state;
     return (
       <main className="dash" data-state="review">
         <p className="dash__day">{day}</p>
         <h1 className="dash__headline">Your week is ready to read.</h1>
 
-        <ConsistencyRing daysClosed={review.consistency.daysClosed} daysTraded={review.consistency.daysTraded} />
+        <ConsistencyRing
+          daysClosed={review.consistency.daysClosed}
+          daysTraded={review.consistency.daysTraded}
+        />
 
         <ReviewAdherenceCmp review={review} />
 
@@ -325,11 +444,13 @@ export default async function DashboardPage() {
           <p className="rq-label">What your trades say</p>
           {review.teaser ? (
             <p className="rq-sub">
-              <span className="rq-num">{review.teaser.findingsCount}</span>{' '}
-              {review.teaser.findingsCount === 1 ? 'finding' : 'findings'} ·{' '}
-              <b style={{ color: 'var(--rq-ink)' }}>
-                <span className="rq-num">{review.teaser.pendingDecisions}</span>{' '}
-                {review.teaser.pendingDecisions === 1 ? 'decision' : 'decisions'}
+              <span className="rq-num">{review.teaser.findingsCount}</span>{" "}
+              {review.teaser.findingsCount === 1 ? "finding" : "findings"} ·{" "}
+              <b style={{ color: "var(--rq-ink)" }}>
+                <span className="rq-num">{review.teaser.pendingDecisions}</span>{" "}
+                {review.teaser.pendingDecisions === 1
+                  ? "decision"
+                  : "decisions"}
               </b>
             </p>
           ) : (
@@ -350,11 +471,17 @@ export default async function DashboardPage() {
   // "still syncing" note replaces the fabricated-nothing-wrong headline
   // exactly when the underlying reads failed (§12's DASH_STATE_UNRESOLVED),
   // never an error screen.
-  const currentWeekStart = weekStartForServerDay(now.toISOString().slice(0, 10));
+  const currentWeekStart = weekStartForServerDay(
+    now.toISOString().slice(0, 10),
+  );
   const [adherenceResult, engagementSummary, recentWeeks] = await Promise.all([
     fetchAdherenceDisplay(),
     fetchEngagementSummaryForUser(user.id),
-    fetchRecentWeekCompletenessForUser(user.id, currentWeekStart, STREAK_STRIP_WEEKS),
+    fetchRecentWeekCompletenessForUser(
+      user.id,
+      currentWeekStart,
+      STREAK_STRIP_WEEKS,
+    ),
   ]);
 
   return (
@@ -368,18 +495,27 @@ export default async function DashboardPage() {
       )}
 
       {engagementSummary ? (
-        <StreakStrip streakWeeks={engagementSummary.streakWeeks} bars={recentWeeks} />
+        <StreakStrip
+          streakWeeks={engagementSummary.streakWeeks}
+          bars={recentWeeks}
+        />
       ) : (
         <p className="rq-sub">Not enough data yet for a streak.</p>
       )}
 
-      {adherenceResult.success && adherenceResult.display && adherenceResult.display.status === 'ready' ? (
+      {adherenceResult.success &&
+      adherenceResult.display &&
+      adherenceResult.display.status === "ready" ? (
         <AdherenceDotRows display={adherenceResult.display} />
       ) : (
-        <p className="rq-sub" role={adherenceResult.success ? undefined : 'alert'}>
+        <p
+          className="rq-sub"
+          role={adherenceResult.success ? undefined : "alert"}
+        >
           {adherenceResult.success
-            ? 'Not enough data yet — this fills in once you’ve confirmed a trade this week.'
-            : (adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.')}
+            ? "Not enough data yet — this fills in once you’ve confirmed a trade this week."
+            : (adherenceResult.error?.user_message ??
+              "Adherence is unavailable right now.")}
         </p>
       )}
 
@@ -388,7 +524,11 @@ export default async function DashboardPage() {
           computes it yet (Module 05 has no such projection built). Never
           fabricated, per AGENTS.md. */}
 
-      {state.syncDegraded ? <p className="sync push">Syncing — this may not reflect your latest activity.</p> : null}
+      {state.syncDegraded ? (
+        <p className="sync push">
+          Syncing — this may not reflect your latest activity.
+        </p>
+      ) : null}
     </main>
   );
 }

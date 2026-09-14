@@ -171,7 +171,7 @@ export interface DashboardReviewReadyState {
     hard: DashboardReviewAdherenceCount;
     soft: DashboardReviewAdherenceCount;
     priorSoft: DashboardReviewAdherenceCount | null;
-  };
+  } | null; // null = `fetchPeriodAdherence` returned insufficient_history -- render "not enough data yet", never 0 of 0 (qa FAIL 2026-09-14)
   /** `null` whenever no `reviews` row is materialised yet for this period
    *  (the overwhelmingly common case — nothing pre-materialises a review
    *  ahead of a trader opening `/review`) — per this dispatch's own
@@ -258,10 +258,14 @@ async function computeReviewReadyState(userId: string, now: Date): Promise<Dashb
   // Hard/soft, ALWAYS separate -- see this file's own header. A prior
   // period with no materialised row at all (`priorSoft === null`) is
   // omitted, never a fabricated 0-of-0 baseline.
+  // `insufficient_history` stays distinguishable from a genuine zero:
+  // the page renders "not enough data yet" rather than a fabricated
+  // "0 of 0" (adherence recompute is best-effort after confirm, so a
+  // trade-positive period can legitimately have no materialised row).
   const adherenceState: DashboardReviewReadyState['adherence'] =
     adherence.status === 'ready'
       ? { hard: adherence.hard, soft: adherence.soft, priorSoft: adherence.priorSoft }
-      : { hard: { followed: 0, total: 0 }, soft: { followed: 0, total: 0 }, priorSoft: null };
+      : null;
 
   return {
     consistency: { daysTraded: consistency.daysTraded, daysClosed: consistency.daysClosed },

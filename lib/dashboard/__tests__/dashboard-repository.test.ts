@@ -256,16 +256,16 @@ describe('getDashboardStateForUser', () => {
       expect(state.review.consistency).toEqual({ daysTraded: 4, daysClosed: 4 });
       // Hard and soft ALWAYS separate -- no blended figure anywhere
       // (retrospeq-design-decisions §6; never a summary-screen exemption).
-      expect(state.review.adherence.hard).toEqual({ followed: 10, total: 10 });
-      expect(state.review.adherence.soft).toEqual({ followed: 21, total: 24 });
-      expect(state.review.adherence.priorSoft).toEqual({ followed: 18, total: 24 });
+      expect(state.review.adherence?.hard).toEqual({ followed: 10, total: 10 });
+      expect(state.review.adherence?.soft).toEqual({ followed: 21, total: 24 });
+      expect(state.review.adherence?.priorSoft).toEqual({ followed: 18, total: 24 });
       expect(state.review.teaser).toBeNull();
     }
     expect(fetchPeriodAdherenceMock).toHaveBeenCalledTimes(1);
     expect(fetchPendingPromptCountMock).not.toHaveBeenCalled();
   });
 
-  it('review adherence reads insufficient_history honestly as zero fractions with no prior comparator, never fabricated', async () => {
+  it('review adherence keeps insufficient_history distinct from a real zero (null -> "not enough data yet"), never a fabricated 0 of 0', async () => {
     listOpenTradesMock.mockResolvedValue([]);
     listClosedUnconfirmedTradesMock.mockResolvedValue([]);
     listTradingAccountsMock.mockResolvedValue([account()]);
@@ -278,11 +278,7 @@ describe('getDashboardStateForUser', () => {
     const state = await getDashboardStateForUser(USER_ID, NOW);
     expect(state.kind).toBe('review');
     if (state.kind === 'review') {
-      expect(state.review.adherence).toEqual({
-        hard: { followed: 0, total: 0 },
-        soft: { followed: 0, total: 0 },
-        priorSoft: null,
-      });
+      expect(state.review.adherence).toBeNull();
     }
   });
 
