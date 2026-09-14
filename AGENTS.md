@@ -73,4 +73,4 @@ Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout
 
 ## Known infra gaps (build against the interfaces, don't block)
 
-No Vercel project · no dedicated Supabase project (shared dev one only) · no external KMS · broker vendor undecided · no email provider · Supabase mailer broken on the dev project. Details and follow-ups: `docs/infra-gaps.md`. Host is macOS / Node 24 (since 2026-09-13); any Windows-drive workaround you find in archived history is obsolete.
+No Vercel project · no dedicated Supabase project (shared dev one only) · no external KMS · broker vendor undecided · app-authored email not yet wired to Resend (Auth emails work via Resend SMTP since 2026-09-14). Details and follow-ups: `docs/infra-gaps.md`. Host is macOS / Node 24 (since 2026-09-13); any Windows-drive workaround you find in archived history is obsolete.

@@ -53,7 +53,7 @@ test('signup happy path — empty state, then "check your email" (mailer_autocon
   await page.screenshot({ path: 'tmp/dev-screenshots/signup-success.png' });
 });
 
-test('signup with an already-registered email shows the mapped error, not a raw vendor string', async ({
+test('signup with an already-registered email gets the same "check your email" response (no enumeration)', async ({
   page,
 }) => {
   const email = uniqueTestEmail('signup-dupe');
@@ -65,19 +65,22 @@ test('signup with an already-registered email shows the mapped error, not a raw 
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  const firstMessage = await page.locator('main').innerText();
 
-  // Second signup with the same email — the actual case under test.
+  // Second signup with the same email — the actual case under test. With
+  // email confirmation on, Supabase returns success (an obfuscated user,
+  // no `email_exists` error) so signup can't be used to probe which
+  // addresses are registered — the same property the reset test below
+  // asserts. `AUTH_EMAIL_ALREADY_REGISTERED` stays mapped (unit-tested in
+  // lib/auth/__tests__/errors.test.ts) for when GoTrue does return it.
   await page.goto('/signup');
   await page.fill('#email', email);
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
-
-  // See the sign-in test below for why this is scoped to `form
-  // p[role="alert"]` rather than a bare `[role="alert"]`.
-  const alert = page.locator('form p[role="alert"]');
-  await expect(alert).toBeVisible({ timeout: 10_000 });
-  await expect(alert).toContainText('An account already exists for that email');
-  await page.screenshot({ path: 'tmp/dev-screenshots/signup-existing-email-error.png' });
+  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('form p[role="alert"]')).toHaveCount(0);
+  expect(await page.locator('main').innerText()).toBe(firstMessage);
+  await page.screenshot({ path: 'tmp/dev-screenshots/signup-existing-email.png' });
 });
 
 test('sign-in with invalid credentials shows a plain "email or password isn\'t right" message', async ({
@@ -122,13 +125,13 @@ test('password reset request returns the identical response for an existing vs a
   await page.fill('#email', existingEmail);
   await page.getByRole('button', { name: 'Send reset link' }).click();
   await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
-  const existingMessage = await page.locator('body').textContent();
+  const existingMessage = await page.locator('main').innerText();
 
   await page.goto('/reset-password');
   await page.fill('#email', uniqueTestEmail('reset-nonexistent'));
   await page.getByRole('button', { name: 'Send reset link' }).click();
   await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
-  const nonexistentMessage = await page.locator('body').textContent();
+  const nonexistentMessage = await page.locator('main').innerText();
   await page.screenshot({ path: 'tmp/dev-screenshots/reset-password-success.png' });
 
   expect(existingMessage).toBe(nonexistentMessage);
