@@ -209,13 +209,23 @@ export default async function WeeklyReviewPage() {
   // Server Component — `WeeklyReviewBody` receives already-resolved props,
   // it performs no fetch of its own.
   return (
-    <WeeklyReviewBody
-      periodLine={periodLine}
-      outcome={outcome}
-      consistency={consistency}
-      adherence={adherence}
-      findings={findings}
-      pendingCount={pendingCount}
-    />
+    <>
+      <WeeklyReviewBody
+        periodLine={periodLine}
+        outcome={outcome}
+        consistency={consistency}
+        adherence={adherence}
+        findings={findings}
+        pendingCount={pendingCount}
+      />
+      {/* §4.9/frame 4.13 -- a quiet text link, not an `.rq-btn` (this
+          screen's only button is Part 2's "N decisions" submit, rendered
+          inside `WeeklyReviewBody` above; the monthly trend is a separate
+          read with zero prompts of its own, see `/review/month`'s own
+          header). */}
+      <p className="rq-sub">
+        <Link href="/review/month">See the 3-month trend</Link>
+      </p>
+    </>
   );
 }

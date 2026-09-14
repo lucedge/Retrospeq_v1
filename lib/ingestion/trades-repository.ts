@@ -390,3 +390,42 @@ export async function fetchPeriodOutcome(userId: string, periodStart: string, pe
     };
   });
 }
+
+export interface StrategyRTotal {
+  strategyId: string;
+  /** `numeric(10,4)` string, may be negative -- same "hand back a
+   *  structured number, let the caller format it" posture as
+   *  `PeriodOutcome.totalR` above. */
+  totalR: string;
+}
+
+/**
+ * Module 06 (Review & Graduation) §4.9's "which strategies pull weight"
+ * monthly-trend panel — total R per strategy over an arbitrary
+ * `[periodStart, periodEnd]` window (a 3-month span, not a single ISO
+ * week/review period, so this is deliberately its own function rather
+ * than a `groupBy` bolted onto `fetchPeriodOutcome` above, which has no
+ * strategy dimension at all). Same freeze point as `fetchPeriodOutcome`
+ * (`confirmed_at is not null`) plus `strategy_id is not null` — a trade
+ * never attributed to a strategy (synced but never carried through
+ * Module 03's own capture-arming/close-out flow) cannot be honestly
+ * attributed to one here either, and is excluded rather than bucketed
+ * under a fabricated "no strategy" row.
+ */
+export async function fetchStrategyRTotalsForPeriod(
+  userId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<StrategyRTotal[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ strategy_id: string; total_r: string }>(
+      `select strategy_id, coalesce(sum(r_multiple), 0)::text as total_r
+         from retrospeq.trades
+        where user_id = $1 and confirmed_at is not null and strategy_id is not null
+          and server_day between $2 and $3
+        group by strategy_id`,
+      [userId, periodStart, periodEnd],
+    );
+    return res.rows.map((row) => ({ strategyId: row.strategy_id, totalR: row.total_r }));
+  });
+}
