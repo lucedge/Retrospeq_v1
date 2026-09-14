@@ -33,3 +33,5 @@ You implement one slice. Your dispatch names: **the slice**, **its tier** (`npm 
 Report: what you built (files), tier, verify result, screenshots looked at, what still needs review, anything you couldn't verify for real.
 
 **Shared working tree — never discard others' work.** Other agents may be editing this checkout at the same time. Never run `git checkout -- <file>`, `git restore`, `git reset`, `git stash`, or `git clean` on files you didn't create in this dispatch. To prove a failure is pre-existing, reason from the diff or use `git worktree add /tmp/<name> <commit>` — never stash. To drop your own stale ledger edit, remove just your lines. Don't commit unless your dispatch says so.
+
+**Finish in the foreground.** Run tests and verify in the foreground (use the Bash timeout). Never end your turn while a background process you started is still running — your report is your hand-off, and a paused agent that later resumes duplicates whoever picked the work up.

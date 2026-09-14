@@ -9,6 +9,20 @@ import {
 } from '@/lib/supabase/__tests__/rls-test-helpers';
 
 vi.mock('server-only', () => ({}));
+
+// The DETECTION test below proves mute-survives-recompute. Whether a pattern
+// can become a rule is a separate gate (`selectDetectionCandidates` →
+// `resolveDetectionRuleProposal`, unit-tested in detection-candidates.test.ts);
+// every real analytic resolves null today (2026-09-15), which would drop the
+// candidate before muting is ever exercised — so it's stubbed "proposable" here.
+vi.mock('@/lib/review/decisions/detection-operand-map', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/review/decisions/detection-operand-map')>();
+  return {
+    ...actual,
+    resolveDetectionRuleProposal: () =>
+      ({ operand: { id: 'stub' }, op: 'gte', value: 1 } as unknown as ReturnType<typeof actual.resolveDetectionRuleProposal>),
+  };
+});
 vi.setConfig({ testTimeout: 120_000 });
 
 /**
