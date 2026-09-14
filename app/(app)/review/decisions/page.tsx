@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { fetchNextDecision } from './actions';
 import { DecisionCard } from './DecisionCard';
 import { RelaxationDecisionCard } from './RelaxationDecisionCard';
+import { PromotionDecisionCard } from './PromotionDecisionCard';
+import { RetirementDecisionCard } from './RetirementDecisionCard';
 
 /**
  * Module 06 (Review & Graduation) `/review/decisions` — the Part 2 decision
@@ -44,12 +46,14 @@ export default async function ReviewDecisionsPage() {
   }
 
   if (result.status === 'plan_required') {
+    const headline = result.kind === 'promotion' ? 'Making a rule hard is a Pro feature.' : 'Turning a finding into a rule is a Pro feature.';
+    const sub = result.kind === 'promotion' ? 'Upgrade to promote or keep this rule soft.' : 'Upgrade to accept or defer graduation decisions.';
     return (
       <section className="flex flex-col gap-3" aria-labelledby="dec-h">
         <h1 id="dec-h" className="rq-h1">
-          Turning a finding into a rule is a Pro feature.
+          {headline}
         </h1>
-        <p className="rq-sub">Upgrade to accept or defer graduation decisions.</p>
+        <p className="rq-sub">{sub}</p>
         <Link href="/review" className="rq-btn rq-btn--ghost">
           Back to your review
         </Link>
@@ -87,6 +91,14 @@ export default async function ReviewDecisionsPage() {
 
   if (result.kind === 'relaxation') {
     return <RelaxationDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
+  }
+
+  if (result.kind === 'promotion') {
+    return <PromotionDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
+  }
+
+  if (result.kind === 'retirement') {
+    return <RetirementDecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;
   }
 
   return <DecisionCard initialIndex={result.index} initialTotal={result.total} initialDetail={result.detail} />;

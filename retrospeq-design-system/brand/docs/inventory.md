@@ -83,8 +83,8 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 4.5 | `/review` | No-trade week: "Streak intact — nothing was owed" | 07 §6.1 | new | ◐ |
 | 4.6 | `/review/decisions` | Graduation: evidence, cost, "Add the rule" / "Not yet" | 06 §5.1 | S11 | ◐ |
 | 4.7 | `/review/decisions` | Relaxation: "Which one is true?" equal pair | 06 §5.1 | S12 | ◐ |
-| 4.8 | `/review/decisions` | Promotion (soft → hard) | 06 §4.3 | new | ○ |
-| 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ○ |
+| 4.8 | `/review/decisions` | Promotion (soft → hard) | 06 §4.3 | new | ● |
+| 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ● |
 | 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ○ |
 | 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ○ |
 | 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |

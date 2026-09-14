@@ -239,3 +239,47 @@ export async function createTriggerCondition(input: CreateTriggerConditionInput)
     };
   });
 }
+
+export class TriggerConditionLifecycleConflictError extends Error {
+  constructor(public readonly conditionId: string) {
+    super(`Trigger condition ${conditionId} could not be retired — it is not active, or is not owned by this user.`);
+    this.name = 'TriggerConditionLifecycleConflictError';
+  }
+}
+
+export interface RetiredTriggerCondition {
+  retiredAt: string;
+}
+
+/**
+ * Module 06 (Review & Graduation) §4.4/§6.2's retirement-(condition) "Retire
+ * it" write path — the first lifecycle mutation this file has ever needed
+ * beyond create (grep-confirmed: no `state`-mutating query existed anywhere
+ * for `trigger_conditions` before this). One-way, matching Module 04's own
+ * `retireRuleState` (`lib/rules/severity-lifecycle-repository.ts`) shape and
+ * reasoning exactly: a single guarded UPDATE keyed on the expected PRIOR
+ * state (`state = 'active'`), `rowCount` checked, a lost race throws a
+ * named, typed error rather than silently no-op'ing. No advisory lock
+ * needed — this is a single-row guarded UPDATE with no cross-row
+ * correlated subquery (unlike `promoteRuleSeverity`'s hard-cap count), so
+ * Postgres's own row lock on the target row already serialises two
+ * concurrent callers correctly (the same reasoning that file's own header
+ * gives for why `retireRuleState` itself needs no such lock).
+ */
+export async function retireTriggerConditionState(userId: string, conditionId: string): Promise<RetiredTriggerCondition> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ retired_at: string }>(
+      `update retrospeq.trigger_conditions
+          set state = 'retired', retired_at = now()
+        where id = $1
+          and user_id = $2
+          and state = 'active'
+        returning retired_at::text as retired_at`,
+      [conditionId, userId],
+    );
+    if ((res.rowCount ?? 0) !== 1) {
+      throw new TriggerConditionLifecycleConflictError(conditionId);
+    }
+    return { retiredAt: res.rows[0]!.retired_at };
+  });
+}

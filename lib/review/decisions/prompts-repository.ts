@@ -62,45 +62,56 @@ export async function fetchCurrentReviewIdForDecisions(userId: string): Promise<
 // Reads
 // ---------------------------------------------------------------------
 
+export type DecisionPromptKind = 'graduation' | 'relaxation' | 'promotion' | 'retirement';
+
+/** §4.4/`types.ts`'s own header: retirement (decay) and retirement
+ *  (condition) share one `kind = 'retirement'` value, distinguished by
+ *  `review_prompts.subject_type` — `'rule'` for decay, `'trigger_condition'`
+ *  for condition. Every other kind's `subjectType` is present but unused by
+ *  today's callers (graduation is `'finding'`, relaxation/promotion are
+ *  `'rule'`). */
+export type DecisionPromptSubjectType = 'rule' | 'finding' | 'trigger_condition';
+
 export interface PendingDecisionPromptRow {
   id: string;
   rank: number;
-  kind: 'graduation' | 'relaxation';
-  /** Raw jsonb — parsed against `graduationEvidenceSchema`/
-   *  `relaxationEvidenceSchema` by the caller, keyed on `kind`, not here.
-   *  This file has no opinion about either evidence shape, matching
-   *  `review-prompts-repository.ts`'s own "this function performs no
-   *  eligibility logic of its own" separation of concerns. */
+  kind: DecisionPromptKind;
+  subjectType: DecisionPromptSubjectType;
+  /** Raw jsonb — parsed against the evidence schema matching `kind` (and,
+   *  for `retirement`, `subjectType`) by the caller, not here. This file
+   *  has no opinion about any evidence shape, matching `review-prompts-
+   *  repository.ts`'s own "this function performs no eligibility logic of
+   *  its own" separation of concerns. */
   payload: unknown;
 }
 
+const DECISION_KINDS: DecisionPromptKind[] = ['graduation', 'relaxation', 'promotion', 'retirement'];
+
 /**
- * Every PENDING `kind in ('graduation', 'relaxation')` prompt for this
- * review, oldest-ranked first — §2.1's "Part 2 decisions, one at a time."
+ * Every PENDING decision-kind prompt for this review, oldest-ranked first
+ * — §2.1's "Part 2 decisions, one at a time."
  *
- * Module 06 Slice 7 widened this from graduation-only (Slice 6) to also
- * include relaxation — the two kinds this repo's `/review/decisions`
- * screen can render a real decision for today. `rank` already encodes the
- * cross-kind priority §4.3 specifies (relaxation ranked ahead of
- * graduation across the WHOLE review at write time — `ranking.ts`'s own
- * `rankAndCapPromptCandidates`), so `order by rank asc` alone is sufficient
- * to produce the correct "next decision across kinds" ordering — no
- * per-kind interleaving logic needed here. Promotion/retirement/detection
- * are deliberately NOT in this `kind in (...)` list yet — no decision
- * screen exists for them (a future slice's own scope, not a bug: those
- * rows simply sit `pending` until that slice ships, exactly like
- * relaxation itself sat unrendered between Slice 4 and this one).
+ * Widened across Module 06's slices as each kind's own decision screen
+ * shipped: graduation (Slice 6), relaxation (Slice 7), promotion/retirement
+ * (this slice). `rank` already encodes the cross-kind priority §4.3
+ * specifies at write time (`ranking.ts`'s own `rankAndCapPromptCandidates`),
+ * so `order by rank asc` alone is sufficient to produce the correct
+ * "next decision across kinds" ordering — no per-kind interleaving logic
+ * needed here. Detection is deliberately NOT in this `kind in (...)` list
+ * yet — no decision screen exists for it (a future slice's own scope, not
+ * a bug: those rows simply sit `pending` until that slice ships, exactly
+ * like promotion/retirement themselves sat unrendered until this one).
  */
 export async function fetchPendingDecisionPrompts(userId: string, reviewId: string): Promise<PendingDecisionPromptRow[]> {
   return withUserConnection(userId, async (client) => {
-    const res = await client.query<{ id: string; rank: number; kind: 'graduation' | 'relaxation'; payload: unknown }>(
-      `select id, rank, kind, payload
+    const res = await client.query<{ id: string; rank: number; kind: DecisionPromptKind; subject_type: DecisionPromptSubjectType; payload: unknown }>(
+      `select id, rank, kind, subject_type, payload
          from retrospeq.review_prompts
-        where user_id = $1 and review_id = $2 and kind in ('graduation', 'relaxation') and state = 'pending'
+        where user_id = $1 and review_id = $2 and kind = any($3::text[]) and state = 'pending'
         order by rank asc, created_at asc`,
-      [userId, reviewId],
+      [userId, reviewId, DECISION_KINDS],
     );
-    return res.rows;
+    return res.rows.map((row) => ({ id: row.id, rank: row.rank, kind: row.kind, subjectType: row.subject_type, payload: row.payload }));
   });
 }
 
@@ -129,8 +140,8 @@ export async function fetchDecisionCounts(userId: string, reviewId: string): Pro
       `select count(*)::text as total,
               count(*) filter (where state = 'pending')::text as pending
          from retrospeq.review_prompts
-        where user_id = $1 and review_id = $2 and kind in ('graduation', 'relaxation')`,
-      [userId, reviewId],
+        where user_id = $1 and review_id = $2 and kind = any($3::text[])`,
+      [userId, reviewId, DECISION_KINDS],
     );
     const row = res.rows[0];
     return { total: Number(row?.total ?? '0'), pending: Number(row?.pending ?? '0') };
@@ -141,6 +152,8 @@ export interface PromptRow {
   id: string;
   reviewId: string | null;
   kind: string;
+  subjectType: string;
+  subjectId: string;
   state: string;
   payload: unknown;
 }
@@ -155,15 +168,31 @@ export interface PromptRow {
  *  posture (`rules/actions.ts`'s `RULE_NOT_FOUND` precedent). */
 export async function fetchPromptById(userId: string, promptId: string): Promise<PromptRow | null> {
   return withUserConnection(userId, async (client) => {
-    const res = await client.query<{ id: string; review_id: string | null; kind: string; state: string; payload: unknown }>(
-      `select id, review_id, kind, state, payload
+    const res = await client.query<{
+      id: string;
+      review_id: string | null;
+      kind: string;
+      subject_type: string;
+      subject_id: string;
+      state: string;
+      payload: unknown;
+    }>(
+      `select id, review_id, kind, subject_type, subject_id, state, payload
          from retrospeq.review_prompts
         where id = $1 and user_id = $2`,
       [promptId, userId],
     );
     const row = res.rows[0];
     if (!row) return null;
-    return { id: row.id, reviewId: row.review_id, kind: row.kind, state: row.state, payload: row.payload };
+    return {
+      id: row.id,
+      reviewId: row.review_id,
+      kind: row.kind,
+      subjectType: row.subject_type,
+      subjectId: row.subject_id,
+      state: row.state,
+      payload: row.payload,
+    };
   });
 }
 
@@ -302,6 +331,146 @@ export async function markPromptDeferred(userId: string, promptId: string): Prom
       `update retrospeq.review_prompts
           set state = 'deferred'
         where id = $1 and user_id = $2 and kind = 'graduation' and state = 'pending'
+        returning id`,
+      [promptId, userId],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+// ---------------------------------------------------------------------
+// Promotion (frame 4.8) + retirement (frame 4.9) — this slice.
+// ---------------------------------------------------------------------
+
+/**
+ * §4.6-shaped "Add the rule" precedent, reused for promotion's "Make it
+ * hard": the rule write itself (`promoteRule`/Module 04) already ran and
+ * succeeded BEFORE this function is called (`acceptPromotionDecision`/
+ * `swapAndPromoteDecision`, `app/(app)/review/decisions/actions.ts`) — this
+ * only records the outcome on the prompt row, same "prompt bookkeeping is
+ * separate from the domain write it authorises" split `markPromptAccepted`
+ * establishes for graduation.
+ */
+export async function markPromptPromoted(userId: string, promptId: string): Promise<{ id: string } | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'accepted',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'made_hard'::text)
+        where id = $1 and user_id = $2 and kind = 'promotion' and state = 'pending'
+        returning id`,
+      [promptId, userId],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+/**
+ * §6.2's `pending --decline--> declined` transition — the FIRST decline
+ * writer in this codebase (every prior slice's own header notes "no
+ * decline-writing function exists in this repo today," grep-confirmed at
+ * this slice's own dispatch time). Two writes in ONE transaction
+ * (`withUserConnection` wraps its callback in begin/commit —
+ * `lib/supabase/direct.ts`'s own header): the `review_prompts` row moves to
+ * `declined` (guarded on `state = 'pending'`, the same double-submit
+ * enforcement every other transition in this file uses), then
+ * `prompt_history` is upserted per §4.5's own state machine — decline
+ * count incremented, `occurrences_at_last_decline` snapshotted, and
+ * `muted = true` set PERMANENTLY the moment `decline_count` reaches 2
+ * ("Declined twice -> muted = true. Permanently.").
+ *
+ * `occurrenceCount` is the caller's own per-kind "occurrences" measure
+ * (§4.5: "re-raise only if occurrences roughly double"), matching
+ * `filterDormant`'s own already-built generic contract
+ * (`lib/review/prompt-candidates/prompt-history-repository.ts`) rather than
+ * inventing a second convention — for promotion (this slice's only real
+ * decline caller today), `acceptPromotionDecision`'s own caller passes
+ * `applicableEvaluations` (the rolling-window evaluation count §5.7's own
+ * eligibility gate already measures), the same "evidence accumulating
+ * over time" framing graduation's own ranking already uses for `n`.
+ */
+export async function markPromptDeclined(
+  userId: string,
+  promptId: string,
+  kind: 'promotion',
+  occurrenceCount: number,
+): Promise<{ id: string; muted: boolean } | null> {
+  return withUserConnection(userId, async (client) => {
+    const declined = await client.query<{ subject_type: string; subject_id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'declined',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'kept_soft'::text)
+        where id = $1 and user_id = $2 and kind = $3 and state = 'pending'
+        returning subject_type, subject_id`,
+      [promptId, userId, kind],
+    );
+    const row = declined.rows[0];
+    if (!row) return null;
+
+    const historyRes = await client.query<{ decline_count: number; muted: boolean }>(
+      `insert into retrospeq.prompt_history
+         (user_id, subject_type, subject_id, kind, shown_count, decline_count, last_shown_at, occurrences_at_last_decline, muted, mute_reason)
+       values ($1, $2, $3, $4, 1, 1, now(), $5, false, null)
+       on conflict (user_id, subject_type, subject_id, kind) do update
+         set decline_count = prompt_history.decline_count + 1,
+             occurrences_at_last_decline = $5,
+             last_shown_at = now(),
+             muted = (prompt_history.decline_count + 1) >= 2,
+             mute_reason = case when (prompt_history.decline_count + 1) >= 2 then 'declined_twice' else prompt_history.mute_reason end
+       returning decline_count, muted`,
+      [userId, row.subject_type, row.subject_id, kind, occurrenceCount],
+    );
+
+    return { id: promptId, muted: historyRes.rows[0]?.muted ?? false };
+  });
+}
+
+/**
+ * §4.9's equal pair — "Retire it." Mirrors `markPromptPromoted`'s own
+ * "the domain write already ran, this only records the outcome" split:
+ * `retireRule`/`retireTriggerConditionState` run BEFORE this is called.
+ * `subjectType` disambiguates the two retirement sub-kinds that share one
+ * `kind = 'retirement'` value (`types.ts`'s own header) — not needed for
+ * correctness here (the guarded UPDATE is keyed on `id`/`user_id`/`state`
+ * alone), but recorded so a future read never has to re-derive it from the
+ * payload shape.
+ */
+export async function markPromptRetired(userId: string, promptId: string): Promise<{ id: string } | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'accepted',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'retire'::text)
+        where id = $1 and user_id = $2 and kind = 'retirement' and state = 'pending'
+        returning id`,
+      [promptId, userId],
+    );
+    return res.rows[0] ?? null;
+  });
+}
+
+/**
+ * §4.9's equal pair — "Keep the rule." §4.7/`docs/adr/0041` judgment call
+ * #1's exact reasoning, reapplied: the trader looked at "has this edge
+ * stopped working?" and affirmatively said "no, keep it" — a REAL, engaged
+ * decision (`state = 'accepted'`), never a decline. §4.7's own symmetric
+ * framing ("the product does not have an opinion about which the trader
+ * should choose") is why this is NOT the same `markPromptDeclined` path
+ * promotion's asymmetric "Keep it soft" uses: retirement's choice is a
+ * true fork with no default, so BOTH outcomes are equally "the trader
+ * decided," not one accepted and one declined.
+ */
+export async function markPromptKept(userId: string, promptId: string): Promise<{ id: string } | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `update retrospeq.review_prompts
+          set state = 'accepted',
+              decided_at = now(),
+              payload = payload || jsonb_build_object('resolution', 'keep'::text)
+        where id = $1 and user_id = $2 and kind = 'retirement' and state = 'pending'
         returning id`,
       [promptId, userId],
     );

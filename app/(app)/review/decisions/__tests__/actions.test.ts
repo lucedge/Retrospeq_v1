@@ -239,7 +239,7 @@ describe('graduation entitlement (Pro-only) is checked on both the read and the 
 
     const result = await fetchNextDecision();
 
-    expect(result).toEqual({ success: true, status: 'plan_required' });
+    expect(result).toEqual({ success: true, status: 'plan_required', kind: 'graduation' });
     // Per Module 06 Slice 7 (docs/adr/0041 judgment call #3), gating moved
     // from per-screen to per-prompt — `fetchCurrentReviewIdForDecisions`
     // IS now called (a relaxation prompt ranked ahead of this one, if any,
@@ -632,7 +632,7 @@ describe('fetchNextDecision — status branches', () => {
 
     const result = await fetchNextDecision();
 
-    expect(result).toEqual({ success: true, status: 'plan_required' });
+    expect(result).toEqual({ success: true, status: 'plan_required', kind: 'graduation' });
     expect(buildGraduationPromptDetailMock).not.toHaveBeenCalled();
   });
 

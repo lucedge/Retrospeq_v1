@@ -16,7 +16,15 @@ if (forced !== undefined) tier = Number(forced);
 else { const r = spawnSync('node', ['scripts/classify-change.mjs'], { encoding: 'utf8' }); process.stdout.write(r.stdout); tier = r.status; }
 
 // Test scope = top-two path segments of every changed source file (lib/rules, app/(app)/rules, …).
-const dirs = [...new Set(changed.filter((f) => /^(lib|app|supabase)\//.test(f)).map((f) => f.split('/').slice(0, 2).join('/')))];
+// Scope = the feature folder, not the app: lib/<module>, app/(group)/<route>,
+// supabase/migrations. `app/(app)` alone is the whole product and made a
+// "scoped" live run take longer than an agent's stall limit (2026-09-15).
+const featureDir = (f) => {
+  const parts = f.split('/');
+  if (parts[0] === 'app' && parts[1]?.startsWith('(')) return parts.slice(0, Math.min(3, parts.length - 1)).join('/');
+  return parts.slice(0, 2).join('/');
+};
+const dirs = [...new Set(changed.filter((f) => /^(lib|app|supabase)\//.test(f)).map(featureDir))];
 const scope = dirs.length ? dirs.map((d) => JSON.stringify(d)).join(' ') : '';
 const scopeNote = dirs.length ? ` in ${dirs.join(', ')}` : ' (no source dirs changed → skipped)';
 
@@ -25,7 +33,7 @@ if (tier >= 1) {
   steps.push(['tsc', 'npx tsc --noEmit'], ['eslint (changed files)', changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).length ? `npx eslint ${changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).map((f) => JSON.stringify(f)).join(' ')}` : 'true']);
   if (scope) steps.push([`unit${scopeNote}`, `npx vitest run ${scope} --exclude "**/*.live.test.ts"`]);
 }
-if (tier >= 2 && scope) steps.push([`live DB${scopeNote}`, `npx vitest run live.test ${scope} --maxWorkers=2`]);
+if (tier >= 2 && scope) steps.push([`live DB${scopeNote}`, `npx vitest run live.test ${scope} --maxWorkers=1`]);
 if (tier >= 3) steps.push(['security bundle', 'npm run check:security']);
 
 let failed = false;

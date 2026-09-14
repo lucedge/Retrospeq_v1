@@ -21,6 +21,10 @@ import {
   markPromptDeferred,
   markPromptRecommitted,
   markPromptAdjusted,
+  markPromptPromoted,
+  markPromptDeclined,
+  markPromptRetired,
+  markPromptKept,
 } from '@/lib/review/decisions/prompts-repository';
 import { buildGraduationPromptDetail, type GraduationPromptDetail } from '@/lib/review/decisions/graduation-evidence-detail';
 import { graduationEvidenceSchema } from '@/lib/review/decisions/graduation-evidence-schema';
@@ -28,6 +32,25 @@ import { resolveOperandForField, deriveRuleInputFromSegment } from '@/lib/review
 import { buildRelaxationPromptDetail, fetchLiveRelaxationFacts, type RelaxationPromptDetail } from '@/lib/review/decisions/relaxation-evidence-detail';
 import { relaxationEvidenceSchema } from '@/lib/review/decisions/relaxation-evidence-schema';
 import { canAdjustRelaxation, deriveAdjustedValue } from '@/lib/review/decisions/relaxation-operand-map';
+import { buildPromotionPromptDetail, type PromotionPromptDetail } from '@/lib/review/decisions/promotion-evidence-detail';
+import { promotionEvidenceSchema } from '@/lib/review/decisions/promotion-evidence-schema';
+import {
+  buildRetirementDecayPromptDetail,
+  buildRetirementConditionPromptDetail,
+  type RetirementPromptDetail,
+} from '@/lib/review/decisions/retirement-evidence-detail';
+import { retirementDecayEvidenceSchema, retirementConditionEvidenceSchema } from '@/lib/review/decisions/retirement-evidence-schema';
+// Module 06 Slice 8 (promotion/retirement) — `promoteRule`/`demoteRule`/
+// `retireRule` are Module 04's OWN public Server Actions
+// (`app/(app)/rules/actions.ts`), imported cross-route exactly the way this
+// file already imports `editRule` for relaxation's "adjust" (see that
+// import's own header comment for the full established precedent). Every
+// one of the three already re-resolves ownership/state/eligibility/
+// entitlement itself from the database at call time — nothing here trusts
+// a client-held "eligible"/"has room" boolean as the authorization for the
+// actual write.
+import { promoteRule, demoteRule, retireRule } from '../../rules/actions';
+import { retireTriggerConditionState, TriggerConditionLifecycleConflictError } from '@/lib/fields/trigger-conditions-repository';
 // Module 06 Slice 7 — `editRule` is Module 04's OWN public Server Action
 // (`app/(app)/rules/actions.ts`), imported cross-route exactly the way
 // `ManualEntryScreen.tsx` imports `recordOverride`/`fetchAmbientState` and
@@ -175,13 +198,15 @@ const promptIdSchema = z.uuid();
 
 export type NextDecisionResult =
   | { success?: false; error: { code: string; user_message: string; retryable: boolean } }
-  /** The NEXT prompt in `rank` order happens to be a `graduation` one, and
-   *  this trader's plan doesn't include Module 04 §4.3's Pro-only
-   *  `graduation` capability. A relaxation prompt ranked AFTER this one
-   *  (if any) is simply not reached yet — deferring/accepting/whichever
-   *  eventually resolves this graduation prompt will surface it next,
-   *  exactly like any other "next decision in the queue" progression. */
-  | { success: true; status: 'plan_required' }
+  /** The NEXT prompt in `rank` order happens to be a `graduation` or
+   *  `promotion` one, and this trader's plan doesn't include the Pro-only
+   *  capability it needs (`graduation`, or `rules.hard` for promotion). A
+   *  prompt ranked AFTER this one (if any) is simply not reached yet —
+   *  deferring/accepting/declining whichever eventually resolves this one
+   *  will surface it next, exactly like any other "next decision in the
+   *  queue" progression. `kind` distinguishes the two so the page can show
+   *  the right copy. */
+  | { success: true; status: 'plan_required'; kind: 'graduation' | 'promotion' }
   /** No `reviews` row exists yet for the current period — the trader has
    *  never opened `/review` this period, so nothing has been decided-upon
    *  yet either. */
@@ -192,7 +217,9 @@ export type NextDecisionResult =
    *  has already been resolved this session. */
   | { success: true; status: 'none_pending' }
   | { success: true; status: 'ready'; kind: 'graduation'; index: number; total: number; detail: GraduationPromptDetail }
-  | { success: true; status: 'ready'; kind: 'relaxation'; index: number; total: number; detail: RelaxationPromptDetail };
+  | { success: true; status: 'ready'; kind: 'relaxation'; index: number; total: number; detail: RelaxationPromptDetail }
+  | { success: true; status: 'ready'; kind: 'promotion'; index: number; total: number; detail: PromotionPromptDetail }
+  | { success: true; status: 'ready'; kind: 'retirement'; index: number; total: number; detail: RetirementPromptDetail };
 
 export async function fetchNextDecision(): Promise<NextDecisionResult> {
   const user = await requireSessionAndRateLimit('reviewDecision');
@@ -246,7 +273,7 @@ export async function fetchNextDecision(): Promise<NextDecisionResult> {
         // must keep blocking progress rather than being silently skipped
         // past (matching Slice 6's original, unchanged posture for this
         // exact case).
-        return { success: true, status: 'plan_required' };
+        return { success: true, status: 'plan_required', kind: 'graduation' };
       }
 
       const parsedEvidence = graduationEvidenceSchema.safeParse(candidate.payload);
@@ -261,18 +288,72 @@ export async function fetchNextDecision(): Promise<NextDecisionResult> {
       return { success: true, status: 'ready', kind: 'graduation', index, total, detail };
     }
 
-    // kind === 'relaxation' — no entitlement gate (see this file's own header).
-    const parsedEvidence = relaxationEvidenceSchema.safeParse(candidate.payload);
+    if (candidate.kind === 'relaxation') {
+      const parsedEvidence = relaxationEvidenceSchema.safeParse(candidate.payload);
+      if (!parsedEvidence.success) {
+        console.error('[review/decisions:fetchNextDecision] corrupt relaxation payload for prompt', candidate.id, parsedEvidence.error);
+        return {
+          error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+        };
+      }
+
+      const detail = await buildRelaxationPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
+      if (!detail.canDecide) continue;
+      return { success: true, status: 'ready', kind: 'relaxation', index, total, detail };
+    }
+
+    if (candidate.kind === 'promotion') {
+      // "Making a rule hard is a Pro feature" (§5.7's own `rules.hard`
+      // cap) is a STRUCTURAL plan block, not a per-rule fact — the exact
+      // same "don't show an interaction that will just fail" gate this
+      // file already applies to graduation (see this file's own header).
+      // Being at the 6/6 QUOTA (Pro, room exhausted) is deliberately NOT
+      // gated here — that is a real decision (the swap chooser), not a
+      // dead end, surfaced by `acceptPromotionDecision` itself.
+      const hardEntitlement = await canForUser(user.id, 'rules.hard');
+      if (hardEntitlement.reason === 'plan') {
+        return { success: true, status: 'plan_required', kind: 'promotion' };
+      }
+
+      const parsedEvidence = promotionEvidenceSchema.safeParse(candidate.payload);
+      if (!parsedEvidence.success) {
+        console.error('[review/decisions:fetchNextDecision] corrupt promotion payload for prompt', candidate.id, parsedEvidence.error);
+        return {
+          error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+        };
+      }
+
+      const detail = await buildPromotionPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
+      return { success: true, status: 'ready', kind: 'promotion', index, total, detail };
+    }
+
+    // kind === 'retirement' — no entitlement gate (retiring is free for
+    // every plan). §4.4/`types.ts`'s own header: decay vs condition is
+    // told apart by `subjectType`, not by a payload field the schema
+    // doesn't have.
+    if (candidate.subjectType === 'trigger_condition') {
+      const parsedEvidence = retirementConditionEvidenceSchema.safeParse(candidate.payload);
+      if (!parsedEvidence.success) {
+        console.error('[review/decisions:fetchNextDecision] corrupt retirement(condition) payload for prompt', candidate.id, parsedEvidence.error);
+        return {
+          error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+        };
+      }
+      const detail = await buildRetirementConditionPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
+      if (!detail.canDecide) continue;
+      return { success: true, status: 'ready', kind: 'retirement', index, total, detail };
+    }
+
+    const parsedEvidence = retirementDecayEvidenceSchema.safeParse(candidate.payload);
     if (!parsedEvidence.success) {
-      console.error('[review/decisions:fetchNextDecision] corrupt relaxation payload for prompt', candidate.id, parsedEvidence.error);
+      console.error('[review/decisions:fetchNextDecision] corrupt retirement(decay) payload for prompt', candidate.id, parsedEvidence.error);
       return {
         error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
       };
     }
-
-    const detail = await buildRelaxationPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
+    const detail = await buildRetirementDecayPromptDetail(user.id, candidate.id, candidate.rank, parsedEvidence.data);
     if (!detail.canDecide) continue;
-    return { success: true, status: 'ready', kind: 'relaxation', index, total, detail };
+    return { success: true, status: 'ready', kind: 'retirement', index, total, detail };
   }
 
   // Every pending candidate was skipped — none was actually decidable.
@@ -768,4 +849,350 @@ export async function adjustRelaxationDecision(promptId: string): Promise<Relaxa
   revalidatePath('/rules');
 
   return { success: true, ruleId: facts.rule.ruleId, newValue: rule.value, newRendered: rule.rendered };
+}
+
+// ---------------------------------------------------------------------
+// acceptPromotionDecision / declinePromotionDecision / swapAndPromoteDecision
+// — frame 4.8's §5.7 soft -> hard transition. Module 06 Slice 8.
+// ---------------------------------------------------------------------
+
+export interface PromotionDecisionActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  ruleId?: string;
+  /** Populated only on a `RULE_HARD_CAP` rejection, verbatim pass-through
+   *  of `promoteRule`'s own — the caller's own currently active hard
+   *  rules, for the swap chooser (`swapAndPromoteDecision` below). */
+  hardCapChooser?: { ruleId: string; rendered: string }[];
+}
+
+function promotionNotFoundResult(): PromotionDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_NOT_FOUND', user_message: "We couldn't find that decision.", retryable: false } };
+}
+
+function promotionAlreadyDecidedResult(): PromotionDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_ALREADY_DECIDED', user_message: 'This decision has already been made.', retryable: false } };
+}
+
+/** §9 `PROMPT_ALREADY_DECIDED` — same idempotent-replay posture every other
+ *  decision in this file already establishes: a double submit (or a submit
+ *  against a prompt this session already resolved) replays the outcome
+ *  that actually won, never a bare error. */
+function replayIfPromotionDecided(payload: unknown): PromotionDecisionActionResult | null {
+  const parsed = promotionEvidenceSchema.safeParse(payload);
+  if (!parsed.success || !parsed.data.resolution) return null;
+  return { success: true, ruleId: parsed.data.ruleId };
+}
+
+function genericPromotionError(code: string, message: string): PromotionDecisionActionResult {
+  return { error: { code, user_message: message, retryable: true } };
+}
+
+/**
+ * Frame 4.8, "Make it hard." Calls `promoteRule` (Module 04's OWN public
+ * Server Action, `app/(app)/rules/actions.ts`) directly rather than
+ * reimplementing any of its own gates — ownership, live eligibility
+ * (6wk/20-eval/95%/zero-recent-breaks), the `rules.hard` Pro entitlement,
+ * and the 6-active-hard-rule cap all re-resolve fresh at THIS call, never
+ * trusted from whatever `fetchNextDecision`/`buildPromotionPromptDetail`
+ * last rendered — the same "re-resolve live, never trust a client round
+ * trip for a write" posture `acceptGraduationDecision` already establishes.
+ *
+ * `RULE_HARD_CAP` (Pro, already at 6/6) is NOT surfaced as a failure here —
+ * per this slice's own dispatch ("if the hard cap is hit, surface the
+ * existing swap choice rather than failing"), it is passed straight
+ * through with `hardCapChooser` attached, and the UI renders
+ * `promoteRule`'s own already-built trade-off chooser
+ * (`swapAndPromoteDecision` below is the one and only way this screen ever
+ * resolves it). The prompt itself stays `pending` in this case — nothing
+ * to record yet, since nothing was decided.
+ */
+export async function acceptPromotionDecision(promptId: string): Promise<PromotionDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'promotion') return promotionNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfPromotionDecided(prompt.payload) ?? promotionAlreadyDecidedResult();
+
+  const parsedEvidence = promotionEvidenceSchema.safeParse(prompt.payload);
+  if (!parsedEvidence.success) {
+    console.error('[review/decisions:acceptPromotionDecision] corrupt payload for prompt', prompt.id, parsedEvidence.error);
+    return {
+      error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+    };
+  }
+
+  const promoteResult = await promoteRule(parsedEvidence.data.ruleId);
+  if (!promoteResult.success) {
+    if (promoteResult.error?.code === 'RULE_HARD_CAP') {
+      return { error: promoteResult.error, hardCapChooser: promoteResult.hardCapChooser };
+    }
+    // Verbatim pass-through of promoteRule's own honest rejection (not
+    // eligible, already hard, retired, entitlement plan-block) — no
+    // second, redundant gate here.
+    return { error: promoteResult.error ?? genericPromotionError('PROMOTION_PROMOTE_FAILED', 'Something went wrong. Please try again.').error };
+  }
+
+  const marked = await markPromptPromoted(user.id, parsedId.data);
+  if (!marked) {
+    // Genuine double-submit race lost -- a concurrent request already
+    // flipped this exact prompt to a terminal state. The rule is already
+    // promoted regardless (that write already succeeded); replay whichever
+    // outcome actually won on the prompt row rather than a bare error.
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfPromotionDecided(current.payload) : null) ?? promotionAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  revalidatePath('/rules');
+
+  return { success: true, ruleId: parsedEvidence.data.ruleId };
+}
+
+/**
+ * Frame 4.8, "Keep it soft." Per this slice's own dispatch: §6.2's decline
+ * transition, NOT a defer — the trader was offered "make this hard" and
+ * affirmatively said no to the offer itself, the exact case §4.5 reserves
+ * `decline_count`/dormancy tracking for (unlike relaxation's "recommit,"
+ * which affirms the CURRENT state is correct rather than declining an
+ * offer). No rule write of any kind — the rule stays exactly as it is.
+ */
+export async function declinePromotionDecision(promptId: string): Promise<PromotionDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'promotion') return promotionNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfPromotionDecided(prompt.payload) ?? promotionAlreadyDecidedResult();
+
+  const parsedEvidence = promotionEvidenceSchema.safeParse(prompt.payload);
+  if (!parsedEvidence.success) {
+    console.error('[review/decisions:declinePromotionDecision] corrupt payload for prompt', prompt.id, parsedEvidence.error);
+    return {
+      error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+    };
+  }
+
+  const marked = await markPromptDeclined(user.id, parsedId.data, 'promotion', parsedEvidence.data.applicableEvaluations);
+  if (!marked) {
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfPromotionDecided(current.payload) : null) ?? promotionAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  return { success: true };
+}
+
+/**
+ * §5.7's own "trade-off, not an error" resolution for a `RULE_HARD_CAP`
+ * rejection — `demoteRuleId` is one of `promoteRule`'s own `hardCapChooser`
+ * entries (verified, not trusted: `demoteRule` re-checks ownership/state
+ * itself). Demotes the chosen rule, THEN retries `promoteRule` for this
+ * prompt's own rule — both existing Module 04 Server Actions, called in
+ * sequence, no reimplementation of either transition.
+ */
+export async function swapAndPromoteDecision(promptId: string, demoteRuleId: string): Promise<PromotionDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  const parsedDemoteId = z.uuid().safeParse(demoteRuleId);
+  if (!parsedId.success || !parsedDemoteId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'promotion') return promotionNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfPromotionDecided(prompt.payload) ?? promotionAlreadyDecidedResult();
+
+  const parsedEvidence = promotionEvidenceSchema.safeParse(prompt.payload);
+  if (!parsedEvidence.success) {
+    console.error('[review/decisions:swapAndPromoteDecision] corrupt payload for prompt', prompt.id, parsedEvidence.error);
+    return {
+      error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+    };
+  }
+
+  const demoteResult = await demoteRule(parsedDemoteId.data);
+  if (!demoteResult.success) {
+    return { error: demoteResult.error ?? genericPromotionError('PROMOTION_SWAP_DEMOTE_FAILED', 'Something went wrong. Please try again.').error };
+  }
+
+  const promoteResult = await promoteRule(parsedEvidence.data.ruleId);
+  if (!promoteResult.success) {
+    // A genuine, if narrow, race: another concurrent write filled the
+    // freed slot before this request's own promote ran. Surface the
+    // (fresh) chooser again rather than a dead end.
+    if (promoteResult.error?.code === 'RULE_HARD_CAP') {
+      return { error: promoteResult.error, hardCapChooser: promoteResult.hardCapChooser };
+    }
+    return { error: promoteResult.error ?? genericPromotionError('PROMOTION_SWAP_PROMOTE_FAILED', 'Something went wrong. Please try again.').error };
+  }
+
+  const marked = await markPromptPromoted(user.id, parsedId.data);
+  if (!marked) {
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfPromotionDecided(current.payload) : null) ?? promotionAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  revalidatePath('/rules');
+
+  return { success: true, ruleId: parsedEvidence.data.ruleId };
+}
+
+// ---------------------------------------------------------------------
+// acceptRetirementDecision / keepRetirementDecision — frame 4.9's equal
+// pair, decay and condition sub-kinds. Module 06 Slice 8.
+// ---------------------------------------------------------------------
+
+export interface RetirementDecisionActionResult {
+  error?: { code: string; user_message: string; retryable: boolean };
+  success?: boolean;
+  subjectType?: 'rule' | 'trigger_condition';
+}
+
+function retirementNotFoundResult(): RetirementDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_NOT_FOUND', user_message: "We couldn't find that decision.", retryable: false } };
+}
+
+function retirementAlreadyDecidedResult(): RetirementDecisionActionResult {
+  return { error: { code: 'REVIEW_PROMPT_ALREADY_DECIDED', user_message: 'This decision has already been made.', retryable: false } };
+}
+
+/** §9 `PROMPT_ALREADY_DECIDED` — tries both retirement evidence shapes
+ *  (decay then condition), since a `kind = 'retirement'` prompt could be
+ *  either sub-kind and this file has no separate discriminant column on
+ *  hand at replay time beyond the payload shape itself. */
+function replayIfRetirementDecided(payload: unknown): RetirementDecisionActionResult | null {
+  const decay = retirementDecayEvidenceSchema.safeParse(payload);
+  if (decay.success && decay.data.resolution) return { success: true, subjectType: 'rule' };
+  const condition = retirementConditionEvidenceSchema.safeParse(payload);
+  if (condition.success && condition.data.resolution) return { success: true, subjectType: 'trigger_condition' };
+  return null;
+}
+
+/**
+ * Frame 4.9, "Retire it." Dispatches on `subjectType` (`'rule'` for decay,
+ * `'trigger_condition'` for condition — `types.ts`'s own header), calling
+ * the matching existing lifecycle write: `retireRule` (Module 04's OWN
+ * public Server Action, already reviewed) for decay, or the new
+ * `retireTriggerConditionState` (`lib/fields/trigger-conditions-
+ * repository.ts`, this slice — no public "retire a trigger condition"
+ * Server Action existed anywhere in this codebase before it) for
+ * condition, called directly under this action's own real session +
+ * ownership-scoped connection, the same "reuse the lib function directly,
+ * don't stand up a redundant public action" posture `insertRuleFieldUsage`
+ * already establishes for graduation.
+ */
+export async function acceptRetirementDecision(promptId: string): Promise<RetirementDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'retirement') return retirementNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfRetirementDecided(prompt.payload) ?? retirementAlreadyDecidedResult();
+
+  if (prompt.subjectType === 'trigger_condition') {
+    const parsedEvidence = retirementConditionEvidenceSchema.safeParse(prompt.payload);
+    if (!parsedEvidence.success) {
+      console.error('[review/decisions:acceptRetirementDecision] corrupt condition payload for prompt', prompt.id, parsedEvidence.error);
+      return {
+        error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+      };
+    }
+    try {
+      await retireTriggerConditionState(user.id, parsedEvidence.data.conditionId);
+    } catch (err) {
+      if (err instanceof TriggerConditionLifecycleConflictError) {
+        return {
+          error: {
+            code: 'RETIREMENT_SUBJECT_GONE',
+            user_message: 'This has changed since your review was prepared. Please refresh and try again.',
+            retryable: true,
+          },
+        };
+      }
+      console.error('[review/decisions:acceptRetirementDecision] retireTriggerConditionState failed:', err);
+      return { error: { code: 'RETIREMENT_RETIRE_FAILED', user_message: 'Something went wrong. Please try again.', retryable: true } };
+    }
+  } else {
+    const parsedEvidence = retirementDecayEvidenceSchema.safeParse(prompt.payload);
+    if (!parsedEvidence.success) {
+      console.error('[review/decisions:acceptRetirementDecision] corrupt decay payload for prompt', prompt.id, parsedEvidence.error);
+      return {
+        error: { code: 'REVIEW_PROMPT_CORRUPT', user_message: 'Something went wrong loading this decision. Please try again.', retryable: true },
+      };
+    }
+    const retireResult = await retireRule(parsedEvidence.data.ruleId);
+    if (!retireResult.success) {
+      // Verbatim pass-through of retireRule's own honest rejection
+      // (already retired, wrong state) — no second, redundant gate here.
+      return { error: retireResult.error ?? { code: 'RETIREMENT_RETIRE_FAILED', user_message: 'Something went wrong. Please try again.', retryable: true } };
+    }
+  }
+
+  const marked = await markPromptRetired(user.id, parsedId.data);
+  if (!marked) {
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfRetirementDecided(current.payload) : null) ?? retirementAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+  revalidatePath('/rulebook');
+  revalidatePath('/rules');
+
+  return { success: true, subjectType: prompt.subjectType === 'trigger_condition' ? 'trigger_condition' : 'rule' };
+}
+
+/**
+ * Frame 4.9, "Keep the rule." §4.7/`docs/adr/0041` judgment call #1's
+ * reasoning, reapplied per `markPromptKept`'s own header: a real, engaged
+ * decision (`state = 'accepted'`), never a decline — §4.9's own equal-pair
+ * framing means both outcomes are equally "the trader decided," with no
+ * default and no dormancy/mute tracking for either side.
+ */
+export async function keepRetirementDecision(promptId: string): Promise<RetirementDecisionActionResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  const parsedId = promptIdSchema.safeParse(promptId);
+  if (!parsedId.success) {
+    return { error: { code: 'REVIEW_DECISION_INVALID_INPUT', user_message: 'Something went wrong. Please try again.', retryable: false } };
+  }
+
+  const prompt = await fetchPromptById(user.id, parsedId.data);
+  if (!prompt || prompt.kind !== 'retirement') return retirementNotFoundResult();
+  if (prompt.state !== 'pending') return replayIfRetirementDecided(prompt.payload) ?? retirementAlreadyDecidedResult();
+
+  const marked = await markPromptKept(user.id, parsedId.data);
+  if (!marked) {
+    const current = await fetchPromptById(user.id, parsedId.data);
+    return (current ? replayIfRetirementDecided(current.payload) : null) ?? retirementAlreadyDecidedResult();
+  }
+
+  revalidatePath('/review');
+  revalidatePath('/review/decisions');
+
+  return { success: true, subjectType: prompt.subjectType === 'trigger_condition' ? 'trigger_condition' : 'rule' };
 }

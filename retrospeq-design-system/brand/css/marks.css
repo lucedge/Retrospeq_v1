@@ -107,7 +107,7 @@
 .rq-cmp__row { display: flex; align-items: center; gap: 10px; }
 .rq-cmp__lbl { width: 74px; flex-shrink: 0; font-size: var(--rq-text-xs); color: var(--rq-ink-soft); }
 .rq-cmp__track { flex: 1; height: 20px; background: var(--rq-mark-ghost); border-radius: 2px; overflow: hidden; }
-.rq-cmp__fill { height: 100%; background: var(--rq-mark-dim); border-radius: 2px; }
+.rq-cmp__fill { display: block; height: 100%; background: var(--rq-mark-dim); border-radius: 2px; }
 .rq-cmp__row.hot .rq-cmp__fill { background: var(--rq-mark); }
 .rq-cmp__val {
   width: 38px; flex-shrink: 0; text-align: right;

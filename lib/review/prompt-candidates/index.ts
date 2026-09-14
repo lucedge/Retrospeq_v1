@@ -5,7 +5,7 @@ import { findPromotionCandidates, type PromotionEvidence } from './promotion-can
 import { findRetirementDecayCandidates, type RetirementDecayEvidence } from './retirement-decay-candidates';
 import { findRetirementConditionCandidates, type RetirementConditionEvidence } from './retirement-condition-candidates';
 import { findDetectionCandidates, type DetectionEvidence } from './detection-candidates';
-import { fetchMutedSubjectKeys, excludeMuted } from './prompt-history-repository';
+import { fetchMutedSubjectKeys, excludeMuted, fetchPromptHistoryStateForUser, filterDormant } from './prompt-history-repository';
 import type { PromptCandidate } from './types';
 
 export * from './types';
@@ -15,7 +15,7 @@ export { findPromotionCandidates, type PromotionEvidence } from './promotion-can
 export { findRetirementDecayCandidates, type RetirementDecayEvidence } from './retirement-decay-candidates';
 export { findRetirementConditionCandidates, type RetirementConditionEvidence } from './retirement-condition-candidates';
 export { findDetectionCandidates, type DetectionEvidence } from './detection-candidates';
-export { fetchMutedSubjectKeys, excludeMuted } from './prompt-history-repository';
+export { fetchMutedSubjectKeys, excludeMuted, fetchPromptHistoryStateForUser, filterDormant } from './prompt-history-repository';
 export { findingSubjectId, detectionSubjectId, deriveStableSubjectId } from './stable-subject-id';
 
 /**
@@ -56,7 +56,7 @@ export interface AllPromptCandidates {
 }
 
 export async function computeAllPromptCandidates(userId: string, asOfDate: Date = new Date()): Promise<AllPromptCandidates> {
-  const [graduation, relaxation, promotion, retirementDecay, retirementCondition, detection, muted] = await Promise.all([
+  const [graduation, relaxation, promotion, retirementDecay, retirementCondition, detection, muted, historyState] = await Promise.all([
     findGraduationCandidates(userId),
     findRelaxationCandidates(userId, asOfDate),
     findPromotionCandidates(userId, asOfDate),
@@ -64,12 +64,27 @@ export async function computeAllPromptCandidates(userId: string, asOfDate: Date 
     findRetirementConditionCandidates(userId),
     findDetectionCandidates(userId),
     fetchMutedSubjectKeys(userId),
+    fetchPromptHistoryStateForUser(userId),
   ]);
+
+  // §4.5's "declined once -> dormant... re-raise only if occurrences
+  // roughly double" — wired here for `promotion` only, this slice's own
+  // real decline writer (`markPromptDeclined`, `lib/review/decisions/
+  // prompts-repository.ts`). Every other kind still has no decline-writing
+  // caller anywhere in this codebase (grep-confirmed at this slice's own
+  // dispatch time), so `historyState` for them is, in every real case
+  // today, an empty no-op filter — left unwired rather than wired against
+  // data nothing can ever produce yet, matching this file's own
+  // established "build against a real consumer" posture. `applicableEvaluations`
+  // is promotion's own "occurrences" measure (the rolling-window
+  // evaluation count §5.7's own eligibility gate already tracks) —
+  // reasoned in `markPromptDeclined`'s own header.
+  const dormancyFilteredPromotion = filterDormant(promotion, historyState, (e) => e.applicableEvaluations);
 
   return {
     graduation: excludeMuted(graduation, muted),
     relaxation: excludeMuted(relaxation, muted),
-    promotion: excludeMuted(promotion, muted),
+    promotion: excludeMuted(dormancyFilteredPromotion, muted),
     retirementDecay: excludeMuted(retirementDecay, muted),
     retirementCondition: excludeMuted(retirementCondition, muted),
     detection: excludeMuted(detection, muted),
