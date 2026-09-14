@@ -8,6 +8,7 @@ import { devPrivacyToolsEnabled } from '@/lib/privacy/dev-tools-guard';
 import type { ExportArtifactManifest } from '@/lib/privacy/export-job';
 import {
   updateTelemetryOptOut,
+  updateWeeklyReviewEmailOptOut,
   requestExportAction,
   requestErasureAction,
   cancelErasureAction,
@@ -63,6 +64,7 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
 
   const latestExport = dataRequests.find((r) => r.kind === 'export') ?? null;
   const telemetryOptedOut = profile?.telemetry_opt_out ?? false;
+  const weeklyReviewEmailOptedOut = profile?.weekly_review_email_opt_out ?? false;
 
   return (
     <section className="flex flex-col gap-8" aria-labelledby="privacy-h">
@@ -78,6 +80,11 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
       {searchParams.telemetryUpdated === '1' && (
         <p className="rq-sub" role="status">
           Telemetry preference updated.
+        </p>
+      )}
+      {searchParams.weeklyReviewEmailUpdated === '1' && (
+        <p className="rq-sub" role="status">
+          Weekly review email preference updated.
         </p>
       )}
       {searchParams.exportReady === '1' && (
@@ -116,6 +123,8 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
 
       <TelemetrySection optedOut={telemetryOptedOut} />
 
+      <WeeklyReviewEmailSection optedOut={weeklyReviewEmailOptedOut} />
+
       <RestrictionSection activeRestriction={activeRestriction} />
 
       <ExportSection latestExport={latestExport} />
@@ -140,6 +149,31 @@ function TelemetrySection({ optedOut }: { optedOut: boolean }) {
         <input type="hidden" name="optOut" value={optedOut ? 'false' : 'true'} />
         <button type="submit" className="rq-btn rq-btn--ghost">
           {optedOut ? 'Opt back in' : 'Opt out of telemetry'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Module 06 §4.10 step 6 / Module 07 §5.6 — the one weekly email's
+ * minimal unsubscribe toggle. Same shape as `TelemetrySection` above.
+ */
+function WeeklyReviewEmailSection({ optedOut }: { optedOut: boolean }) {
+  return (
+    <div className="rq-well flex flex-col gap-3" aria-labelledby="weekly-review-email-h">
+      <h2 id="weekly-review-email-h" className="rq-h2">
+        Weekly review email
+      </h2>
+      <p className="rq-sub">
+        {optedOut
+          ? "You're opted out of the weekly review email. Your review still appears in the app every week — you just won't be emailed about it."
+          : 'Retrospeq emails you once a week, when your review is ready. It is the only email we send on a schedule.'}
+      </p>
+      <form action={updateWeeklyReviewEmailOptOut}>
+        <input type="hidden" name="optOut" value={optedOut ? 'false' : 'true'} />
+        <button type="submit" className="rq-btn rq-btn--ghost">
+          {optedOut ? 'Opt back in' : 'Opt out of the weekly email'}
         </button>
       </form>
     </div>

@@ -62,6 +62,18 @@ const CREATE_SERVICE_ROLE_CLIENT_ALLOWLIST = new Set<string>([
   // `auth.admin.deleteUser` (the final, irreversible step) — both GoTrue
   // admin API calls, same reasoning as the two call sites above.
   'lib/privacy/erasure.ts',
+  // Module 06 §4.10 step 6: `weekly-job.ts` needs the SAME
+  // `auth.admin.getUserById` GoTrue admin call `erasure.ts` above already
+  // uses, for the identical reason — resolving the real email address to
+  // send the weekly notification to (`profiles`/`review_notifications`
+  // carry no email column of their own, by design; email lives only on
+  // `auth.users`). Read-only (`getUserById`, never `deleteUser`/`updateUser`
+  // from this call site), and the resolved `userId` is always
+  // caller-supplied (from `runWeeklyReviewNotificationJobForUser`'s own
+  // parameter, itself sourced from `retrospeq.profiles` in the batch
+  // runner, never client input). Added in the same commit that
+  // introduces the call.
+  'lib/review/weekly-job.ts',
 ]);
 
 const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
@@ -404,6 +416,43 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // that introduces the call, per every entry above's own cautionary
   // note.
   'lib/engagement/events-repository.ts',
+  // Module 06 §4.10 step 6: `getWeeklyReviewEmailOptOutForJob`
+  // (`lib/privacy/profile-repository.ts`) is the job-context read of
+  // `profiles.weekly_review_email_opt_out` — the identical "scheduled
+  // job, no authenticated session at the call site" reason every entry
+  // above documents (every OTHER function in this file uses
+  // `withUserConnection` instead, since they run inside a real trader
+  // session). A plain, explicitly `id = $1`-scoped SELECT, no write.
+  // Added in the same commit that introduces the call.
+  'lib/privacy/profile-repository.ts',
+  // Module 06 §4.10 step 6, the `review_notifications` exactly-once
+  // claim ledger: `claimReviewNotification`/`markReviewNotificationSent`/
+  // `markReviewNotificationFailed` (`lib/review/review-notifications-repository.ts`)
+  // each open their own `withServiceRoleConnection` — the identical
+  // "scheduled-job write, no authenticated session at the call site"
+  // reason `reviews-repository.ts`'s own entry above documents (this IS
+  // that same job's own step 6). Every query is explicitly parameterized
+  // on the caller-supplied `userId`/`id` (never trusting RLS, since it's
+  // bypassed here); `review_notifications` carries owner-SELECT-only RLS
+  // with no client write path at all, matching `engagement_events`'s own
+  // shape. The claim's own exactly-once guarantee comes from the unique
+  // `(user_id, period_start)` DB constraint plus `ON CONFLICT DO NOTHING`,
+  // not from anything RLS-related. Added in the same commit that
+  // introduces the call.
+  'lib/review/review-notifications-repository.ts',
+  // Module 06 §4.10 step 6, `weekly-job.ts`'s own reads: `resolveAppBaseUrl`
+  // aside, `runWeeklyReviewNotificationJobForAllUsers` lists every user id
+  // from `retrospeq.profiles` (`select id from retrospeq.profiles order by
+  // id`, no `WHERE` filtering by caller input at all — this IS the "list
+  // everyone to notify" step §4.10's own "per user" job description
+  // requires, the same class of read `lib/entitlements/fields-usage.ts`
+  // and other per-user-batch files already document above) — same
+  // scheduled-job-with-no-session reason as every other entry in this
+  // list. No write happens through this particular call inside
+  // `weekly-job.ts` itself (the actual writes are `review-notifications-
+  // repository.ts`'s own allowlisted calls above and `reviews-repository.ts`'s
+  // pre-existing ones). Added in the same commit that introduces the call.
+  'lib/review/weekly-job.ts',
 ]);
 
 function walk(dir: string, out: string[]): void {

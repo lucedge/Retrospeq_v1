@@ -18,6 +18,7 @@ const {
   redirectMock,
   revalidatePathMock,
   setTelemetryOptOutMock,
+  setWeeklyReviewEmailOptOutMock,
   requestExportMock,
   requestErasureMock,
   cancelErasureMock,
@@ -34,6 +35,7 @@ const {
   }),
   revalidatePathMock: vi.fn(),
   setTelemetryOptOutMock: vi.fn(),
+  setWeeklyReviewEmailOptOutMock: vi.fn(),
   requestExportMock: vi.fn(),
   requestErasureMock: vi.fn(),
   cancelErasureMock: vi.fn(),
@@ -59,6 +61,7 @@ vi.mock('next/cache', () => ({
 }));
 vi.mock('@/lib/privacy/profile-repository', () => ({
   setTelemetryOptOut: setTelemetryOptOutMock,
+  setWeeklyReviewEmailOptOut: setWeeklyReviewEmailOptOutMock,
 }));
 vi.mock('@/lib/privacy/export-job', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/privacy/export-job')>();
@@ -79,6 +82,7 @@ vi.mock('@/lib/privacy/dev-tools-guard', () => ({
 
 const {
   updateTelemetryOptOut,
+  updateWeeklyReviewEmailOptOut,
   requestExportAction,
   requestErasureAction,
   cancelErasureAction,
@@ -111,6 +115,7 @@ beforeEach(() => {
   redirectMock.mockClear();
   revalidatePathMock.mockClear();
   setTelemetryOptOutMock.mockReset().mockResolvedValue(undefined);
+  setWeeklyReviewEmailOptOutMock.mockReset().mockResolvedValue(undefined);
   requestExportMock.mockReset();
   requestErasureMock.mockReset();
   cancelErasureMock.mockReset();
@@ -149,6 +154,44 @@ describe('updateTelemetryOptOut', () => {
   it('optOut="false" maps to false, not truthy-string-coerced true', async () => {
     await expect(updateTelemetryOptOut(formData({ optOut: 'false' }))).rejects.toThrow(/telemetryUpdated=1/);
     expect(setTelemetryOptOutMock).toHaveBeenCalledWith('user-1', false);
+  });
+});
+
+describe('updateWeeklyReviewEmailOptOut', () => {
+  it('redirects to /login when no session exists', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+    await expect(updateWeeklyReviewEmailOptOut(formData({ optOut: 'true' }))).rejects.toThrow(
+      'NEXT_REDIRECT:/login',
+    );
+  });
+
+  it('redirects with PRIVACY_RATE_LIMITED when rate limited', async () => {
+    enforceRateLimitMock.mockRejectedValue(new RateLimitExceededError('weeklyReviewEmailToggle', 'ip:1', 3600));
+    await expect(updateWeeklyReviewEmailOptOut(formData({ optOut: 'true' }))).rejects.toThrow(
+      'NEXT_REDIRECT:/privacy?error=PRIVACY_RATE_LIMITED',
+    );
+    expect(setWeeklyReviewEmailOptOutMock).not.toHaveBeenCalled();
+  });
+
+  it('redirects with PRIVACY_INVALID_INPUT on a bad value', async () => {
+    await expect(updateWeeklyReviewEmailOptOut(formData({ optOut: 'yes' }))).rejects.toThrow(
+      'NEXT_REDIRECT:/privacy?error=PRIVACY_INVALID_INPUT',
+    );
+  });
+
+  it('sets the opt-out value and redirects with weeklyReviewEmailUpdated=1 on success', async () => {
+    await expect(updateWeeklyReviewEmailOptOut(formData({ optOut: 'true' }))).rejects.toThrow(
+      'NEXT_REDIRECT:/privacy?weeklyReviewEmailUpdated=1',
+    );
+    expect(setWeeklyReviewEmailOptOutMock).toHaveBeenCalledWith('user-1', true);
+    expect(revalidatePathMock).toHaveBeenCalledWith('/privacy');
+  });
+
+  it('optOut="false" maps to false, not truthy-string-coerced true', async () => {
+    await expect(updateWeeklyReviewEmailOptOut(formData({ optOut: 'false' }))).rejects.toThrow(
+      /weeklyReviewEmailUpdated=1/,
+    );
+    expect(setWeeklyReviewEmailOptOutMock).toHaveBeenCalledWith('user-1', false);
   });
 });
 

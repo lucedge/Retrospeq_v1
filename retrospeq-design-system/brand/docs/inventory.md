@@ -89,7 +89,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ● built; expiry sweep runs at `/review` materialisation time, not a scheduler (infra gap) |
 | 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |
 | 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ◐ built, compute-on-view (no scheduler); "edge stability" reuses Module 05's graduation-vs-current decay tracking, not a real per-month historical snapshot (none exists) |
-| 4.14 | notification | The one weekly notification (push + email) | 06 §4.10; 07 §5.6 | email template | ○ |
+| 4.14 | notification | The one weekly notification (push + email) | 06 §4.10; 07 §5.6 | email template | ◐ |
 
 ## Batch 5 · performance (Module 08 §7.2; brand S17)
 

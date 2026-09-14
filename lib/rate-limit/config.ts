@@ -162,6 +162,16 @@ export const RATE_LIMITS = {
     ip: { limit: 40, windowSeconds: 3600 },
     email: { limit: 30, windowSeconds: 3600 },
   },
+  /**
+   * Module 06 §4.10 step 6 / Module 07 §5.6 — `app/(app)/privacy/actions.ts`'s
+   * `updateWeeklyReviewEmailOptOut`. Identical reasoning/budget to
+   * `telemetryToggle` above: a fixed two-button toggle, not
+   * credential- or destruction-shaped.
+   */
+  weeklyReviewEmailToggle: {
+    ip: { limit: 40, windowSeconds: 3600 },
+    email: { limit: 30, windowSeconds: 3600 },
+  },
   /** `requestExportAction` — runs the whole export job synchronously
    *  today (lib/privacy/export-job.ts), so this is also, incidentally,
    *  the real backstop against a trader hammering "export" repeatedly

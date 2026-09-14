@@ -134,6 +134,27 @@ describe('lib/privacy/email-provider.ts — send request shape', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('includes html in the JSON body alongside text when a 4th arg is passed (Module 06 weekly notification)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getTransactionalEmailProvider().send(
+      'trader@example.com',
+      'Your week is ready to read',
+      'Plain text body.',
+      '<p>HTML body.</p>',
+    );
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      from: 'Retrospeq <hello@notifications.retrospeq.com>',
+      to: ['trader@example.com'],
+      subject: 'Your week is ready to read',
+      text: 'Plain text body.',
+      html: '<p>HTML body.</p>',
+    });
+  });
+
   it('honours EMAIL_FROM_NAME when set, defaults to "Retrospeq" otherwise', async () => {
     process.env.EMAIL_FROM_NAME = 'Retrospeq Notifications';
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));

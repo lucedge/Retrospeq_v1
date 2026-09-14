@@ -6,8 +6,12 @@ import { createClient } from '@/lib/supabase/server';
 import { enforceRateLimit } from '@/lib/rate-limit/limiter';
 import { getClientIp } from '@/lib/rate-limit/http';
 import { RateLimitExceededError } from '@/lib/rate-limit/errors';
-import { setTelemetryOptOut } from '@/lib/privacy/profile-repository';
-import { telemetryToggleInputSchema, dataRequestIdSchema } from '@/lib/privacy/schemas';
+import { setTelemetryOptOut, setWeeklyReviewEmailOptOut } from '@/lib/privacy/profile-repository';
+import {
+  telemetryToggleInputSchema,
+  weeklyReviewEmailToggleInputSchema,
+  dataRequestIdSchema,
+} from '@/lib/privacy/schemas';
 import { requestExport, DuplicateExportRequestError } from '@/lib/privacy/export-job';
 import {
   requestErasure,
@@ -70,6 +74,33 @@ export async function updateTelemetryOptOut(formData: FormData): Promise<void> {
 
   revalidatePath('/privacy');
   redirect('/privacy?telemetryUpdated=1');
+}
+
+/**
+ * Module 06 §4.10 step 6 / Module 07 §5.6 — the one weekly email's
+ * minimal unsubscribe toggle. Same shape as `updateTelemetryOptOut`
+ * above (fixed two-button form, no free text). This is a REAL,
+ * trader-reachable opt-out, not just a DB column nobody can flip: the
+ * email's own "Email preferences" link (`weekly-notification-content.ts`)
+ * points at `/privacy`, where this toggle lives.
+ */
+export async function updateWeeklyReviewEmailOptOut(formData: FormData): Promise<void> {
+  const user = await requireUser();
+
+  try {
+    await enforceRateLimit('weeklyReviewEmailToggle', await getClientIp(), user.id);
+  } catch (err) {
+    if (err instanceof RateLimitExceededError) errorRedirect('PRIVACY_RATE_LIMITED');
+    throw err;
+  }
+
+  const parsed = weeklyReviewEmailToggleInputSchema.safeParse({ optOut: formData.get('optOut') });
+  if (!parsed.success) errorRedirect('PRIVACY_INVALID_INPUT');
+
+  await setWeeklyReviewEmailOptOut(user.id, parsed.data.optOut === 'true');
+
+  revalidatePath('/privacy');
+  redirect('/privacy?weeklyReviewEmailUpdated=1');
 }
 
 /** Story 5.1. Runs the export synchronously today (see export-job.ts's

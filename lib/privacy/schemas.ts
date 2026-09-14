@@ -19,4 +19,11 @@ export const telemetryToggleInputSchema = z.strictObject({
   optOut: z.enum(['true', 'false']),
 });
 
+/** Module 06 §4.10 step 6 / Module 07 §5.6 — the one weekly email's
+ *  minimal unsubscribe toggle. Same fixed two-button shape as
+ *  `telemetryToggleInputSchema` above, not a free-text field. */
+export const weeklyReviewEmailToggleInputSchema = z.strictObject({
+  optOut: z.enum(['true', 'false']),
+});
+
 export const dataRequestIdSchema = z.uuid();

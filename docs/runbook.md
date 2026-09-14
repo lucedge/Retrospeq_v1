@@ -2107,6 +2107,50 @@ try/catch so one user's failure can never block another's weekly batch —
 flagged here so that slice does not skip it, matching this entry's own
 existing convention for the sibling function.
 
+**UPDATE (§4.10 step 6, 2026-09-15) — the one weekly notification is now
+a real, callable, tested function, still with no scheduler to call it.**
+`lib/review/weekly-job.ts`'s `runWeeklyReviewNotificationJobForUser`
+(materialise -> opt-out check -> claim -> send -> mark) and
+`...ForAllUsers` (the per-user-try/catch batch loop this entry's own two
+paragraphs above already called for) exist and are live-DB tested
+end to end, but nothing in this repo invokes either on a schedule yet —
+`scripts/run-weekly-review-job.mjs` is a deliberately-refusing stub, not
+a working cron target (see that file's own header for exactly why a
+plain-Node script can't import this repo's TS `lib/` code today). This
+closes the SAME gap this entry has tracked since Slice 2 ("no
+notification can ever fire for a review that was never computed") for
+the notification half specifically, but does not deploy anything.
+
+**The exactly-once guarantee is enforced in the database**
+(`retrospeq.review_notifications`, unique `(user_id, period_start)`,
+`supabase/migrations/20260915020000_review_notifications_schema.sql`) —
+a claim happens BEFORE any send, so even a future scheduler running the
+same user twice (a retry, an overlapping invocation) cannot double-send.
+
+**Alerting condition once a real scheduler exists:** a `review_notifications`
+row with `status = 'failed'` is a genuine, permanent dead end for that
+`(user, period)` — by design, this job never auto-retries a failed send
+(a retry risks a real double-send if Resend actually delivered the email
+but this process never saw the 2xx response; see `weekly-job.ts`'s own
+header for the full reasoning). **How to check:**
+
+```sql
+select user_id, period_start, error, created_at
+  from retrospeq.review_notifications
+ where status = 'failed'
+ order by created_at desc;
+```
+
+A GROWING count of `failed` rows (as opposed to zero, or the rare
+one-off) means the email provider itself is degraded (Resend outage,
+`RESEND_API_KEY`/`EMAIL_FROM` misconfigured in the deploy environment —
+`EmailProviderNotConfiguredError` and `EmailSendFailedError` both surface
+into this table's own `error` column, never swallowed) — the alertable
+signal is the RATE of new `failed` rows per run, not any single row.
+Recovering one is a deliberate manual operator action (there is no
+built-in "reset and retry" affordance) — see `weekly-job.ts`'s own
+header for why that is a decision, not a gap.
+
 ---
 
 ## Promotion-candidate check failed for an individual rule during prompt-candidate computation

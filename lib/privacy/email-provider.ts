@@ -80,7 +80,17 @@ export class EmailSendFailedError extends Error {
 }
 
 export interface TransactionalEmailProvider {
-  send(to: string, subject: string, body: string): Promise<void>;
+  /**
+   * `html` is optional (added for Module 06 §4.10 step 6, the weekly
+   * review notification — the first email this repo sends with real
+   * template markup rather than plain prose): when supplied, Resend gets
+   * BOTH `text` and `html` in the same request (a standard multipart
+   * text/html email, better deliverability and a plain-text fallback for
+   * clients that don't render HTML) — `body` remains the required
+   * plain-text content either way, never dropped. Every existing caller
+   * (`erasure.ts`) calls with 3 args and is unaffected.
+   */
+  send(to: string, subject: string, body: string, html?: string): Promise<void>;
 }
 
 function assertSendableInput(to: string, subject: string, body: string): void {
@@ -108,7 +118,7 @@ class ResendEmailProvider implements TransactionalEmailProvider {
     private readonly fromHeader: string,
   ) {}
 
-  async send(to: string, subject: string, body: string): Promise<void> {
+  async send(to: string, subject: string, body: string, html?: string): Promise<void> {
     assertSendableInput(to, subject, body);
 
     let response: Response;
@@ -119,7 +129,13 @@ class ResendEmailProvider implements TransactionalEmailProvider {
           Authorization: `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ from: this.fromHeader, to: [to], subject, text: body }),
+        body: JSON.stringify({
+          from: this.fromHeader,
+          to: [to],
+          subject,
+          text: body,
+          ...(html ? { html } : {}),
+        }),
         // No automatic retries — callers on this path (erasure's
         // confirmation email) are best-effort and a retry could double-send.
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

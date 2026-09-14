@@ -18,6 +18,7 @@ const {
   deleteSubscriptionForUserMock,
   deleteAllFieldsForUserMock,
   deleteAllRulesForUserMock,
+  deleteAllEngagementEventsForUserMock,
 } = vi.hoisted(() => ({
   createServiceRoleClientMock: vi.fn(),
   createDataRequestMock: vi.fn(),
@@ -36,6 +37,7 @@ const {
   deleteSubscriptionForUserMock: vi.fn(),
   deleteAllFieldsForUserMock: vi.fn(),
   deleteAllRulesForUserMock: vi.fn(),
+  deleteAllEngagementEventsForUserMock: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -81,6 +83,9 @@ vi.mock('@/lib/fields/fields-repository', () => ({
 }));
 vi.mock('@/lib/rules/rules-repository', () => ({
   deleteAllRulesForUser: deleteAllRulesForUserMock,
+}));
+vi.mock('@/lib/engagement/events-repository', () => ({
+  deleteAllEngagementEventsForUser: deleteAllEngagementEventsForUserMock,
 }));
 
 import {
@@ -245,6 +250,9 @@ describe('executeErasure', () => {
     deleteAllFieldsForUserMock.mockImplementation(async () => {
       callOrder.push('fields');
     });
+    deleteAllEngagementEventsForUserMock.mockImplementation(async () => {
+      callOrder.push('engagement_events');
+    });
     deleteSubscriptionForUserMock.mockImplementation(async () => {
       callOrder.push('subscription');
     });
@@ -263,11 +271,12 @@ describe('executeErasure', () => {
     expect(callOrder[0]).toBe('credentials');
     // The explicit delete-list steps (docs/adr/0010) have no ordering
     // constraint between each other — deleteAllRulesForUser/
-    // deleteAllFieldsForUser are each independently self-contained (see
-    // their own header comments and erasure.ts's step 3b comment), so
-    // this asserts the SET of steps ran, not a specific order among them.
-    expect(callOrder.slice(1, 6).sort()).toEqual(
-      ['fields', 'recovery_codes', 'rules', 'subscription', 'trading_accounts'].sort(),
+    // deleteAllFieldsForUser/deleteAllEngagementEventsForUser are each
+    // independently self-contained (see their own header comments and
+    // erasure.ts's step 3b comment), so this asserts the SET of steps
+    // ran, not a specific order among them.
+    expect(callOrder.slice(1, 7).sort()).toEqual(
+      ['engagement_events', 'fields', 'recovery_codes', 'rules', 'subscription', 'trading_accounts'].sort(),
     );
     expect(callOrder).toContain('tombstone');
     expect(callOrder.at(-1)).toBe('delete_user');
@@ -277,6 +286,7 @@ describe('executeErasure', () => {
     // not just that the test no longer crashes against real Postgres.
     expect(deleteAllRulesForUserMock).toHaveBeenCalledWith('user-1');
     expect(deleteAllFieldsForUserMock).toHaveBeenCalledWith('user-1');
+    expect(deleteAllEngagementEventsForUserMock).toHaveBeenCalledWith('user-1');
 
     expect(recordErasureTombstoneMock).toHaveBeenCalledWith('trader@example.com', 'req-1');
     expect(recordAuditEventMock).toHaveBeenCalledWith(
@@ -314,6 +324,7 @@ describe('executeErasure', () => {
       expect(deleteAllRecoveryCodesMock).not.toHaveBeenCalled();
       expect(deleteAllRulesForUserMock).not.toHaveBeenCalled();
       expect(deleteAllFieldsForUserMock).not.toHaveBeenCalled();
+      expect(deleteAllEngagementEventsForUserMock).not.toHaveBeenCalled();
       expect(deleteSubscriptionForUserMock).not.toHaveBeenCalled();
       expect(recordErasureTombstoneMock).not.toHaveBeenCalled();
       expect(createServiceRoleClientMock().auth.admin.deleteUser).not.toHaveBeenCalled();
