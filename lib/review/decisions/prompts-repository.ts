@@ -2,6 +2,7 @@ import 'server-only';
 import { withUserConnection } from '@/lib/supabase/direct';
 import { determineCurrentWeeklyReviewPeriod } from '@/lib/review/current-period';
 import { fetchWeeklyReviewByPeriodStart } from '@/lib/review/reviews-repository';
+import { promptExpiryCutoff } from '@/lib/review/prompt-expiry';
 
 /**
  * Module 06 (Review & Graduation) Slice 6 — the decision screen's own
@@ -69,8 +70,14 @@ export type DecisionPromptKind = 'graduation' | 'relaxation' | 'promotion' | 're
  *  `review_prompts.subject_type` — `'rule'` for decay, `'trigger_condition'`
  *  for condition. Every other kind's `subjectType` is present but unused by
  *  today's callers (graduation is `'finding'`, relaxation/promotion are
- *  `'rule'`). */
-export type DecisionPromptSubjectType = 'rule' | 'finding' | 'trigger_condition';
+ *  `'rule'`). Widened to include `'detection'` (this slice, frame 4.11) —
+ *  the DB's own CHECK constraint always allowed it (`PromptSubjectType`,
+ *  `prompt-candidates/types.ts`) and `fetchPromptById`/`fetchPendingDecision
+ *  Prompts` already return it for a real detection row; this type had
+ *  simply never needed to name it until `backlogSubjectSentence` (`./
+ *  backlog-subject.ts`) started switching on `subjectType` across every
+ *  kind at once. */
+export type DecisionPromptSubjectType = 'rule' | 'finding' | 'trigger_condition' | 'detection';
 
 export interface PendingDecisionPromptRow {
   id: string;
@@ -145,6 +152,81 @@ export async function fetchDecisionCounts(userId: string, reviewId: string): Pro
     );
     const row = res.rows[0];
     return { total: Number(row?.total ?? '0'), pending: Number(row?.pending ?? '0') };
+  });
+}
+
+// ---------------------------------------------------------------------
+// Frame 4.11 — the deferred backlog (`/review/decisions` `none_pending`).
+// ---------------------------------------------------------------------
+
+export interface DeferredBacklogRow {
+  id: string;
+  kind: DecisionPromptKind;
+  subjectType: DecisionPromptSubjectType;
+  payload: unknown;
+  /** ISO — the OWNING review's `period_end`, the anchor `lib/review/
+   *  prompt-expiry.ts` uses for both the age label and the expiry cutoff
+   *  itself (see that file's header for why `period_end`, not
+   *  `created_at`/`decided_at`). */
+  reviewPeriodEnd: string;
+}
+
+/**
+ * §4.8/frame 4.11 — every `deferred` decision-kind prompt "from earlier
+ * weeks" (i.e. NOT the trader's current, still-open review — a defer
+ * within the review being viewed right now is this WEEK's business, not
+ * backlog) that has not yet been silently expired. `withUserConnection`:
+ * a real page-view-time read behind a real session, same posture as every
+ * other read in this file — this is a trader looking at their OWN
+ * deferred subjects, never a scheduled-job write.
+ *
+ * The `r.period_end >= cutoff` clause is DEFENSIVE, not the authoritative
+ * expiry mechanism (that is `writeReviewPrompts`'s own
+ * `expireStalePromptsForUser`, `review-prompts-repository.ts`) — this
+ * view can be reached without a fresh `/review` materialisation having
+ * run first (there is no scheduler, `docs/infra-gaps.md`), so a row that
+ * SHOULD already be `expired` but hasn't yet had that sweep run against it
+ * is still filtered out here rather than shown as if it were current. The
+ * cutoff itself is `promptExpiryCutoff` (the SAME pure function
+ * `expireStalePromptsForUser` uses), turned into a plain UTC `date` string
+ * in JS rather than `timestamptz` arithmetic in SQL — see that function's
+ * own header for why (session-timezone independence). `excludeReviewId` is
+ * nullable so a caller with no current review at all (e.g. `caught_up`)
+ * can still list every other deferred row.
+ */
+export async function fetchDeferredBacklogForUser(
+  userId: string,
+  excludeReviewId: string | null,
+  asOfDate: Date,
+): Promise<DeferredBacklogRow[]> {
+  const cutoffDate = promptExpiryCutoff(asOfDate).toISOString().slice(0, 10);
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{
+      id: string;
+      kind: DecisionPromptKind;
+      subject_type: DecisionPromptSubjectType;
+      payload: unknown;
+      period_end: string;
+    }>(
+      `select rp.id, rp.kind, rp.subject_type, rp.payload, r.period_end::text as period_end
+         from retrospeq.review_prompts rp
+         join retrospeq.reviews r on r.id = rp.review_id
+        where rp.user_id = $1
+          and r.user_id = $1
+          and rp.state = 'deferred'
+          and rp.kind = any($2::text[])
+          and ($3::uuid is null or rp.review_id <> $3::uuid)
+          and r.period_end >= $4::date
+        order by r.period_end asc`,
+      [userId, DECISION_KINDS, excludeReviewId, cutoffDate],
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      subjectType: row.subject_type,
+      payload: row.payload,
+      reviewPeriodEnd: row.period_end,
+    }));
   });
 }
 

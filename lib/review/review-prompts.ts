@@ -109,6 +109,12 @@ function applyDormancy(all: AllPromptCandidates, historyState: ReadonlyMap<strin
  * `ranked` array is a correct, common, intended result (§4.3: "most weeks
  * should have zero prompts") and `writeReviewPrompts([])` is a safe no-op
  * write (clears any stale pending set, inserts nothing).
+ *
+ * `asOfDate` is also `writeReviewPrompts`'s own cutoff instant for §4.8's
+ * silent 4-week expiry sweep (this user's entire backlog, not just
+ * `reviewId`) — see that function's own header in `review-prompts-
+ * repository.ts` for why expiry rides along with materialisation rather
+ * than a separate job (no scheduler exists, `docs/infra-gaps.md`).
  */
 export async function computeAndWriteReviewPrompts(
   userId: string,
@@ -132,5 +138,5 @@ export async function computeAndWriteReviewPrompts(
 
   const ranked = rankAndCapPromptCandidates(dormancyFiltered);
 
-  return writeReviewPrompts(userId, reviewId, ranked);
+  return writeReviewPrompts(userId, reviewId, ranked, asOfDate);
 }

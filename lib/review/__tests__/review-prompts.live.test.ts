@@ -13,6 +13,25 @@ import { findingSubjectId, detectionSubjectId } from '../prompt-candidates/stabl
 import { _clearAnalyticConfigCacheForTests } from '@/lib/analytics/config-cache';
 
 vi.mock('server-only', () => ({}));
+
+// These tests prove ranking, the single-detection cap and the combined 3-cap.
+// Whether a detection pattern can become a rule is a separate gate
+// (`selectDetectionCandidates` → `resolveDetectionRuleProposal`, unit-tested in
+// prompt-candidates/__tests__/detection-candidates.test.ts). As of 2026-09-15
+// every real analytic resolves null, so the ranking fixtures stub it to
+// "proposable" — except where `realDetectionProposals` is switched on to
+// prove today's real behaviour.
+const detectionProposalGate = vi.hoisted(() => ({ realDetectionProposals: false }));
+vi.mock('@/lib/review/decisions/detection-operand-map', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/review/decisions/detection-operand-map')>();
+  return {
+    ...actual,
+    resolveDetectionRuleProposal: (analyticId: string) =>
+      detectionProposalGate.realDetectionProposals
+        ? actual.resolveDetectionRuleProposal(analyticId)
+        : ({ operand: { id: 'stub' }, op: 'gte', value: 1 } as unknown as ReturnType<typeof actual.resolveDetectionRuleProposal>),
+  };
+});
 vi.setConfig({ testTimeout: 120_000 });
 
 /**
@@ -479,6 +498,47 @@ describe.skipIf(!env)('lib/review/review-prompts.ts + review-prompts-repository.
     );
     expect(dbRows.rows).toHaveLength(3);
     expect(dbRows.rows.every((r) => r.review_id === reviewId)).toBe(true);
+  }, 180_000);
+
+  it('REAL TODAY: a detection whose pattern maps to no computable operand is not offered -- promotion takes the third slot instead', async () => {
+    if (!env) return;
+    detectionProposalGate.realDetectionProposals = true;
+    try {
+      const user = await createTestAuthUser(envBundle, 'multikind-real-detection');
+      cleanupUserIds.push(user.id);
+      await setPlan(user.id, 'pro');
+      await addToCohort(user.id);
+
+      const now = new Date('2026-09-11T12:00:00Z');
+      const createdAt = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const accountId = await seedAccount(user.id);
+      const strategyId = await seedStrategy(user.id);
+
+      const relaxRuleId = await insertRule(user.id, { createdAt, rendered: 'Relaxation candidate rule' });
+      for (let i = 0; i < 20; i++) {
+        const tradeId = await seedBareTrade(user.id, accountId, daysAgo(now, 5), i);
+        await insertRuleEvaluation(user.id, tradeId, relaxRuleId, i < 8 ? 'broken' : 'followed', daysAgo(now, 5));
+      }
+      const gradFieldId = nextId('real_det_grad');
+      await seedBoolField(user.id, strategyId, gradFieldId);
+      await insertFinding(user.id, strategyId, gradFieldId, { n: 45, deltaWinRate: 0.3 });
+      const detId = `seq.reentry_after_loss_real_${Date.now()}`;
+      await insertDetection(user.id, detId, 40);
+      const promoRuleId = await insertRule(user.id, { createdAt, severity: 'soft', rendered: 'Promotion candidate rule' });
+      for (let i = 0; i < 20; i++) {
+        const tradeId = await seedBareTrade(user.id, accountId, daysAgo(now, 30), 100 + i);
+        await insertRuleEvaluation(user.id, tradeId, promoRuleId, 'followed', daysAgo(now, 30));
+      }
+
+      const reviewId = await insertReview(user.id, '2026-09-07', '2026-09-13');
+      const written = await computeAndWriteReviewPrompts(user.id, reviewId, now);
+
+      const kinds = [...written].sort((a, b) => a.rank - b.rank).map((p) => p.kind);
+      expect(kinds).toEqual(['relaxation', 'graduation', 'promotion']);
+      expect(written.map((p) => p.subjectId)).not.toContain(detectionSubjectId(detId));
+    } finally {
+      detectionProposalGate.realDetectionProposals = false;
+    }
   }, 180_000);
 
   // =====================================================================

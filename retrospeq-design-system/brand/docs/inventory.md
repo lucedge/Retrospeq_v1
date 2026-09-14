@@ -86,7 +86,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 4.8 | `/review/decisions` | Promotion (soft → hard) | 06 §4.3 | new | ● |
 | 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ● |
 | 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ◐ built; not offered until cross-trade operands are computable |
-| 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ○ |
+| 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ● built; expiry sweep runs at `/review` materialisation time, not a scheduler (infra gap) |
 | 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |
 | 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ○ |
 | 4.14 | notification | The one weekly notification (push + email) | 06 §4.10; 07 §5.6 | email template | ○ |

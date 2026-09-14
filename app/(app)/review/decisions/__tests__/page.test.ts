@@ -16,16 +16,21 @@ const { getUserMock, createClientMock } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
 }));
 const fetchNextDecisionMock = vi.hoisted(() => vi.fn());
+const fetchDeferredBacklogMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: createClientMock }));
-vi.mock('../actions', () => ({ fetchNextDecision: fetchNextDecisionMock }));
+vi.mock('../actions', () => ({ fetchNextDecision: fetchNextDecisionMock, fetchDeferredBacklog: fetchDeferredBacklogMock }));
 
 beforeEach(() => {
   getUserMock.mockReset();
   createClientMock.mockReset();
   fetchNextDecisionMock.mockReset();
+  fetchDeferredBacklogMock.mockReset();
   createClientMock.mockResolvedValue({ auth: { getUser: getUserMock } });
   getUserMock.mockResolvedValue({ data: { user: { id: 'user-1' } } });
+  // Only the `none_pending` branch calls this — an empty backlog is the
+  // default for every other test, matching the normal, common case.
+  fetchDeferredBacklogMock.mockResolvedValue({ success: true, items: [] });
 });
 
 async function renderPage(): Promise<string> {
@@ -58,11 +63,36 @@ describe('/review/decisions — Part 2, graduation + relaxation', () => {
     expect(html).not.toContain('Add the rule');
   });
 
-  it('none_pending: the normal-case "nothing to decide" copy, per §4.3 ("most weeks should have zero prompts")', async () => {
+  it('none_pending, empty backlog: the normal-case "nothing to decide" copy, per §4.3 ("most weeks should have zero prompts")', async () => {
     fetchNextDecisionMock.mockResolvedValue({ success: true, status: 'none_pending' });
     const html = await renderPage();
     expect(html).toContain('Nothing to decide right now.');
     expect(html).toContain('Most weeks have none');
+    expect(html).not.toContain('backlog');
+  });
+
+  it('none_pending, non-empty backlog: frame 4.11 — "Not yet, from earlier weeks", the deferred list, one ghost button, no decision buttons', async () => {
+    fetchNextDecisionMock.mockResolvedValue({ success: true, status: 'none_pending' });
+    fetchDeferredBacklogMock.mockResolvedValue({
+      success: true,
+      items: [
+        { id: 'p1', subjectSentence: 'Make conviction a rule?', ageLabel: '2 wk ago' },
+        { id: 'p2', subjectSentence: 'Make "stop after 3 losses" hard?', ageLabel: '3 wk ago' },
+      ],
+    });
+    const html = await renderPage();
+
+    expect(html).toContain('Not yet, from earlier weeks');
+    expect(html).toContain('Deferred decisions wait here. Anything older than four weeks expires quietly.');
+    expect(html).toContain('Make conviction a rule?');
+    expect(html).toContain('2 wk ago');
+    expect(html).toContain('Make &quot;stop after 3 losses&quot; hard?');
+    expect(html).toContain('3 wk ago');
+    expect(html).toContain('Back to this week');
+    expect(html).not.toContain('Nothing to decide right now.');
+    // Read-only — no accept/decline/defer affordance anywhere on this screen.
+    expect((html.match(/class="rq-btn[^"]*"/g) ?? []).length).toBe(1);
+    expect(html).toContain('rq-btn--ghost');
   });
 
   it('a rate-limited/error response renders the honest retryable message, never a partial decision screen', async () => {

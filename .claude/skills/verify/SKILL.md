@@ -11,7 +11,7 @@ Every change gets exactly the checks its risk warrants — no more. Tier comes f
 |---|---|---|---|---|
 | 0 | docs, ledger, `.claude/`, spec modules, config comments | `ledger-check` | none | none — commit |
 | 1 | `.tsx` markup, CSS, copy, tests, e2e specs, brand assets | + tsc, eslint on changed files, unit tests **in touched dirs** | none (screenshot self-check only if a screen visibly changed) | none — commit |
-| 2 | `lib/` or `app/` logic not in tier 3, scripts | + live-DB tests **the change added or edited** (full live suite is the tester's / phase end) | `npm run e2e:changed` only if a route's *behaviour* changed | `retrospeq-tester`; `retrospeq-qa` only if a non-negotiable surface changed (home, review, close-out, rules UI, notifications, analytics↔rules) |
+| 2 | `lib/` or `app/` logic not in tier 3, scripts | + every test that imports a changed file, transitively (`vitest related`) | `npm run e2e:changed` only if a route's *behaviour* changed | `retrospeq-tester`; `retrospeq-qa` only if a non-negotiable surface changed (home, review, close-out, rules UI, notifications, analytics↔rules) |
 | 3 | migrations, `lib/supabase`, auth, broker/credentials, rule evaluator/catalogue, entitlements, rate-limit, privacy, any `actions.ts` | + `check:security` | `npm run e2e:changed` | `retrospeq-tester` → then `retrospeq-security-reviewer` **and** `retrospeq-qa` in parallel |
 | phase end | — | `npm run check` + `check:live` + `check:security` | `npm run e2e:changed -- --all` | `/code-review`, `retrospeq-docs` |
 

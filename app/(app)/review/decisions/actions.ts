@@ -17,6 +17,7 @@ import {
   fetchPendingDecisionPrompts,
   fetchDecisionCounts,
   fetchPromptById,
+  fetchDeferredBacklogForUser,
   markPromptAccepted,
   markPromptDeferred,
   markPromptRecommitted,
@@ -26,6 +27,9 @@ import {
   markPromptRetired,
   markPromptKept,
 } from '@/lib/review/decisions/prompts-repository';
+import { backlogSubjectSentence } from '@/lib/review/decisions/backlog-subject';
+import { formatBacklogAge } from '@/lib/review/prompt-expiry';
+import { fetchFieldsForManagement } from '@/lib/fields/fields-repository';
 import { buildGraduationPromptDetail, type GraduationPromptDetail } from '@/lib/review/decisions/graduation-evidence-detail';
 import { graduationEvidenceSchema } from '@/lib/review/decisions/graduation-evidence-schema';
 import { resolveOperandForField, deriveRuleInputFromSegment } from '@/lib/review/decisions/graduation-operand-map';
@@ -377,6 +381,55 @@ export async function fetchNextDecision(): Promise<NextDecisionResult> {
 
   // Every pending candidate was skipped — none was actually decidable.
   return { success: true, status: 'none_pending' };
+}
+
+// ---------------------------------------------------------------------
+// fetchDeferredBacklog — frame 4.11, read-only. §4.8's "from earlier
+// weeks" list, shown by `page.tsx` only when `fetchNextDecision` above
+// returned `none_pending`. Deliberately its OWN action, not folded into
+// `fetchNextDecision`: the two answer different questions ("what's next to
+// decide, right now" vs "what did I defer, that I am not deciding right
+// now") and the backlog is read-only — no accept/decline/defer button
+// anywhere on this data, per this slice's own dispatch ("decisions stay
+// one at a time in the normal flow").
+// ---------------------------------------------------------------------
+
+export interface DeferredBacklogEntry {
+  id: string;
+  subjectSentence: string;
+  ageLabel: string;
+}
+
+export type DeferredBacklogResult =
+  | { success?: false; error: { code: string; user_message: string; retryable: boolean } }
+  | { success: true; items: DeferredBacklogEntry[] };
+
+export async function fetchDeferredBacklog(): Promise<DeferredBacklogResult> {
+  const user = await requireSessionAndRateLimit('reviewDecision');
+  if (isErrorState(user)) return user;
+
+  // The trader's OWN current review (if any) is excluded — a subject
+  // deferred earlier THIS review is this week's business, not backlog
+  // (see `fetchDeferredBacklogForUser`'s own header). `null` when no
+  // current review exists (e.g. `caught_up`) — every other deferred row
+  // still qualifies.
+  const current = await fetchCurrentReviewIdForDecisions(user.id);
+  const asOfDate = new Date();
+
+  const [rows, fields] = await Promise.all([
+    fetchDeferredBacklogForUser(user.id, current?.reviewId ?? null, asOfDate),
+    fetchFieldsForManagement(user.id),
+  ]);
+
+  const fieldNameFor = (fieldId: string) => fields.find((f) => f.fieldId === fieldId)?.name ?? null;
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    subjectSentence: backlogSubjectSentence(row.kind, row.subjectType, row.payload, fieldNameFor),
+    ageLabel: formatBacklogAge(new Date(row.reviewPeriodEnd), asOfDate),
+  }));
+
+  return { success: true, items };
 }
 
 // ---------------------------------------------------------------------

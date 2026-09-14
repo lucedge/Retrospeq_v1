@@ -33,11 +33,18 @@ if (tier >= 1) {
   steps.push(['tsc', 'npx tsc --noEmit'], ['eslint (changed files)', changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).length ? `npx eslint ${changed.filter((f) => /\.(ts|tsx|mjs)$/.test(f) && !/^(retrospeq-design-system|reference)\//.test(f)).map((f) => JSON.stringify(f)).join(' ')}` : 'true']);
   if (scope) steps.push([`unit${scopeNote}`, `npx vitest run ${scope} --exclude "**/*.live.test.ts"`]);
 }
-// Live DB tests: only the live test files this change added or edited. A whole
-// feature folder's live suite still ran 60+ min against the shared dev DB
-// (2026-09-15); broader live coverage is the tester gate's job, full suite at phase end.
+// Live DB tests: every test file that imports a changed source file, directly
+// or transitively (`vitest related` walks the module graph), plus changed live
+// test files. Folder-scoped runs took 60+ min; changed-files-only missed a
+// transitive regression (2026-09-15). This is the targeted middle.
+const changedSource = changed.filter((f) => /^(lib|app)\/.*\.(ts|tsx)$/.test(f) && !/\.test\.ts$/.test(f));
 const changedLive = changed.filter((f) => /\.live\.test\.ts$/.test(f));
-if (tier >= 2 && changedLive.length) steps.push([`live DB (${changedLive.length} changed file${changedLive.length === 1 ? '' : 's'})`, `npx vitest run ${changedLive.map((f) => JSON.stringify(f)).join(' ')} --maxWorkers=1`]);
+if (tier >= 2 && (changedSource.length || changedLive.length)) {
+  steps.push([
+    `related tests (${changedSource.length} changed source + ${changedLive.length} changed live file${changedLive.length === 1 ? '' : 's'})`,
+    `npx vitest related ${[...changedSource, ...changedLive].map((f) => JSON.stringify(f)).join(' ')} --run --maxWorkers=1`,
+  ]);
+}
 if (tier >= 3) steps.push(['security bundle', 'npm run check:security']);
 
 let failed = false;

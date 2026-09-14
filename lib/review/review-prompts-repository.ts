@@ -1,6 +1,8 @@
 import 'server-only';
 import { withServiceRoleConnection, withUserConnection } from '@/lib/supabase/direct';
 import type { RankedPromptCandidate } from './prompt-candidates/ranking';
+import { promptExpiryCutoff } from './prompt-expiry';
+import type { PoolClient } from 'pg';
 
 /**
  * Module 06 (Review & Graduation) Slice 4, §3/§4.3/§4.10 — the WRITE half:
@@ -69,10 +71,67 @@ interface ReviewPromptInsertRow {
  * "no live consumer to design against yet" reasoning the Slice 3 security
  * review already applied to the `canRender`-surface judgment call.
  */
+/**
+ * §4.8's "expiry" leg of the state machine — "pending prompts older than 4
+ * weeks expire silently rather than accumulating." Runs user-wide (every
+ * review, not just `reviewId`), inside the SAME `writeReviewPrompts`
+ * transaction/connection (this file's only writer, so there is no separate
+ * scheduler to hang this off — see this module's own header and
+ * `docs/infra-gaps.md`'s scheduler entry): every time a review's prompts
+ * are (re)materialised for a user, that user's own entire stale backlog is
+ * swept in the same breath.
+ *
+ * `state in ('pending', 'deferred')` only — `accepted`/`declined` are real,
+ * final outcomes, never touched (§6.2's own diagram has no arrow from
+ * either into `expired`). Cutoff is the prompt's own review's `period_end`
+ * (a plain `date` column), not `created_at`/`decided_at` — see
+ * `lib/review/prompt-expiry.ts`'s header for the full reasoning.
+ * `promptExpiryCutoff` (imported from there, not re-derived here) is
+ * computed in JS and passed down as a plain `date` bind parameter, then
+ * compared `date < date` in SQL — deliberately NOT `timestamptz`
+ * arithmetic in SQL (`period_end::timestamptz - interval`), which would
+ * silently depend on the connection's session timezone for the implicit
+ * `date -> timestamptz` cast; this repo's own established convention for
+ * "which calendar day" comparisons is a UTC date string computed in JS
+ * (`current-period.ts`'s `now.toISOString().slice(0, 10)`), reused here so
+ * the SQL and the pure/unit-tested cutoff function can never drift apart
+ * AND never depend on the DB session's timezone setting.
+ *
+ * No `prompt_history` write, no notification, no UI message — this is the
+ * "silent" half of §4.8, distinct from decline (§4.5), which is loud
+ * (recorded, dormancy-tracked). A trader who let a prompt lapse was never
+ * asked to weigh in on it; expiry is bookkeeping, not a decision outcome.
+ */
+async function expireStalePromptsForUser(
+  client: PoolClient,
+  userId: string,
+  asOfDate: Date,
+  currentReviewId: string,
+): Promise<void> {
+  const cutoffDate = promptExpiryCutoff(asOfDate).toISOString().slice(0, 10);
+  // Never the review being (re)materialised right now: its own pending set is
+  // replaced below, and expiring it first left orphaned `expired` duplicates
+  // when an older period was re-materialised (caught by the IDEMPOTENCY live
+  // test, 2026-09-15).
+  await client.query(
+    `update retrospeq.review_prompts rp
+        set state = 'expired'
+       from retrospeq.reviews r
+      where rp.review_id = r.id
+        and rp.user_id = $1
+        and r.user_id = $1
+        and rp.review_id <> $3
+        and rp.state in ('pending', 'deferred')
+        and r.period_end < $2::date`,
+    [userId, cutoffDate, currentReviewId],
+  );
+}
+
 export async function writeReviewPrompts(
   userId: string,
   reviewId: string,
   ranked: readonly RankedPromptCandidate[],
+  asOfDate: Date = new Date(),
 ): Promise<WrittenReviewPrompt[]> {
   return withServiceRoleConnection(async (client) => {
     // Same row lock `markReviewCompleted` takes, so prompt materialisation
@@ -86,6 +145,11 @@ export async function writeReviewPrompts(
       [userId, reviewId],
     );
     if (locked.rows[0]?.completed_at) return [];
+
+    // §4.8 expiry sweep, this user's whole backlog, before this review's
+    // own pending set is replaced below — see `expireStalePromptsForUser`'s
+    // own header for why this runs here rather than in a separate job.
+    await expireStalePromptsForUser(client, userId, asOfDate, reviewId);
 
     await client.query(
       `delete from retrospeq.review_prompts

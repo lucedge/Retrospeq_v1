@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { fetchNextDecision } from './actions';
+import { fetchNextDecision, fetchDeferredBacklog } from './actions';
 import { DecisionCard } from './DecisionCard';
 import { RelaxationDecisionCard } from './RelaxationDecisionCard';
 import { PromotionDecisionCard } from './PromotionDecisionCard';
@@ -77,6 +77,37 @@ export default async function ReviewDecisionsPage() {
   }
 
   if (result.status === 'none_pending') {
+    // Frame 4.11 — a read-only backlog of subjects deferred in earlier
+    // weeks, still not expired (§4.8). No decision buttons anywhere here
+    // (this slice's own dispatch: "decisions stay one at a time in the
+    // normal flow") — the ghost button below only navigates back to
+    // `/review`, it does not act on any backlog row.
+    const backlog = await fetchDeferredBacklog();
+    const items = backlog.success ? backlog.items : [];
+
+    if (items.length > 0) {
+      return (
+        <section className="flex flex-col gap-3" aria-labelledby="dec-h">
+          <p className="review__period">Deferred</p>
+          <h1 id="dec-h" className="rq-h1">
+            Not yet, from earlier weeks
+          </h1>
+          <p className="rq-sub">Deferred decisions wait here. Anything older than four weeks expires quietly.</p>
+          <ul className="backlog">
+            {items.map((item) => (
+              <li key={item.id}>
+                <span>{item.subjectSentence}</span>
+                <time>{item.ageLabel}</time>
+              </li>
+            ))}
+          </ul>
+          <Link href="/review" className="rq-btn rq-btn--ghost">
+            Back to this week
+          </Link>
+        </section>
+      );
+    }
+
     return (
       <section className="flex flex-col gap-3" aria-labelledby="dec-h">
         <h1 id="dec-h" className="rq-h1">
