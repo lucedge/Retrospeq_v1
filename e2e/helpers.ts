@@ -25,10 +25,13 @@ export function loadEnvLocal(): void {
 
 loadEnvLocal();
 
+// Auth emails really send now (Resend SMTP on the dev project). Resend's
+// `delivered@resend.dev` test inbox accepts +labels without bouncing, so
+// signup/reset E2Es don't burn sender reputation on @example.com addresses.
 export function uniqueTestEmail(label: string): string {
-  return `retrospeq-e2e-${label}-${Date.now()}-${Math.random()
+  return `delivered+retrospeq-e2e-${label}-${Date.now()}-${Math.random()
     .toString(36)
-    .slice(2)}@example.com`;
+    .slice(2)}@resend.dev`;
 }
 
 /** Deletes an auth.users row created by an E2E test — cleanup, mirrors lib/supabase/__tests__/rls-test-helpers.ts. */

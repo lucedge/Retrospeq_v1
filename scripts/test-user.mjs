@@ -15,7 +15,7 @@ const db = process.env.SUPABASE_DB_URL;
 if (!url || !key || !db) { console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / SUPABASE_DB_URL — run with --env-file=.env.local'); process.exit(2); }
 const h = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
 // Anything an agent or test ever created. Real accounts use real domains; every pattern here is a throwaway domain.
-const TEST_PATTERNS = ['%@example.com', '%@example.test', '%@retrospeq-e2e.test', '%@example.org'];
+const TEST_PATTERNS = ['%@example.com', '%@example.test', '%@retrospeq-e2e.test', '%@example.org', 'delivered+retrospeq-%@resend.dev'];
 
 async function withDb(fn) { const c = new pg.Client({ connectionString: db }); await c.connect(); try { return await fn(c); } finally { await c.end(); } }
 async function deleteUser(c, id) {
