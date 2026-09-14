@@ -503,6 +503,69 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
   );
 
   it(
+    'Module 08 §5.4 -- a forced ensureDefaultStrategyForUser rejection after a successful sync never fails the sync itself (tester gate 2026-09-14, checklist item #4: sync.ts had no forced-failure proof, only actions.ts did)',
+    async () => {
+      if (!env) return;
+      const { input } = loadFixture('simple_daytrades');
+      const user = await createTestAuthUser(env, 'sync-live-default-strategy-nonblocking');
+      cleanupUserIds.push(user.id);
+
+      const connectedAt = new Date(earliestFilledAt(input.fills).getTime() - 24 * 3600 * 1000);
+      const { accountId, masterKeyProvider } = await seedAccountWithCredential(db, user.id, input.account, connectedAt);
+
+      // `vi.spyOn` a real, already-imported module namespace object
+      // (rather than `vi.doMock` + `vi.resetModules`) -- `sync.ts` holds
+      // the SAME module reference this test spies on, so the override
+      // takes effect with no module-graph reset, no second DB-pool
+      // construction, and none of the cross-test connection-pool
+      // hangs that approach caused against the shared dev DB (found
+      // directly: the `doMock`/`resetModules` version passed its own
+      // assertions but then hung this file's `afterEach` cleanup query).
+      const defaultStrategyModule = await import('@/lib/onboarding/default-strategy');
+      const ensureDefaultStrategyForUserMock = vi
+        .spyOn(defaultStrategyModule, 'ensureDefaultStrategyForUser')
+        .mockRejectedValue(new Error('forced failure -- proving non-blocking'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const { createFixtureBrokerAdapter } = await import('@/lib/broker/fixture-adapter');
+        const { runSync } = await import('../sync');
+        const adapter = createFixtureBrokerAdapter({
+          behavior: 'connect_ok',
+          fills: input.fills as unknown as Parameters<typeof createFixtureBrokerAdapter>[0]['fills'],
+        });
+
+        // The real assertion: `runSync` itself resolves with a genuinely
+        // successful (`ok`) sync result, never throws, even though its own
+        // `ensureDefaultStrategyForUser` call rejects -- proving the
+        // `try { await ensureDefaultStrategyForUser(...) } catch { console.error }`
+        // wrapping at this call site (sync.ts, alongside the
+        // `advanceOnboardingStageBestEffort` call) is a structural
+        // guarantee, not just a callee-contract assumption.
+        const result = await runSync(accountId, adapter, { trigger: 'connect', masterKeyProvider });
+        expect(result.skipped).toBe(false);
+        if (!result.skipped) expect(result.status).toBe('ok');
+        expect(ensureDefaultStrategyForUserMock).toHaveBeenCalledTimes(1);
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[sync] ensureDefaultStrategyForUser failed unexpectedly'),
+          expect.any(Error),
+        );
+
+        // And, per the module's own idempotent-retry design, no strategy
+        // row was left behind by the forced failure -- this trader is
+        // simply retried on their next sync (this file's own comment on
+        // `ensureDefaultStrategyForUser`'s header applies).
+        const strategies = await db.query('select count(*)::int as n from retrospeq.strategies where user_id = $1', [user.id]);
+        expect(strategies.rows[0].n).toBe(0);
+      } finally {
+        errorSpy.mockRestore();
+        ensureDefaultStrategyForUserMock.mockRestore();
+      }
+    },
+    20_000,
+  );
+
+  it(
     'falls back to trading_accounts.created_at as the sync baseline when connected_at is null (header judgment call #2\'s documented fallback, exercised for real)',
     async () => {
       if (!env) return;
