@@ -1,7 +1,7 @@
 -- Module 01 (Identity & Accounts) §3.1 — `profiles`, the table every
 -- other Retrospeq table hangs off via `user_id references profiles(id)`.
 --
--- This migration is what unblocks 20260819020000_shadow_harness.sql's
+-- This migration is what unblocks 20260820015000_shadow_harness.sql's
 -- forward-dependency FK (`retrospeq.shadow_runs.user_id references
 -- retrospeq.profiles(id)`) — see that file's header comment and
 -- PROGRESS.md's 2026-08-20 decision-log entry for the precise, verified

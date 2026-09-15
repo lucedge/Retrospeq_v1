@@ -16,7 +16,7 @@ Built end-to-end by autonomous Claude Code agents with no human review gate on c
 
 - Plain-language summary first, technical detail second.
 - Cost and cadence are the owner's call — model choices, loop frequency, full-suite runs, anything recurring. State the tradeoff, let them pick.
-- LuceEdge is a separate live product by the same owner sharing one dev/test Supabase project (`docs/adr/0002`). `reference/lucedge-broker-prior-art/` is a frozen snapshot: prior art, never copy-paste (it doesn't meet this security bar).
+- LuceEdge is a separate live product by the same owner; Retrospeq has its own Supabase project and Vercel project (`docs/adr/0045`, supersedes 0002). `reference/lucedge-broker-prior-art/` is a frozen snapshot: prior art, never copy-paste (it doesn't meet this security bar).
 - **Stop means stop everything**, in any phrasing: end the `/loop` (`ScheduleWakeup stop`), `TaskStop` every background agent, confirm the cloud routine is paused, `git status`, then say plainly what was stopped. Act first, ask after. Resuming is always an explicit instruction.
 
 ## Never fake it, always flag it
@@ -74,4 +74,4 @@ Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout
 
 ## Known infra gaps (build against the interfaces, don't block)
 
-No Vercel project · no dedicated Supabase project (shared dev one only) · no external KMS · broker vendor undecided · app-authored email not yet wired to Resend (Auth emails work via Resend SMTP since 2026-09-14). Details and follow-ups: `docs/infra-gaps.md`. Host is macOS / Node 24 (since 2026-09-13); any Windows-drive workaround you find in archived history is obsolete.
+Supabase prod project not created yet (one free project serves dev + Vercel Production until ~a week before alpha, ADR 0045) · no invite list yet · no external KMS · broker vendor undecided · app-authored email not yet wired to Resend (Auth emails work via Resend SMTP since 2026-09-14). Details and follow-ups: `docs/infra-gaps.md`. Host is macOS / Node 24 (since 2026-09-13); any Windows-drive workaround you find in archived history is obsolete.

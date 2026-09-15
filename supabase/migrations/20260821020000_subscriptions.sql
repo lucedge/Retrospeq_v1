@@ -137,7 +137,7 @@ create policy analytic_config_read_authenticated on retrospeq.analytic_config
 --   1. `retrospeq.uuid_generate_v7()` already established the precedent
 --      in this repo of `create or replace function` being the accepted
 --      way for a later migration to extend an earlier one's behavior
---      (see 20260819020000_shadow_harness.sql's header comment) — this
+--      (see 20260820015000_shadow_harness.sql's header comment) — this
 --      follows the same convention rather than inventing a second one.
 --   2. One trigger firing once and doing "everything a brand-new user
 --      needs" is easier to reason about transactionally than two

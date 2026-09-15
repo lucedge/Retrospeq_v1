@@ -25,7 +25,9 @@ if (logs) findings.push('possible credential in log output:\n' + logs);
 // 5. New migrations must enable RLS and add a policy.
 const migs = execSync("git diff --name-only HEAD -- supabase/migrations; git ls-files --others --exclude-standard supabase/migrations", { encoding: 'utf8' }).split('\n').filter(Boolean);
 for (const m of new Set(migs)) {
-  const t = execSync(`cat ${JSON.stringify(m)}`, { encoding: 'utf8' });
+  // Strip `--` line comments: prose like "`create table if not exists` above" parsed as a table named
+  // "if", and a policy mentioned only in a comment must not count as one.
+  const t = execSync(`cat ${JSON.stringify(m)}`, { encoding: 'utf8' }).replace(/--[^\n]*/g, '');
   const creates = [...t.matchAll(/create table (?:if not exists )?(?:retrospeq\.)?(\w+)/gi)].map((x) => x[1]);
   for (const tbl of creates) {
     if (!new RegExp(`alter table (?:retrospeq\\.)?${tbl} enable row level security`, 'i').test(t)) findings.push(`${m}: table ${tbl} created without "enable row level security"`);

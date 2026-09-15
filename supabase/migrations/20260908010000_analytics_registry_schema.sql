@@ -6,7 +6,7 @@
 -- built, not an omission in this slice") plus Module 05 §3.1's remaining
 -- four tables (`findings`, `detections`, `analytic_renders`,
 -- `finding_rule_links` -- `shadow_runs` already exists,
--- `20260819020000_shadow_harness.sql`).
+-- `20260820015000_shadow_harness.sql`).
 --
 -- Schema-qualified per this repo's established convention (every prior
 -- migration). No UI, no edge engine, no detection engine, no real

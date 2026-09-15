@@ -1,6 +1,6 @@
 # ADR 0002: Shared dev/test Supabase project, isolated via a dedicated schema
 
-**Status:** Accepted, owner decision 2026-08-20.
+**Status:** Superseded by ADR 0045 (2026-09-15) — the shared project was deleted; Retrospeq now has its own Supabase project. Kept for history.
 
 ## Context
 

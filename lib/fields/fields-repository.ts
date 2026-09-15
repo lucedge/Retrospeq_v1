@@ -361,7 +361,7 @@ export interface CreatedField {
  * `kind = 'account'` -> `'acct.' || uuidv7`. `kind = 'strategy_var'` ->
  * `'str.' || uuidv7`. Both generated server-side, in SQL, via the same
  * `retrospeq.uuid_generate_v7()` function every other UUID-shaped primary
- * key in this schema already uses (`20260819020000_shadow_harness.sql`) —
+ * key in this schema already uses (`20260820015000_shadow_harness.sql`) —
  * not the `uuidv7` npm package, so id generation stays inside the same
  * transaction as the write with no extra round trip and no risk of a
  * client-clock-skewed timestamp component.

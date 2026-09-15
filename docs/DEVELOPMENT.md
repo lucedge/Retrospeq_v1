@@ -732,7 +732,7 @@ code bug.
   `rule_evaluations`, `engagement_events`/`milestones`) — check against
   this pattern for any new such table, don't assume a cascade covers it.
 - **`uuid_generate_v7()`** is defined once, in
-  `supabase/migrations/20260819020000_shadow_harness.sql` (`create or
+  `supabase/migrations/20260820015000_shadow_harness.sql` (`create or
   replace`) — every other migration's own declaration is a no-op.
 - **The `flip_no_flat` golden fixture encodes a real spec tension**
   between Module 02 §4.2 and §3.1's fill-uniqueness index — see

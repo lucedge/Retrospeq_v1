@@ -13,15 +13,14 @@
 -- harness itself owns and needs regardless of which analytics eventually
 -- register with it.
 --
--- FORWARD DEPENDENCY (unresolved until Module 01 lands): the FK below
--- targets `profiles(id)`, which Module 01 (Identity & Accounts) has not
--- been migrated yet in this repo. This file is written correctly against
--- the eventual schema per AGENTS.md's "build against the interfaces"
--- rule, but it cannot actually be applied to a real database until a
--- migration creating `profiles` runs first. No migration in this repo has
--- ever been applied to a live Supabase project (none exists yet — see
--- PROGRESS.md "Infra gaps"), so renumbering this file's timestamp ahead
--- of Module 01's migration, once that lands, is safe and expected.
+-- ORDERING: the FK below targets `retrospeq.profiles(id)`. This file was
+-- originally timestamped 20260819020000, ahead of the profiles migration,
+-- and only worked on the old shared dev project because it was applied by
+-- hand after profiles existed. Renumbered to 20260820015000 (after
+-- 20260820010000_profiles, before 20260820020000_retrospeq_schema_grants,
+-- matching the order it actually ran in) on 2026-09-15, when the first
+-- from-scratch replay onto a fresh project failed on it. No database had
+-- the old version recorded, so the rename rewrites no applied history.
 
 -- `uuid_generate_v7()` is referenced by every module spec's DDL
 -- (00-foundation §2.1: "All primary keys are UUID v7") but no module
