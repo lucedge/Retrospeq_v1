@@ -171,6 +171,65 @@ decision is made, not promoted by migration fiat). See that migration's
 own header for the full per-id value table and reasoning, and ADR 0023's
 Addendum for `find.number` specifically.
 
+## Addendum (2026-09-15): plan-gated findings are omitted, not folded into "insufficient"
+
+Decision #4 above ("a gated-off finding is treated identically to no
+finding at all") turned out to have a real blind spot, found by `qa`
+against Module 08 §5.4's default-strategy seed (PROGRESS.md 2026-09-15
+QA FAIL, `fa25d22`): 8 of the 9 permanent `drv.*` derived fields every
+user gets resolve to a Pro-gated analytic id
+(`find.pickone`/`find.toggle`/`find.number`, `analytics-registry.md`
+§7's "Tier 0, judgment findings ... Pro tier by definition"). A free
+user's default strategy therefore showed 8 fields permanently reading
+"Not enough data yet" — decision #4's own reused `insufficient` state —
+with no way for MORE TRADES to ever change that outcome, because the
+real reason was the plan, not the sample size. That is a materially
+different claim than "not enough data yet" and, read literally, a false
+one (more data will never resolve it).
+
+**Fix**: `findings-service.ts`'s `getStrategyFieldFindings` now inspects
+`canRender`'s own `reason` (already a first-class value,
+`registry-runtime.ts`'s `CanRenderReason`) rather than only its boolean.
+`reason === 'plan'` — the one PERMANENT, non-self-resolving block reason
+— causes the field to be **omitted from the returned array entirely**,
+not shown at all. Every other reason (`disabled`, `cohort`, `suppressed`,
+`tier`, `config_unavailable`, `not_configured`) keeps decision #4's
+original "same as insufficient" behaviour unchanged — these are all
+administrative or transient states that could resolve without the
+trader doing anything (a kill-switch flip, joining a cohort, a config
+read recovering), so "not enough data yet" remains an honest description
+of "nothing to show you right now" for those.
+
+This narrows, rather than reverses, decision #4's "omit the field's card
+entirely — rejected" call: that rejection was about a **captured** field
+a trader deliberately added disappearing from a **stable roster**
+(§5.1's own framing). It does not hold the same way for a Pro-gated
+analytic id on a plan that structurally can never render it — there is
+no roster expectation being violated, since the field was never going to
+show anything to this user at any sample size. No per-field Pro lock
+affordance exists anywhere in this repo today (grepped
+`FieldsList.tsx`/`RuleList.tsx`/`strategies/page.tsx` — every existing
+Pro upsell is page- or section-level); per this fix's own dispatch,
+omission is the correct default in the absence of an established
+pattern, logged here rather than inventing a new card design.
+
+Same principle applied to `lib/onboarding/field-introduction-repository.ts`'s
+framing-finding read (Module 08 §5.5): it now calls `canRender` on each
+candidate finding and skips any the user's own plan cannot render, so
+the field-introduction offer never frames itself with a finding a free
+user could not actually go on to see on the strategy screen.
+
+Also applied to `lib/review/weekly-findings.ts`'s `assembleWeeklyFindings`
+(Module 06's "What your trades say" panel, §4.2 Part 1) — the OTHER real
+caller of the same `getStrategyFieldFindings`-shaped pipeline, generalised
+across every strategy. There the stakes are higher than a single field
+card: a plan-blocked candidate that fell through to
+`buildNoDataFindingPayload` was competing for one of the panel's
+`WEEKLY_FINDINGS_CAP` (3) slots against real candidates, so a free user
+could have a Pro-gated field's fake "not enough data yet" card silently
+DISPLACE a real finding they were plan-eligible to see. `reason === 'plan'`
+candidates are now skipped before ranking, not merely mislabelled.
+
 ## Consequences
 
 - A future copy-review pass over the generic statement templates in

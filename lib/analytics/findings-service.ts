@@ -1,5 +1,5 @@
 import 'server-only';
-import { canRender } from './registry-runtime-service';
+import { canRender, type CanRenderResult } from './registry-runtime-service';
 import { fetchActiveFindingsForStrategy } from './findings-repository';
 import { recordAnalyticRender } from './render-repository';
 import { resolveAnalyticId } from './edge-engine/edge-engine';
@@ -35,6 +35,29 @@ import {
  * `findings-payload.ts`'s own header on `buildNoDataFindingPayload` for
  * why this reuses the existing `insufficient` state rather than
  * inventing a sixth, spec-uninvented confidence value for "gated."
+ *
+ * PLAN-GATED EXCEPTION (docs/adr/0035 addendum, 2026-09-15 QA FAIL fix):
+ * ADR 0035 decision #4 treats every `canRender=false` reason identically
+ * (fold into "not enough data yet"). That reasoning breaks down
+ * specifically for `reason === 'plan'`: unlike `disabled`/`cohort`/
+ * `suppressed`/`tier`/`config_unavailable` — all administrative or
+ * transient states that could self-resolve without the trader doing
+ * anything — a plan gate is PERMANENT for this user until they upgrade,
+ * so "not enough data yet" is not just imprecise, it is actively false:
+ * more trades will NEVER change the outcome. This was found for real
+ * (Module 08 §5.4's default-strategy seed, PROGRESS.md 2026-09-15 QA
+ * FAIL): 8 of the 9 seeded `drv.*` fields resolve to a Pro-gated
+ * analytic id, so a free user's strategy screen showed 8 permanently
+ * "not enough data yet" cards indistinguishable from a genuinely
+ * under-sampled captured field. No established per-FIELD Pro affordance
+ * exists anywhere in this repo (grepped `fields/FieldsList.tsx`,
+ * `rules/RuleList.tsx`, `strategies/page.tsx` — every existing Pro
+ * upsell is page/section-level, e.g. "Upgrade to Pro to build another
+ * strategy," never a per-card lock icon) — per this fix's own dispatch,
+ * omission is the default when no such pattern exists, so a
+ * `reason === 'plan'` field is dropped from the returned array entirely
+ * rather than shown at all. Every other block reason keeps ADR 0035's
+ * original "same as insufficient" behaviour unchanged.
  *
  * RENDER LOGGING (§4.8: "Every successful render writes an
  * `analytic_renders` row with the exact payload shown"): fired once per
@@ -90,7 +113,7 @@ export async function getStrategyFieldFindings(
     else rowsByField.set(row.fieldId, [row]);
   }
 
-  const canRenderCache = new Map<string, boolean>();
+  const canRenderCache = new Map<string, CanRenderResult>();
   const results: FieldFindingDisplay[] = [];
 
   for (const field of segmentable) {
@@ -110,14 +133,19 @@ export async function getStrategyFieldFindings(
       continue;
     }
 
-    let allowed = canRenderCache.get(representative.analyticId);
-    if (allowed === undefined) {
-      const result = await canRender(representative.analyticId, userId, 'strategy');
-      allowed = result.canRender;
-      canRenderCache.set(representative.analyticId, allowed);
+    let renderCheck = canRenderCache.get(representative.analyticId);
+    if (renderCheck === undefined) {
+      renderCheck = await canRender(representative.analyticId, userId, 'strategy');
+      canRenderCache.set(representative.analyticId, renderCheck);
     }
 
-    if (!allowed) {
+    if (!renderCheck.canRender) {
+      if (renderCheck.reason === 'plan') {
+        // See this file's own header, "PLAN-GATED EXCEPTION" — a
+        // permanent plan wall must never masquerade as "not enough data
+        // yet." Omitted entirely, not pushed as any payload.
+        continue;
+      }
       results.push({ fieldId: field.fieldId, fieldName: field.name, payload: buildNoDataFindingPayload(representative.analyticId) });
       continue;
     }

@@ -18,16 +18,22 @@ const {
   fetchOnboardingStateMock,
   recordFieldsOfferedBestEffortMock,
   fetchUnlockStateMock,
+  canRenderMock,
 } = vi.hoisted(() => ({
   withUserConnectionMock: vi.fn(),
   queryMock: vi.fn(),
   fetchOnboardingStateMock: vi.fn(),
   recordFieldsOfferedBestEffortMock: vi.fn(),
   fetchUnlockStateMock: vi.fn(),
+  canRenderMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/direct', () => ({
   withUserConnection: withUserConnectionMock,
+}));
+
+vi.mock('@/lib/analytics/registry-runtime-service', () => ({
+  canRender: canRenderMock,
 }));
 
 vi.mock('../onboarding-state-repository', async (importOriginal) => {
@@ -98,6 +104,9 @@ beforeEach(() => {
   fetchOnboardingStateMock.mockReset();
   recordFieldsOfferedBestEffortMock.mockReset().mockResolvedValue(undefined);
   fetchUnlockStateMock.mockReset();
+  // Default: the candidate's plan check passes -- individual tests override
+  // this to prove the 2026-09-15 QA-fix plan-gating behaviour.
+  canRenderMock.mockReset().mockResolvedValue({ canRender: true, reason: 'ok' });
 });
 
 describe('fetchFieldIntroductionOfferForUser', () => {
@@ -201,6 +210,43 @@ describe('fetchFieldIntroductionOfferForUser', () => {
     expect(sql).toContain("fl.kind <> 'strategy_var'");
     expect(sql).toContain('retrospeq.analytic_renders');
     expect(sql).toContain("fnd.confidence in ('confident', 'provisional')");
-    expect(params).toEqual(['user-1']);
+    expect(params).toEqual(['user-1', 10]);
+  });
+
+  it('2026-09-15 QA FAIL fix: a candidate finding whose analytic_id the user\'s plan cannot render is never used to frame the offer, and canRender (not a re-invented plan check) is what decides', async () => {
+    fetchOnboardingStateMock.mockResolvedValue(onboardingState());
+    fetchUnlockStateMock.mockResolvedValue(unlockState());
+    queryMock.mockResolvedValue({ rows: [framingRow()] });
+    canRenderMock.mockResolvedValue({ canRender: false, reason: 'plan' });
+    const { fetchFieldIntroductionOfferForUser } = await import('../field-introduction-repository');
+
+    const result = await fetchFieldIntroductionOfferForUser('user-1', now);
+
+    expect(result).toBeNull();
+    expect(canRenderMock).toHaveBeenCalledWith('find.pickone', 'user-1', 'dashboard');
+    // Blocked before the write -- a plan-gated candidate never consumes
+    // the cooldown.
+    expect(recordFieldsOfferedBestEffortMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the SECOND candidate when the most recent one is plan-blocked, and uses the first one canRender actually allows', async () => {
+    fetchOnboardingStateMock.mockResolvedValue(onboardingState());
+    fetchUnlockStateMock.mockResolvedValue(unlockState());
+    queryMock.mockResolvedValue({
+      rows: [
+        framingRow({ analytic_id: 'find.pickone', field_id: 'drv.day_of_week', field_name: 'Day of week' }),
+        framingRow({ analytic_id: 'find.session', field_id: 'drv.session', field_name: 'Session' }),
+      ],
+    });
+    canRenderMock.mockImplementation(async (analyticId: string) => ({
+      canRender: analyticId === 'find.session',
+      reason: analyticId === 'find.session' ? 'ok' : 'plan',
+    }));
+    const { fetchFieldIntroductionOfferForUser } = await import('../field-introduction-repository');
+
+    const result = await fetchFieldIntroductionOfferForUser('user-1', now);
+
+    expect(result?.fieldId).toBe('drv.session');
+    expect(recordFieldsOfferedBestEffortMock).toHaveBeenCalledTimes(1);
   });
 });

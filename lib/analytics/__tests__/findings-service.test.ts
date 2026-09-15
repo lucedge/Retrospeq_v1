@@ -127,3 +127,35 @@ describe('getStrategyFieldFindings -- fail-closed catch blocks (the tester-flagg
     consoleErrorSpy.mockRestore();
   });
 });
+
+describe('getStrategyFieldFindings -- plan-gated fields are omitted, never rendered as "not enough data yet" (2026-09-15 QA FAIL fix, docs/adr/0035 addendum)', () => {
+  it('reason=plan: the field is dropped from the results entirely -- not the same payload a zero-data field gets', async () => {
+    resolveAnalyticIdMock.mockReturnValue('find.rating');
+    fetchActiveFindingsForStrategyMock.mockResolvedValueOnce([FINDING_ROW]);
+    canRenderMock.mockResolvedValueOnce({ canRender: false, reason: 'plan' });
+
+    const { getStrategyFieldFindings } = await import('../findings-service');
+    const results = await getStrategyFieldFindings('user-1', 'strategy-1', [FIELD]);
+
+    expect(results).toEqual([]);
+    expect(recordAnalyticRenderMock).not.toHaveBeenCalled();
+  });
+
+  it('reason=cohort (a non-plan, administrative block) keeps the ADR 0035 original "same as insufficient" fallback -- this fix narrows the exception, it does not remove decision #4', async () => {
+    resolveAnalyticIdMock.mockReturnValue('find.rating');
+    fetchActiveFindingsForStrategyMock.mockResolvedValueOnce([FINDING_ROW]);
+    canRenderMock.mockResolvedValueOnce({ canRender: false, reason: 'cohort' });
+
+    const { getStrategyFieldFindings } = await import('../findings-service');
+    const results = await getStrategyFieldFindings('user-1', 'strategy-1', [FIELD]);
+
+    expect(results).toEqual([
+      {
+        fieldId: FIELD.fieldId,
+        fieldName: FIELD.name,
+        payload: { analytic_id: 'find.rating', confidence: 'insufficient', statement: 'Not enough data yet.', n: 0, remaining: 20 },
+      },
+    ]);
+    expect(recordAnalyticRenderMock).not.toHaveBeenCalled();
+  });
+});

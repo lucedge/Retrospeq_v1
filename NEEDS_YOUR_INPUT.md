@@ -11,6 +11,83 @@ Check this file (not `PROGRESS.md`'s prose) when you want a fast, glanceable
 answer to "does anything need me right now."
 
 ---
+## No session-boundary vocabulary is defined anywhere (blocks the ONLY two Free-tier derived findings in the registry: `find.session`, `find.daysession`)
+
+**What's needed:** a real product decision on what "session" means as a
+value — e.g. the UTC hour ranges for Asia/London/NY (and whatever
+overlap/rollover convention applies), and how a broker account's own
+`day_rollover` setting factors in (Module 03 §3.2's own field-registry
+table names the source as "Entry timestamp + account rollover," but
+nothing anywhere defines the actual boundaries).
+
+**Why an agent can't resolve this alone:** `20260902010000_field_registry
+_schema.sql`'s own migration comment already flagged this at write time —
+`drv.session` is seeded with an EMPTY `config.options` because "no
+session-name vocabulary (Asia/London/NY/etc.) is defined anywhere in this
+repo or either module's spec yet." `lib/analytics/edge-engine/field-values.ts`
+confirms the same gap independently on the read side: `drv.session` has
+no extractor in `DERIVED_FROM_TRADE_COLUMNS`, so every trade resolves to
+`null` for it, forever, regardless of trade count. Inventing session
+boundaries myself (e.g. "London = 08:00-16:00 UTC") would be fabricating
+a product definition with no spec or design-decision backing it — exactly
+the "product decision the spec doesn't answer" AGENTS.md says to flag,
+not guess at.
+
+**What's stalled, concretely, found while fixing the 2026-09-15 QA FAIL
+(plan-gated findings rendering as "not enough data yet"):** `analytics-
+registry.md` §7 names exactly two Free-plan derived findings in the whole
+registry — `find.session` ("Your London-session trades outperform,"
+surface: weekly) and `find.daysession` ("Friday afternoons lost money 68%
+of the time," surface: onboarding, needs "derived day+session"). Neither
+is reachable by any user today, at any trade count, on any plan:
+
+- `find.session` (`drv.session`) — the field itself never gets a value
+  (no vocabulary, no extractor). Live-proven 2026-09-15
+  (`lib/onboarding/__tests__/default-strategy-edge-integration.live.test.ts`):
+  a default strategy with 50 confirmed trades produces a real `confident`
+  finding on `drv.direction`, but ZERO `findings` rows ever get written
+  for `drv.session` — not "insufficient," literally never computed.
+  Separately, `find.session`'s own `analytic_config` row is
+  `cohort_only = true` (beta status, `20260911010000_findings_analytic_
+  config_seed.sql`) — so even once the vocabulary exists, an ordinary
+  free trader outside the beta cohort still couldn't see it without a
+  separate beta->live promotion decision (§4, working as designed, not a
+  bug).
+- `find.daysession` doesn't exist in code at all. Building it "the way
+  `find.session` is built" (a field-specific `resolveAnalyticId` override,
+  `edge-engine.ts`) needs the SAME session vocabulary as a precondition,
+  plus a genuinely new capability this codebase doesn't have yet: a
+  composite day-of-week × session VALUE, since the single-field
+  segmentation engine (`edge-engine.ts`'s own header: "SINGLE-FIELD ONLY,
+  THIS SLICE... no combination-segment generator exists") can't combine
+  two existing fields (`drv.day_of_week`, `drv.session`) into one segment
+  today. The narrowest honest path once session boundaries are decided is
+  a THIRD derived field (e.g. `drv.day_session`, a single composite
+  categorical value computed per trade) rather than a general multi-field
+  combination engine — but that's still a new field-registry entry
+  needing its own product sign-off (name, id, whether it's seeded
+  retroactively for existing users), not invented here.
+
+**Net effect on the Free tier's own "derived findings" promise**
+(design-decisions §15: Free gets "broker import, derived findings, all
+five behaviour detections..."): today, EVERY ONE of the 9 permanent
+`drv.*` fields either resolves to a Pro-gated analytic id (8 of 9,
+already correctly omitted per the 2026-09-15 plan-gate fix, PROGRESS.md)
+or has no data source at all (`drv.session`, the 9th). A free trader's
+default strategy and weekly review currently show **zero** live derived
+findings, honestly (never fabricated), but that means the "derived
+findings" line of the Free-tier pitch has no working example yet.
+
+**What was built in the meantime (2026-09-15):** the plan-gate honesty
+fix itself (`findings-service.ts`, `weekly-findings.ts`,
+`field-introduction-repository.ts` — docs/adr/0035's addendum) is real,
+live-tested, and unconditionally correct regardless of when/whether
+session vocabulary is decided — it stops a Pro-gated finding from ever
+masquerading as "not enough data yet," which was the QA-blocking bug.
+The session-vocabulary gap is a separate, deeper, pre-existing hole this
+slice found and disclosed, not one it silently worked around.
+
+---
 ## Module 06's weekly review has no deployed scheduler to actually run it periodically
 
 **What's needed:** A real deployed scheduler (Vercel Cron, or equivalent)

@@ -1,6 +1,7 @@
 import 'server-only';
 import { withUserConnection } from '@/lib/supabase/direct';
 import { buildFindingPayloadFromRow, type FindingRow, type FindingFieldConfig } from '@/lib/analytics/findings-payload';
+import { canRender } from '@/lib/analytics/registry-runtime-service';
 import type { Confidence } from '@/lib/analytics/edge-engine/gates';
 import type { SegmentDescriptor } from '@/lib/analytics/edge-engine/segmentation';
 import {
@@ -56,6 +57,26 @@ import { isFieldIntroductionOfferEligible } from './field-introduction';
  * stronger correlation is possible without a schema change this slice's
  * own dispatch does not ask for). Logged as a deliberate, disclosed
  * judgment call (PROGRESS.md decision log), not a silent approximation.
+ *
+ * ## Plan-gating the framing finding itself (2026-09-15 QA FAIL fix)
+ *
+ * §5.5 (this offer) has always excluded CAPTURED fields from framing (see
+ * above), but until now never checked whether the trader's own PLAN can
+ * actually render the candidate finding it framed with. Eight of the nine
+ * permanent `drv.*` derived fields resolve to a Pro-gated analytic id
+ * (`edge-engine.ts`'s `resolveAnalyticId` — `find.pickone`/`find.toggle`/
+ * `find.number`, all `min_plan='pro'`, `analytics-registry.md` §7); only
+ * `drv.session`'s own `find.session` id is free. Framing a FREE trader's
+ * offer with a Pro-only finding would invite them into `/fields/new` to
+ * "see more like this," then show them nothing on the very screen the
+ * offer promised — the same plan-gate honesty bug fixed system-wide in
+ * `findings-service.ts` (docs/adr/0035's addendum), applied here at the
+ * one other call site that reads a real `findings` row into user-facing
+ * copy. `fetchFramingFinding` now fetches a short list of candidates
+ * (ordered by recency, same as before) and returns the first whose
+ * `analytic_id` the user's own plan can actually render — reusing
+ * `canRender` (the ONE registry-runtime gate, not a second ad hoc plan
+ * check) rather than inventing a parallel `min_plan` comparison here.
  *
  * ## Reachability, today (a genuine, flagged pre-existing gap)
  *
@@ -118,14 +139,23 @@ interface FramingFinding {
   config: FindingFieldConfig;
 }
 
+/** Small enough to stay cheap (this repo's own established "short
+ *  candidate list, filter in application code" shape — matches
+ *  `pickRepresentativeFinding`'s own sibling pattern), large enough that
+ *  a trader with several qualifying derived findings doesn't lose the
+ *  offer entirely just because their single most-recent one happens to
+ *  be Pro-gated. */
+const FRAMING_CANDIDATE_LIMIT = 10;
+
 /**
- * The single most-recent qualifying finding, RLS-enforced
+ * Up to `FRAMING_CANDIDATE_LIMIT` qualifying candidates, RLS-enforced
  * (`withUserConnection`) plus an explicit `fnd.user_id = $1`/`fl.user_id =
  * $1` scope on every joined table (defense in depth, matching every other
- * read in this codebase). `null` when no row clears every bar above — the
- * common case today, per this file's own "Reachability" note.
+ * read in this codebase), most recent first — plan-filtering happens in
+ * `fetchFramingFinding` below, not here, since `canRender` needs an async
+ * I/O round trip this pure SQL layer has no business making.
  */
-async function fetchFramingFinding(userId: string): Promise<FramingFinding | null> {
+async function fetchFramingFindingCandidates(userId: string): Promise<FramingFinding[]> {
   return withUserConnection(userId, async (client) => {
     const res = await client.query<FramingFindingDbRow>(
       `select fnd.field_id, fl.name as field_name, fl.config as field_config,
@@ -147,12 +177,10 @@ async function fetchFramingFinding(userId: string): Promise<FramingFinding | nul
                and ar.payload ->> 'confidence' in ('confident', 'provisional')
           )
         order by fnd.computed_at desc
-        limit 1`,
-      [userId],
+        limit $2`,
+      [userId, FRAMING_CANDIDATE_LIMIT],
     );
-    const row = res.rows[0];
-    if (!row) return null;
-    return {
+    return res.rows.map((row) => ({
       fieldName: row.field_name,
       config: row.field_config ?? {},
       row: {
@@ -169,8 +197,25 @@ async function fetchFramingFinding(userId: string): Promise<FramingFinding | nul
         deltaAvgR: toNumberOrNull(row.delta_avg_r),
         confidence: row.confidence,
       },
-    };
+    }));
   });
+}
+
+/**
+ * The first candidate (most recent first) whose `analytic_id` this
+ * user's own plan can actually render — see this file's own header,
+ * "Plan-gating the framing finding itself." `null` when no candidate
+ * clears every bar (either none exist, per this file's "Reachability"
+ * note, or every candidate this trader has is Pro-gated and they're on
+ * Free).
+ */
+async function fetchFramingFinding(userId: string): Promise<FramingFinding | null> {
+  const candidates = await fetchFramingFindingCandidates(userId);
+  for (const candidate of candidates) {
+    const result = await canRender(candidate.row.analyticId, userId, 'dashboard');
+    if (result.canRender) return candidate;
+  }
+  return null;
 }
 
 /**

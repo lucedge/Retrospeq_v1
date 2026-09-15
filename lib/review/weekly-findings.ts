@@ -9,7 +9,7 @@ import {
   type FindingPayload,
 } from '@/lib/analytics/findings-payload';
 import { resolveAnalyticId } from '@/lib/analytics/edge-engine/edge-engine';
-import { canRender } from '@/lib/analytics/registry-runtime-service';
+import { canRender, type CanRenderResult } from '@/lib/analytics/registry-runtime-service';
 import { recordAnalyticRender } from '@/lib/analytics/render-repository';
 
 /**
@@ -41,6 +41,17 @@ import { recordAnalyticRender } from '@/lib/analytics/render-repository';
  * own function rather than N calls to that one. See docs/adr/0036 for
  * the full reasoning, including the "actionability" ranking judgment
  * call this file's own `rankCandidates` implements.
+ *
+ * PLAN-GATED EXCEPTION (docs/adr/0035 addendum, 2026-09-15 QA FAIL fix):
+ * the identical fix applied to `findings-service.ts`'s `getStrategyFieldFindings`
+ * applies here too, and matters MORE here — a `canRender` failure with
+ * `reason === 'plan'` is skipped entirely (never turned into an
+ * `insufficient` candidate) because that fallback candidate would
+ * otherwise COMPETE for one of this panel's `WEEKLY_FINDINGS_CAP` (3)
+ * slots, potentially displacing a real finding the trader's own plan CAN
+ * render. Every other block reason (`disabled`/`cohort`/`suppressed`/
+ * `tier`/`config_unavailable`) keeps the pre-existing fallback-candidate
+ * behaviour.
  *
  * RENDER LOGGING — a genuine, deliberate DIFFERENCE from
  * `getStrategyFieldFindings`: that function logs a render for EVERY
@@ -167,7 +178,7 @@ export async function assembleWeeklyFindings(userId: string, limit: number = WEE
     return [];
   }
 
-  const canRenderCache = new Map<string, boolean>();
+  const canRenderCache = new Map<string, CanRenderResult>();
   const candidates: Candidate[] = [];
 
   for (const snapshot of strategySnapshots) {
@@ -202,22 +213,31 @@ export async function assembleWeeklyFindings(userId: string, limit: number = WEE
         continue;
       }
 
-      let allowed = canRenderCache.get(representative.analyticId);
-      if (allowed === undefined) {
+      let renderCheck = canRenderCache.get(representative.analyticId);
+      if (renderCheck === undefined) {
         try {
-          const result = await canRender(representative.analyticId, userId, 'weekly');
-          allowed = result.canRender;
+          renderCheck = await canRender(representative.analyticId, userId, 'weekly');
         } catch (err) {
           // canRender itself is documented never to throw — this catch is
           // defense in depth, matching this file's own overall fail-closed
           // posture, not an expected path.
           console.error('[weekly-findings:assembleWeeklyFindings] canRender failed:', err);
-          allowed = false;
+          renderCheck = { canRender: false, reason: 'config_unavailable' };
         }
-        canRenderCache.set(representative.analyticId, allowed);
+        canRenderCache.set(representative.analyticId, renderCheck);
       }
 
-      if (!allowed) {
+      if (!renderCheck.canRender) {
+        // See `findings-service.ts`'s own header, "PLAN-GATED EXCEPTION"
+        // (docs/adr/0035 addendum, 2026-09-15 QA FAIL fix) — the identical
+        // fix applied at this file's own candidate-ranking level. A
+        // permanent plan wall must never masquerade as "not enough data
+        // yet" — doubly so HERE, since an invented `insufficient` fallback
+        // candidate competes for one of this panel's `WEEKLY_FINDINGS_CAP`
+        // (3) slots, which could displace a real finding a free user
+        // could otherwise have seen. Every other block reason keeps the
+        // pre-existing "same as insufficient" fallback candidate.
+        if (renderCheck.reason === 'plan') continue;
         candidates.push({
           strategyId: snapshot.strategyId,
           fieldId: field.fieldId,

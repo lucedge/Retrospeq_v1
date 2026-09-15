@@ -32,6 +32,40 @@ async function setTradesConfirmed(db: Client, userId: string, n: number) {
   await db.query('update retrospeq.unlock_state set trades_confirmed = $2 where user_id = $1', [userId, n]);
 }
 
+async function setPlan(db: Client, userId: string, plan: 'free' | 'pro') {
+  await db.query('update retrospeq.subscriptions set plan = $2, updated_at = now() where user_id = $1', [userId, plan]);
+}
+
+/** `find.pickone`/`find.session` (like every `find.*` id today) are seeded
+ *  `cohort_only = true` (`beta` status, `20260911010000_findings_analytic_
+ *  config_seed.sql`) — an INDEPENDENT gate from `min_plan` this test file
+ *  needs to hold open to isolate what it's actually testing (the plan
+ *  gate), matching `findings-service.live.test.ts`'s own established
+ *  `addToCohort` helper. */
+async function addToCohort(db: Client, userId: string) {
+  await db.query(`insert into retrospeq.user_cohorts (user_id, cohort) values ($1, 'beta_traders')`, [userId]);
+}
+
+async function seedFindingAndRender(
+  db: Client,
+  userId: string,
+  analyticId: string,
+  fieldId: string,
+): Promise<void> {
+  await db.query(
+    `insert into retrospeq.findings
+       (user_id, analytic_id, strategy_id, field_id, segment, n, win_rate, avg_r,
+        baseline_n, baseline_win_rate, baseline_avg_r, delta_win_rate, delta_avg_r, confidence, state)
+     values ($1, $2, null, $3, $4::jsonb, 12, 0.70, 0.9, 40, 0.45, 0.2, 0.25, 0.7, 'confident', 'active')`,
+    [userId, analyticId, fieldId, JSON.stringify({ op: 'eq', value: 'fri' })],
+  );
+  await db.query(
+    `insert into retrospeq.analytic_renders (user_id, analytic_id, surface, payload)
+     values ($1, $2, 'strategy', $3::jsonb)`,
+    [userId, analyticId, JSON.stringify({ analytic_id: analyticId, confidence: 'confident', statement: 'test render' })],
+  );
+}
+
 async function seedQualifyingFinding(db: Client, userId: string) {
   await db.query(
     `insert into retrospeq.findings
@@ -88,12 +122,14 @@ describe.skipIf(!env)('field-introduction-repository (live DB)', () => {
   );
 
   it(
-    'a real derived finding + a confirmed render + 30 trades: returns a real statement AND stamps fields_offered_at exactly once',
+    'a real derived finding + a confirmed render + 30 trades, PRO plan (find.pickone requires it): returns a real statement AND stamps fields_offered_at exactly once',
     async () => {
       if (!env) return;
       const user = await createTestAuthUser(env, 'field-offer-eligible');
       cleanupUserIds.push(user.id);
       await setTradesConfirmed(db, user.id, 30);
+      await setPlan(db, user.id, 'pro'); // find.pickone is min_plan='pro' -- see the new PRO-gating tests below for the free-plan case.
+      await addToCohort(db, user.id); // find.pickone is also cohort_only=true (beta status) -- an independent gate this test isn't exercising.
       await seedQualifyingFinding(db, user.id);
 
       const { fetchFieldIntroductionOfferForUser } = await import('../field-introduction-repository');
@@ -112,6 +148,50 @@ describe.skipIf(!env)('field-introduction-repository (live DB)', () => {
       // field-introduction-repository.ts's header).
       const second = await fetchFieldIntroductionOfferForUser(user.id, now);
       expect(second).toBeNull();
+    },
+    30_000,
+  );
+
+  it(
+    '2026-09-15 QA FAIL fix: a Pro-gated candidate finding (find.pickone) is NEVER used to frame the offer for a FREE-plan user, even with a real confirmed render and 30 trades',
+    async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'field-offer-plan-gated');
+      cleanupUserIds.push(user.id);
+      await setTradesConfirmed(db, user.id, 30);
+      // Deliberately left on the default 'free' plan.
+      await addToCohort(db, user.id); // isolates the plan gate -- the cohort gate is held open.
+      await seedQualifyingFinding(db, user.id); // find.pickone, min_plan='pro'
+
+      const { fetchFieldIntroductionOfferForUser } = await import('../field-introduction-repository');
+      const result = await fetchFieldIntroductionOfferForUser(user.id, new Date());
+
+      expect(result).toBeNull();
+
+      // Never stamped either -- a free trader who can't see the finding
+      // shouldn't have their cooldown consumed by a nudge that never showed.
+      const row = await db.query('select fields_offered_at from retrospeq.onboarding_state where user_id = $1', [user.id]);
+      expect(row.rows[0].fields_offered_at).toBeNull();
+    },
+    30_000,
+  );
+
+  it(
+    'a FREE-plan-renderable candidate (find.session, min_plan=free) DOES frame the offer for a free-plan user',
+    async () => {
+      if (!env) return;
+      const user = await createTestAuthUser(env, 'field-offer-free-renderable');
+      cleanupUserIds.push(user.id);
+      await setTradesConfirmed(db, user.id, 30);
+      // Deliberately left on the default 'free' plan.
+      await addToCohort(db, user.id); // find.session is cohort_only=true (beta status) -- an independent gate held open here.
+      await seedFindingAndRender(db, user.id, 'find.session', 'drv.session');
+
+      const { fetchFieldIntroductionOfferForUser } = await import('../field-introduction-repository');
+      const result = await fetchFieldIntroductionOfferForUser(user.id, new Date());
+
+      expect(result).not.toBeNull();
+      expect(result?.fieldId).toBe('drv.session');
     },
     30_000,
   );

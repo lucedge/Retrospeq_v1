@@ -303,6 +303,41 @@ describe.skipIf(!env)('lib/review/weekly-findings.ts (live DB)', () => {
     expect(renderRows.rows).toHaveLength(0);
   }, 30_000);
 
+  it('2026-09-15 QA FAIL fix: a FREE-plan user with a real confident finding on a Pro-gated analytic gets it OMITTED, not a slot-consuming "not enough data yet" candidate', async () => {
+    if (!env) return;
+    const user = await createTestAuthUser(envBundle, 'weekly-findings-plan-gated');
+    cleanupUserIds.push(user.id);
+    // Deliberately left on the default 'free' plan, not in the cohort --
+    // `canRenderPure` fails on `min_plan` before `cohort_only`, so this
+    // isolates the plan gate specifically (matches
+    // `field-introduction-repository.live.test.ts`'s own isolation note).
+
+    const strat = await makeStrategy(user.id, 'Free-plan strategy');
+    const gatedField = await makeField(user.id, strat, 'Conviction', 'free_plan_gated');
+    // A second, genuinely under-sampled field with NO plan gate concern —
+    // proves the fix OMITS the plan-gated candidate specifically, it
+    // doesn't just empty the whole panel by accident.
+    const insufficientField = await makeField(user.id, strat, 'Other field', 'free_plan_real_insufficient');
+    await makeVersion(user.id, strat, 'Free-plan strategy', [gatedField, insufficientField]);
+    await insertFinding(user.id, strat, gatedField, {
+      confidence: 'confident',
+      n: 40,
+      winRate: 0.71,
+      baselineWinRate: 0.42,
+      deltaWinRate: 0.29,
+    });
+    // insufficientField gets no findings row -> honest zero-data candidate,
+    // unrelated to plan, must still surface normally.
+
+    const result = await assembleWeeklyFindings(user.id);
+
+    expect(result.map((r) => r.fieldId)).not.toContain(gatedField);
+    expect(result.map((r) => r.fieldId)).toContain(insufficientField);
+
+    const renderRows = await db.query(`select 1 from retrospeq.analytic_renders where user_id = $1`, [user.id]);
+    expect(renderRows.rows).toHaveLength(0); // the omitted candidate was never a "real render" to begin with.
+  }, 30_000);
+
   it('cross-user isolation: user B\'s weekly findings never include user A\'s strategies/fields/findings', async () => {
     if (!env) return;
     const userA = await createTestAuthUser(envBundle, 'weekly-findings-a');

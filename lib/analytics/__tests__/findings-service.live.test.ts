@@ -202,6 +202,31 @@ describe.skipIf(!env)('lib/analytics/findings-service.ts + findings-repository.t
     });
   }, 30_000);
 
+  it('2026-09-15 QA FAIL fix: a FREE-plan user with a real computed finding on a Pro-gated analytic gets the field OMITTED, never the "not enough data yet" payload a genuinely under-sampled field gets', async () => {
+    if (!env) return;
+    const user = await createTestAuthUser(envBundle, 'findings-svc-plan-gated');
+    cleanupUserIds.push(user.id);
+
+    const { strategyId, fieldId } = await seedStrategyAndField(user.id);
+    await insertFinding(user.id, strategyId, fieldId); // find.rating, min_plan='pro', confidence='confident'
+    // Deliberately left on the default 'free' plan, and NOT added to the
+    // cohort -- `canRenderPure` evaluates `min_plan` before `cohort_only`,
+    // so a free user fails on 'plan' first regardless of cohort membership
+    // (`registry-runtime.ts`'s own AND-chain order).
+
+    const results = await getStrategyFieldFindings(user.id, strategyId, [
+      { fieldId, name: 'Conviction', dataType: 'rating', config: {} },
+    ]);
+
+    // Omitted entirely -- not the same array-with-one-fallback-payload a
+    // field with zero rows gets (compare the "zero findings rows yet" test
+    // below, which legitimately returns length 1).
+    expect(results).toHaveLength(0);
+
+    const renderRows = await db.query(`select 1 from retrospeq.analytic_renders where user_id = $1`, [user.id]);
+    expect(renderRows.rows).toHaveLength(0);
+  }, 30_000);
+
   it('getStrategyFieldFindings: a note-typed field is skipped entirely (never segmented, never a finding)', async () => {
     if (!env) return;
     const user = await createTestAuthUser(envBundle, 'findings-svc-note-field');
