@@ -13,7 +13,7 @@ vi.mock('@/lib/auth/mfa-recovery-repository', () => ({
   countUnusedRecoveryCodes: countUnusedRecoveryCodesMock,
 }));
 
-import { buildExportBundle, tradingAccountsToCsv } from '../export';
+import { buildExportBundle } from '../export';
 import { EXPORT_TABLE_REGISTRY } from '../export-tables';
 
 /**
@@ -116,82 +116,5 @@ describe('buildExportBundle', () => {
       { id: 'trade-1', user_id: 'user-1', instrument: 'EURUSD', r_multiple: '1.5000' },
     ]);
     expect(bundle.tables.trades.truncated).toBe(false);
-  });
-});
-
-describe('tradingAccountsToCsv', () => {
-  it('produces a header row plus one row per account', () => {
-    const csv = tradingAccountsToCsv({
-      generatedAt: '2026-08-21T00:00:00.000Z',
-      userId: 'user-1',
-      profile: null,
-      subscription: null,
-      mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
-      tables: {},
-      tradingAccounts: [
-        {
-          id: 'acct-1',
-          label: 'FTMO Challenge',
-          platform: 'mt5',
-          accountKind: 'personal',
-          baseCurrency: 'USD',
-          dayRollover: 'America/New_York 17:00',
-          syncTier: 't0',
-          status: 'connected',
-          connectedAt: '2026-01-01T00:00:00Z',
-          disconnectedAt: null,
-          createdAt: '2026-01-01T00:00:00Z',
-        },
-      ],
-    });
-
-    const lines = csv.split('\n');
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe(
-      'id,label,platform,accountKind,baseCurrency,dayRollover,syncTier,status,connectedAt,disconnectedAt,createdAt',
-    );
-    expect(lines[1]).toContain('FTMO Challenge');
-    expect(lines[1]).toContain('acct-1');
-  });
-
-  it('escapes a field containing a comma', () => {
-    const csv = tradingAccountsToCsv({
-      generatedAt: '2026-08-21T00:00:00.000Z',
-      userId: 'user-1',
-      profile: null,
-      subscription: null,
-      mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
-      tables: {},
-      tradingAccounts: [
-        {
-          id: 'acct-1',
-          label: 'FTMO, Challenge',
-          platform: 'mt5',
-          accountKind: 'personal',
-          baseCurrency: 'USD',
-          dayRollover: 'America/New_York 17:00',
-          syncTier: 't0',
-          status: 'connected',
-          connectedAt: null,
-          disconnectedAt: null,
-          createdAt: '2026-01-01T00:00:00Z',
-        },
-      ],
-    });
-
-    expect(csv).toContain('"FTMO, Challenge"');
-  });
-
-  it('produces only the header row when there are no accounts', () => {
-    const csv = tradingAccountsToCsv({
-      generatedAt: '2026-08-21T00:00:00.000Z',
-      userId: 'user-1',
-      profile: null,
-      subscription: null,
-      mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
-      tables: {},
-      tradingAccounts: [],
-    });
-    expect(csv.split('\n')).toHaveLength(1);
   });
 });

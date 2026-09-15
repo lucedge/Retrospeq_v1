@@ -10,8 +10,7 @@ import { EXPORT_TABLE_REGISTRY, EXPORT_ROW_LIMIT } from './export-tables';
  * (`app/(app)/privacy/page.tsx:232`) and the export-ready email
  * template both promise ("trades, fills, rules, evaluations, strategies,
  * fields ... as JSON and CSV") stayed frozen at trading-accounts-only
- * (`export.ts`'s `tradingAccountsToCsv`, kept below/there unchanged for
- * backward compatibility — still directly unit-tested on its own).
+ * (the old `tradingAccountsToCsv`, since deleted — unguarded and unused).
  *
  * DELIVERY SHAPE DECISION (2026-09-15, logged per this fix's own
  * dispatch): the export bucket delivers exactly two signed URLs
