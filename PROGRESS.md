@@ -26,7 +26,6 @@ Cross-cutting follow-ups (details in `docs/infra-gaps.md`): `lib/privacy/export.
 
 ## Next up
 
-1. Module 06/07 weekly notification: coder-done, needs security ‖ qa (`lib/review/weekly-job.ts`, `review_notifications` migration). XP UI (profile screen) remains deliberately unbuilt (§5.4: "nothing depends on it").
 1. Module 08: field-introduction offer (§5.5, frame 1.19).
 2. `lib/privacy/export.ts` completeness; Module 04 discovery (10c, frame 3.10).
 3. Repo-wide sweeps: Server Action `.strict()`, RLS FK ownership, `strategy_var` owner scoping.
