@@ -2,6 +2,14 @@ import { test, expect } from '@playwright/test';
 import { Client } from 'pg';
 import { uniqueTestEmail } from './helpers';
 
+/** /rules/new puts the operand picker behind `<details class="catalogue">`
+ *  (frame 3.10, discovery leads). Idempotent: sets `open`, never toggles. */
+async function openCatalogue(page: import('@playwright/test').Page): Promise<void> {
+  await page.locator('details.catalogue').evaluate((d) => {
+    (d as HTMLDetailsElement).open = true;
+  });
+}
+
 /**
  * Module 04 (Rulebook & Evaluation) §6.1's `.rule-editor` reference markup
  * / story 1.1, Slice 10b E2E — the general rule editor's core flow (pick
@@ -108,6 +116,8 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     // second `.rq-btn` visible anywhere on this screen (only chrome).
     await expect(page.locator('.rule-editor')).toHaveCount(0);
 
+    await openCatalogue(page);
+
     await page.selectOption('#operand-picker', 'risk_pct');
     await expect(page.locator('.rule-editor')).toBeVisible();
 
@@ -171,6 +181,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'stop_set_at_entry');
 
     await expect(page.getByText('Always set a stop before entering.')).toBeVisible();
@@ -209,6 +220,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
 
     // Create rule #1 through the real UI and confirm the header updates to
     // "1 of 3" WITHOUT a page reload -- the ordinary (non-error) path.
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'risk_pct');
     await page.getByRole('button', { name: 'Add rule' }).click();
     await expect(page.getByText('Rule added')).toBeVisible({ timeout: 15_000 });
@@ -222,6 +234,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     await insertActiveGlobalRule(user.id, 'hold_seconds', 'Never hold a position longer than 60 seconds.');
     await page.reload();
     await expect(page.getByText('Rule slots:', { exact: false })).toContainText('2 of 3');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'weekly_review_completed');
     await page.getByRole('button', { name: 'Add rule' }).click();
     await expect(page.getByText('Rule added')).toBeVisible({ timeout: 15_000 });
@@ -238,6 +251,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     // Selecting an operand for the would-be rule #4 must show the submit
     // control genuinely disabled -- no contradictory "N of M" header next
     // to a control that still looks live.
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'risk_pct');
     await expect(page.getByRole('button', { name: 'Add rule' })).toBeDisabled();
     await expect(page.getByText('Rule slots:', { exact: false })).toContainText('3 of 3');
@@ -262,6 +276,8 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     await loginAs(page, user.email);
     await page.goto('/rules/new');
     await expect(page.getByText("You're already at your rule limit", { exact: false })).toBeVisible();
+
+    await openCatalogue(page);
 
     await page.selectOption('#operand-picker', 'risk_pct');
     await expect(page.getByRole('button', { name: 'Add rule' })).toBeDisabled();
@@ -298,6 +314,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'risk_pct');
     // Default seed (bounds midpoint 2.6%) is `lte 2.6`, which IS
     // contradictory with the seeded `gte 3` rule (no value could ever be

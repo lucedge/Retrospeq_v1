@@ -2,6 +2,14 @@ import { test, expect } from '@playwright/test';
 import { Client } from 'pg';
 import { uniqueTestEmail } from './helpers';
 
+/** /rules/new puts the operand picker behind `<details class="catalogue">`
+ *  (frame 3.10, discovery leads). Idempotent: sets `open`, never toggles. */
+async function openCatalogue(page: import('@playwright/test').Page): Promise<void> {
+  await page.locator('details.catalogue').evaluate((d) => {
+    (d as HTMLDetailsElement).open = true;
+  });
+}
+
 /**
  * Module 04 Slice 10b (general rule editor, CREATE flow, /rules/new) —
  * INDEPENDENT tester verification, dispatched separately from the coder's
@@ -129,6 +137,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'correlated_exposure');
 
     // bounds {min:0.5, max:10, step:0.5} -> midpoint default is 5.5%,
@@ -154,6 +163,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'total_open_risk');
     await expect(page.getByText('Never let your total open risk exceed', { exact: false })).toBeVisible();
 
@@ -209,6 +219,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
       opt.textContent = 'Moving your stop (injected -- bypass test, not a real offered option)';
       select.appendChild(opt);
     });
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'stop_moved_against');
     await expect(page.getByText('Never move your stop against the position.')).toBeVisible();
 
@@ -238,6 +249,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'giveback_from_peak');
     await expect(page.getByText("Stop trading once you've given back", { exact: false })).toBeVisible();
 
@@ -305,7 +317,9 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
 
       await pageA.goto('/rules/new');
       await pageB.goto('/rules/new');
+      await openCatalogue(pageA);
       await pageA.selectOption('#operand-picker', 'giveback_from_peak');
+      await openCatalogue(pageB);
       await pageB.selectOption('#operand-picker', 'giveback_from_peak');
       await expect(pageA.getByRole('button', { name: 'Add rule' })).toBeEnabled();
       await expect(pageB.getByRole('button', { name: 'Add rule' })).toBeEnabled();
@@ -370,6 +384,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
 
     await loginAs(page, user.email);
     await page.goto('/rules/new');
+    await openCatalogue(page);
     await page.selectOption('#operand-picker', 'risk_pct');
     await expect(page.locator('.rq-step__val')).toHaveText('2.6%');
 
