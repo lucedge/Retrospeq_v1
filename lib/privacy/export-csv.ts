@@ -44,17 +44,20 @@ function cellToText(value: unknown): string {
 
 const NEEDS_QUOTING = /["\r\n,]/;
 /**
- * OWASP CSV-formula-injection guard: a cell whose first character would
- * make Excel/Sheets interpret it as a formula on open. Callers must only
- * pass `guard=true` for columns known to hold free-typed prose
- * (`ExportTableSpec.freeTextColumns`) — never for numeric-as-string
- * columns, where a leading `-` is a legitimate negative number.
+ * OWASP CSV-formula-injection guard, applied to EVERY cell by default: a
+ * cell whose first character would make Excel/Sheets evaluate it as a
+ * formula gets a leading `'`. The only exemption is a plain number
+ * (`-1.5000`, `1e-3`), where a leading `-`/`+` is a legitimate sign.
+ * Guard-by-default replaced a per-column allowlist of "free text" columns
+ * that missed user-typed `instrument` and `trade_captures.value` option
+ * labels (security review, 2d96c17) — a new column can't fail open.
  */
 const FORMULA_INJECTION_LEAD = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
-export function escapeCsvCell(value: unknown, guardFormulaInjection: boolean): string {
+export function escapeCsvCell(value: unknown): string {
   let text = cellToText(value);
-  if (guardFormulaInjection && FORMULA_INJECTION_LEAD.test(text)) {
+  if (FORMULA_INJECTION_LEAD.test(text) && !PLAIN_NUMBER.test(text)) {
     text = `'${text}`;
   }
   if (NEEDS_QUOTING.test(text)) {
@@ -73,37 +76,35 @@ export function buildCsvSection(
   name: string,
   header: readonly string[],
   rows: ReadonlyArray<Record<string, unknown>>,
-  freeTextColumns: readonly string[] = [],
   truncated = false,
 ): string[] {
   const marker = truncated
     ? `## ${name} (n=${rows.length}, TRUNCATED — only the first ${EXPORT_ROW_LIMIT} rows are included; request a fresh export for anything newer)`
     : `## ${name} (n=${rows.length})`;
-  const lines = [marker, csvLine(header)];
+  // Quoted like any cell: the truncated marker contains commas.
+  const lines = [csvLine([escapeCsvCell(marker)]), csvLine(header)];
   for (const row of rows) {
-    lines.push(csvLine(header.map((col) => escapeCsvCell(row[col], freeTextColumns.includes(col)))));
+    lines.push(csvLine(header.map((col) => escapeCsvCell(row[col]))));
   }
   lines.push('');
   return lines;
 }
 
 const PROFILE_HEADER = ['displayName', 'locale', 'timezone', 'telemetryOptOut', 'onboardingStage', 'createdAt'] as const;
-const PROFILE_FREE_TEXT = ['displayName'];
 const TRADING_ACCOUNT_HEADER = [
   'id', 'label', 'platform', 'accountKind', 'baseCurrency', 'dayRollover', 'syncTier',
   'status', 'connectedAt', 'disconnectedAt', 'createdAt',
 ] as const;
-const TRADING_ACCOUNT_FREE_TEXT = ['label'];
 const SUBSCRIPTION_HEADER = ['plan', 'status', 'currentPeriodEnd'] as const;
 const MFA_HEADER = ['recoveryCodesRemaining', 'recoveryCodesIssued'] as const;
 
 const README = [
-  'This file is a multi-table CSV export of every data table Retrospeq holds for this account',
-  '(Module 01 story 5.1). Each section below begins with a "## <name>" marker line naming the',
-  'table and its row count; TRUNCATED marks a table capped at EXPORT_ROW_LIMIT rows. Column',
-  'names are the underlying field names. Object/array-valued columns (config, payload, metadata,',
-  'triggers, etc.) are included as their raw JSON text inside one cell. The same data, fully',
-  'structured and never flattened, is also available via the separate JSON download link.',
+  'This file is a multi-table CSV export of every data table Retrospeq holds for this account.',
+  'Each section below begins with a "## <name>" marker line naming the table and its row count;',
+  `TRUNCATED marks a table capped at ${EXPORT_ROW_LIMIT} rows. Column names are the underlying`,
+  'field names. Object/array-valued columns (config, payload, metadata, triggers, etc.) are',
+  'included as their raw JSON text inside one cell. The same data, fully structured and never',
+  'flattened, is also available via the separate JSON download link.',
 ].join(' ');
 
 /**
@@ -113,14 +114,13 @@ const README = [
  * `tradingAccountsToCsv` did before this fix.
  */
 export function buildFullExportCsv(bundle: ExportBundle): string {
-  const lines: string[] = ['## README', README, ''];
+  const lines: string[] = ['## README', csvLine([escapeCsvCell(README)]), ''];
 
   lines.push(
     ...buildCsvSection(
       'profile',
       PROFILE_HEADER,
       bundle.profile ? [bundle.profile as unknown as Record<string, unknown>] : [],
-      PROFILE_FREE_TEXT,
     ),
   );
   lines.push(
@@ -128,7 +128,6 @@ export function buildFullExportCsv(bundle: ExportBundle): string {
       'tradingAccounts',
       TRADING_ACCOUNT_HEADER,
       bundle.tradingAccounts as unknown as Array<Record<string, unknown>>,
-      TRADING_ACCOUNT_FREE_TEXT,
     ),
   );
   lines.push(
@@ -149,7 +148,6 @@ export function buildFullExportCsv(bundle: ExportBundle): string {
         spec.table,
         spec.columns,
         result?.rows ?? [],
-        spec.freeTextColumns ?? [],
         result?.truncated ?? false,
       ),
     );
