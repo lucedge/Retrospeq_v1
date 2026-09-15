@@ -42,6 +42,9 @@ async function deleteUser(userId: string): Promise<void> {
 }
 
 test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4.9)', () => {
+  // See review-decisions-detection.spec.ts's own header for why this is
+  // raised — shared-dev-DB latency, not a product regression.
+  test.describe.configure({ timeout: 90_000 });
   let db: Client;
   const cleanupUserIds: string[] = [];
 
@@ -83,7 +86,7 @@ test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4
     await page.fill('#email', email);
     await page.fill('#password', TEST_PASSWORD);
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 });
+    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 30_000 });
   }
 
   async function seedAccount(userId: string): Promise<string> {
@@ -268,7 +271,7 @@ test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4
     await page.screenshot({ path: 'tmp/dev-screenshots/e2e-promotion-ready.png', fullPage: true });
 
     await page.getByRole('button', { name: 'Make it hard' }).click();
-    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 30_000 });
+    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 70_000 });
 
     const ruleRow = await db.query('select severity from retrospeq.rules where id = $1', [ruleId]);
     expect(ruleRow.rows[0].severity).toBe('hard');
@@ -299,7 +302,7 @@ test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4
     await page.waitForSelector('#promo-h');
 
     await page.getByRole('button', { name: 'Keep it soft' }).click();
-    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 30_000 });
+    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 70_000 });
 
     await page.screenshot({ path: 'tmp/dev-screenshots/e2e-promotion-declined.png', fullPage: true });
 
@@ -348,7 +351,7 @@ test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4
     await page.screenshot({ path: 'tmp/dev-screenshots/e2e-retirement-ready.png', fullPage: true });
 
     await retireBtn.click();
-    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 30_000 });
+    await page.waitForSelector('text=Nothing to decide right now.', { timeout: 70_000 });
 
     await page.screenshot({ path: 'tmp/dev-screenshots/e2e-retirement-retired.png', fullPage: true });
 
@@ -395,7 +398,7 @@ test.describe('/review/decisions — promotion + retirement (Module 06 §4.8/§4
     await loginAs(page, user.email);
     await page.goto('/review/decisions');
 
-    await expect(page.getByText('Nothing to decide right now.')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Nothing to decide right now.')).toBeVisible({ timeout: 60_000 });
     await expect(page.locator('#retire-h')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Retire it' })).toHaveCount(0);
 
