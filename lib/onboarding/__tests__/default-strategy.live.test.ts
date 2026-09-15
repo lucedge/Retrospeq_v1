@@ -65,7 +65,7 @@ describe.skipIf(!env)('ensureDefaultStrategyForUser (live DB)', () => {
     await db.end();
   });
 
-  it('for a brand-new user, creates exactly one zero-field, zero-trigger default strategy, named per platform', async () => {
+  it('for a brand-new user, creates exactly one zero-CAPTURED-field, zero-trigger default strategy, named per platform, seeded with every derived field', async () => {
     const user = await createTestAuthUser(env!, 'default-strategy-fresh');
     cleanupUserIds.push(user.id);
 
@@ -78,11 +78,31 @@ describe.skipIf(!env)('ensureDefaultStrategyForUser (live DB)', () => {
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]).toMatchObject({ name: 'Crypto', is_default: true, current_version: 1 });
 
-    const versionRow = await db.query<{ fields: unknown[]; triggers: unknown[] }>(
+    const versionRow = await db.query<{ fields: { field_id: string }[]; triggers: unknown[] }>(
       `select fields, triggers from retrospeq.strategy_versions where strategy_id = $1 and version = 1`,
       [rows.rows[0].id],
     );
-    expect(versionRow.rows[0].fields).toEqual([]);
+    // §5.4's own promise is "zero CAPTURED fields," not "zero fields" —
+    // this closes docs/infra-gaps.md's "silent default strategy never
+    // gets a derived finding" gap: the edge engine only ever computes
+    // over a strategy's OWN chosen field list, so a genuinely empty
+    // `fields[]` here would leave it permanently unreachable. Every
+    // seeded id must be one of this user's 9 permanent `drv.*` rows
+    // (never a captured `acct.*`/`str.*` id) — proven directly against
+    // the registry, not merely asserted.
+    const seededIds = versionRow.rows[0].fields.map((f) => f.field_id).sort();
+    expect(seededIds).toHaveLength(9);
+    expect(seededIds.every((id) => id.startsWith('drv.'))).toBe(true);
+
+    const fieldRows = await db.query<{ id: string; kind: string; origin: string }>(
+      `select id, kind, origin from retrospeq.fields where user_id = $1 and id = any($2::text[])`,
+      [user.id, seededIds],
+    );
+    expect(fieldRows.rows).toHaveLength(9);
+    for (const row of fieldRows.rows) {
+      expect(row.kind).toBe('derived');
+      expect(row.origin).not.toBe('captured');
+    }
     expect(versionRow.rows[0].triggers).toEqual([]);
   });
 

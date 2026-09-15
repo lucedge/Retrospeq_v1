@@ -1,0 +1,188 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Client } from 'pg';
+import {
+  connectAsOwner,
+  createTestAuthUser,
+  deleteTestAuthUser,
+  readRlsTestEnv,
+  type EnvBundle,
+} from '@/lib/supabase/__tests__/rls-test-helpers';
+
+vi.mock('server-only', () => ({}));
+
+vi.setConfig({ testTimeout: 30_000 });
+
+import { ensureDefaultStrategyForUser } from '../default-strategy';
+import { recomputeEdgeFindingsForUser } from '@/lib/analytics/edge-engine/repository';
+
+/**
+ * Module 08 §5.4/§5.5 reachability fix — the end-to-end live proof
+ * `docs/infra-gaps.md`'s own closed entry names: a genuinely stock,
+ * silently-created default strategy (never touched by the trader) must
+ * actually be able to produce a real derived finding, because the edge
+ * engine (`lib/analytics/edge-engine/repository.ts`'s
+ * `fetchStrategyFieldSpecs`) only ever computes over a strategy's OWN
+ * chosen field list — before this slice that list was permanently `[]`.
+ *
+ * Seeding conventions mirror
+ * `lib/analytics/edge-engine/__tests__/repository.live.test.ts`'s own
+ * `seedTrade` helper (direct SQL, `drv.direction` needs no
+ * `trade_captures` row at all -- `field-values.ts`'s
+ * `DERIVED_FROM_TRADE_COLUMNS` reads it straight off `trades.direction`).
+ */
+const env = readRlsTestEnv();
+
+describe.skipIf(!env)('default strategy -> edge engine (live DB, end-to-end)', () => {
+  let db: Client;
+  let envBundle: EnvBundle;
+  const cleanupUserIds: string[] = [];
+
+  beforeAll(async () => {
+    if (!env) return;
+    envBundle = env;
+    db = await connectAsOwner(env);
+  }, 30_000);
+
+  afterEach(async () => {
+    if (!env) return;
+    for (const userId of cleanupUserIds.splice(0)) {
+      await db.query('begin');
+      await db.query("select set_config('retrospeq.erasure_in_progress', 'true', true)");
+      await db.query('delete from retrospeq.findings where user_id = $1', [userId]);
+      await db.query('delete from retrospeq.trades where user_id = $1', [userId]);
+      await db.query('delete from retrospeq.blocks where user_id = $1', [userId]);
+      await db.query('delete from retrospeq.trading_accounts where user_id = $1', [userId]);
+      await db.query('delete from retrospeq.strategy_versions where user_id = $1', [userId]);
+      await db.query('delete from retrospeq.strategies where user_id = $1', [userId]);
+      await db.query('commit');
+      await deleteTestAuthUser(envBundle, userId).catch(() => {});
+    }
+  });
+
+  afterAll(async () => {
+    if (!env) return;
+    await db.end();
+  });
+
+  async function seedAccount(userId: string): Promise<string> {
+    const res = await db.query<{ id: string }>(
+      `insert into retrospeq.trading_accounts (user_id, label, platform, base_currency, day_rollover)
+       values ($1, 'Default Strategy Edge Integration', 'mt5', 'USD', '00:00:00 UTC')
+       returning id`,
+      [userId],
+    );
+    return res.rows[0].id;
+  }
+
+  async function seedTrade(
+    userId: string,
+    accountId: string,
+    strategyId: string,
+    direction: 'long' | 'short',
+    outcome: 'win' | 'loss',
+    index: number,
+  ): Promise<void> {
+    const openedAt = new Date(Date.UTC(2026, 0, 1 + index, 9, 0, 0));
+    const blockRes = await db.query<{ id: string }>(
+      `insert into retrospeq.blocks (user_id, account_id, instrument, opened_at, closed_at, server_day)
+       values ($1, $2, 'EURUSD', $3::timestamptz, $3::timestamptz, $3::date)
+       returning id`,
+      [userId, accountId, openedAt.toISOString()],
+    );
+    const rMultiple = outcome === 'win' ? '1.5000' : '-1.0000';
+    await db.query(
+      `insert into retrospeq.trades
+         (user_id, account_id, block_id, instrument, direction, opened_at, closed_at, server_day, status,
+          entry_price_avg, exit_price_avg, peak_volume, currency, grouping_confidence,
+          confirmed_at, confirmed_by, outcome, r_multiple, not_a_decision, strategy_id, strategy_version)
+       values ($1,$2,$3,'EURUSD',$5,$4::timestamptz,$4::timestamptz,$4::date,'confirmed',
+               '1.20000000','1.20500000','100000.00000000','USD','confident_single',
+               $4::timestamptz,'user',$6,$7,false,$8,1)`,
+      [userId, accountId, blockRes.rows[0].id, openedAt.toISOString(), direction, outcome, rMultiple, strategyId],
+    );
+  }
+
+  it('computes at least one real derived finding for a stock default strategy once enough confirmed trades exist', async () => {
+    const user = await createTestAuthUser(env!, 'default-strategy-edge');
+    cleanupUserIds.push(user.id);
+
+    await ensureDefaultStrategyForUser(user.id, 'mt5');
+    const strategyRow = await db.query<{ id: string }>(
+      `select id from retrospeq.strategies where user_id = $1 and is_default = true`,
+      [user.id],
+    );
+    const strategyId = strategyRow.rows[0].id;
+    const accountId = await seedAccount(user.id);
+
+    // Same engineered win-rate effect shape `repository.live.test.ts`
+    // already proves clears every gate at n=25 (>=20, <40 -> provisional):
+    // 25 long trades winning 21/25 (84%), 25 short trades winning 10/25
+    // (40%) -- a 44pp effect on `drv.direction`, which this default
+    // strategy's version-1 field list now actually includes.
+    let idx = 0;
+    for (let i = 0; i < 25; i++) {
+      await seedTrade(user.id, accountId, strategyId, 'long', i < 21 ? 'win' : 'loss', idx++);
+    }
+    for (let i = 0; i < 25; i++) {
+      await seedTrade(user.id, accountId, strategyId, 'short', i < 10 ? 'win' : 'loss', idx++);
+    }
+
+    const result = await recomputeEdgeFindingsForUser(user.id);
+    expect(result.findingsWritten).toBeGreaterThan(0);
+
+    // `findings` gets a row for every computed segment regardless of
+    // confidence (`writeFindingsForStrategy`/`computeFamilyFindings`,
+    // `gates.ts`) -- 'insufficient'/'null_result' are "computed but never
+    // shown" (this file's own `wouldRenderByStatisticalGatesAlone`,
+    // `weekday-canary.ts`'s own comment). The real "§5.5's own eligibility
+    // condition is now reachable" proof is that at least one row for this
+    // strategy actually clears the render gate.
+    const findingRows = await db.query<{ field_id: string; confidence: string }>(
+      `select field_id, confidence from retrospeq.findings
+        where user_id = $1 and strategy_id = $2 and field_id = 'drv.direction' and state = 'active'`,
+      [user.id, strategyId],
+    );
+    expect(findingRows.rows.length).toBeGreaterThan(0);
+    expect(findingRows.rows.some((r) => r.confidence === 'confident' || r.confidence === 'provisional')).toBe(true);
+  });
+
+  it('"Not enough data yet" still holds: below the sample-size gate, every computed segment for the same default strategy stays insufficient, never shown', async () => {
+    const user = await createTestAuthUser(env!, 'default-strategy-edge-insufficient');
+    cleanupUserIds.push(user.id);
+
+    await ensureDefaultStrategyForUser(user.id, 'mt5');
+    const strategyRow = await db.query<{ id: string }>(
+      `select id from retrospeq.strategies where user_id = $1 and is_default = true`,
+      [user.id],
+    );
+    const strategyId = strategyRow.rows[0].id;
+    const accountId = await seedAccount(user.id);
+
+    // 6 long (all wins) + 5 short (all losses) = 11 total, well under
+    // `SAMPLE_MIN_SEGMENT_N`/`SAMPLE_MIN_BASELINE_N` (20/12,
+    // `edge-engine/gates.ts`) even with a maximal effect size -- proves
+    // this slice does NOT lower any threshold to make the default
+    // strategy "work": better to say nothing than a finding on 11 trades
+    // (Module 05 §6).
+    let idx = 0;
+    for (let i = 0; i < 6; i++) {
+      await seedTrade(user.id, accountId, strategyId, 'long', 'win', idx++);
+    }
+    for (let i = 0; i < 5; i++) {
+      await seedTrade(user.id, accountId, strategyId, 'short', 'loss', idx++);
+    }
+
+    await recomputeEdgeFindingsForUser(user.id);
+
+    const findingRows = await db.query<{ confidence: string }>(
+      `select confidence from retrospeq.findings where user_id = $1 and strategy_id = $2 and state = 'active'`,
+      [user.id, strategyId],
+    );
+    // Every computed segment exists (the strategy DOES have fields now,
+    // this slice's whole point) but NONE clears the render gate — never a
+    // fabricated finding on 11 trades, no threshold lowered to make this
+    // "work."
+    expect(findingRows.rows.length).toBeGreaterThan(0);
+    expect(findingRows.rows.every((r) => r.confidence === 'insufficient' || r.confidence === 'null_result')).toBe(true);
+  });
+});

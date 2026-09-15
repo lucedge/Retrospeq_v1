@@ -478,10 +478,12 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
 
       // Module 08 §5.4 -- wired alongside the onboarding-stage advance
       // above, on the SAME "first successful sync" moment:
-      // `ensureDefaultStrategyForUser` leaves exactly one, zero-field,
-      // zero-trigger strategy behind, named for this fixture's own
-      // `mt5` platform ("Forex", per `defaultStrategyNameForPlatform`).
-      // The FAILED sync attempt just above must not have created one.
+      // `ensureDefaultStrategyForUser` leaves exactly one, zero-CAPTURED-
+      // field (seeded with this user's derived fields -- Module 08
+      // §5.4/§5.5 reachability fix, docs/infra-gaps.md), zero-trigger
+      // strategy behind, named for this fixture's own `mt5` platform
+      // ("Forex", per `defaultStrategyNameForPlatform`). The FAILED sync
+      // attempt just above must not have created one.
       const strategies = await db.query<{ name: string; is_default: boolean; current_version: number }>(
         `select s.name, s.is_default, s.current_version
            from retrospeq.strategies s
@@ -490,13 +492,15 @@ describe.skipIf(!env)('lib/ingestion/sync.ts — runSync (live DB)', () => {
       );
       expect(strategies.rows).toHaveLength(1);
       expect(strategies.rows[0]).toMatchObject({ name: 'Forex', is_default: true, current_version: 1 });
-      const versionRow = await db.query<{ fields: unknown[]; triggers: unknown[] }>(
+      const versionRow = await db.query<{ fields: { field_id: string }[]; triggers: unknown[] }>(
         `select fields, triggers from retrospeq.strategy_versions where strategy_id = (
            select id from retrospeq.strategies where user_id = $1
          ) and version = 1`,
         [user.id],
       );
-      expect(versionRow.rows[0].fields).toEqual([]);
+      const seededIds = versionRow.rows[0].fields.map((f) => f.field_id);
+      expect(seededIds.length).toBeGreaterThan(0);
+      expect(seededIds.every((id) => id.startsWith('drv.'))).toBe(true);
       expect(versionRow.rows[0].triggers).toEqual([]);
     },
     20_000,

@@ -1,11 +1,13 @@
 import 'server-only';
 import type { Platform } from '@/lib/broker/adapter';
 import { defaultStrategyNameForPlatform } from '@/lib/broker/platform-defaults';
+import { fetchDefaultStrategySeedFieldIds } from '@/lib/fields/fields-repository';
 import {
   createStrategy,
   DefaultStrategyAlreadyExistsError,
   fetchStrategiesForUser,
 } from '@/lib/fields/strategy-repository';
+import type { ProposedStrategyField } from '@/lib/fields/strategy-validation';
 
 /**
  * Module 08 (Onboarding & Home) §5.4 — "Create one strategy automatically,
@@ -35,6 +37,27 @@ import {
  * trade data the trader might not recognise as theirs; naming a strategy
  * after the account type they themselves connected is not that.
  *
+ * SEEDED WITH DERIVED/NON-CAPTURED FIELDS, NOT LITERALLY ZERO FIELDS
+ * (`docs/infra-gaps.md`, closed by this addition): §5.4 promises "zero
+ * CAPTURED fields," never "zero fields" — but the edge engine
+ * (`lib/analytics/edge-engine/repository.ts`'s `fetchStrategyFieldSpecs`)
+ * only ever computes findings over a strategy's OWN chosen field list, so
+ * a version created with `fields: []` can never produce a finding, derived
+ * or otherwise, breaking §6's own unlock-ladder promise ("Imported, 0
+ * logged -> Derived findings available") for every stock default
+ * strategy. `fetchDefaultStrategySeedFieldIds` (`lib/fields/
+ * fields-repository.ts`) selects exactly the fields that keep the "zero
+ * captured" promise (`kind <> 'strategy_var' and origin <> 'captured'`,
+ * see that function's own header) — today, this user's 9 permanent
+ * `drv.*` derived rows, always already seeded at signup (`handle_new_user`
+ * -> `seed_derived_fields_for_user`) well before this function's first
+ * call. `captureMoment: 'post_close'` on every seeded entry is inert
+ * metadata for these rows (the edge engine reads only `field_id`,
+ * `strategy-validation.ts`'s own `validateCaptureMoments` only imposes
+ * real constraints on `captureMoment === 'pre_entry'`) — chosen only to be
+ * a schema-valid, always-safe value, never surfaced to the trader (derived
+ * fields never appear in any picker or capture flow, §1.1).
+ *
  * CALLED FROM (both best-effort, alongside — not inside —
  * `advanceOnboardingStageBestEffort(..., 'history_imported', ...)`, per
  * this slice's own dispatch):
@@ -57,10 +80,17 @@ export async function ensureDefaultStrategyForUser(userId: string, platform: Pla
     const existing = await fetchStrategiesForUser(userId);
     if (existing.length > 0) return; // idempotent: already has one (or more)
 
+    const seedFieldIds = await fetchDefaultStrategySeedFieldIds(userId);
+    const seedFields: ProposedStrategyField[] = seedFieldIds.map((fieldId, index) => ({
+      fieldId,
+      captureMoment: 'post_close',
+      order: index,
+    }));
+
     await createStrategy({
       userId,
       name: defaultStrategyNameForPlatform(platform),
-      fields: [],
+      fields: seedFields,
       triggers: [],
       isDefaultStrategy: true,
     });

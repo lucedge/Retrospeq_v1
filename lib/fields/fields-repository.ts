@@ -1702,3 +1702,57 @@ export async function insertRuleFieldUsage(userId: string, fieldId: string, rule
     );
   });
 }
+
+// ---------------------------------------------------------------------
+// fetchDefaultStrategySeedFieldIds — Module 08 §5.4/§5.5 reachability fix
+// (`docs/infra-gaps.md`, "The silent default strategy ... never actually
+// gets a derived finding computed for it").
+// ---------------------------------------------------------------------
+
+/**
+ * The field ids `lib/onboarding/default-strategy.ts`'s
+ * `ensureDefaultStrategyForUser` seeds a brand-new default strategy's
+ * version-1 `fields[]` with, so the edge engine
+ * (`lib/analytics/edge-engine/repository.ts`'s `fetchStrategyFieldSpecs`,
+ * which reads ONLY a strategy's own chosen field list, never "every field
+ * this user has") has something to compute over from day one.
+ *
+ * Selection is `kind <> 'strategy_var'` (§4.2: strategy-private fields
+ * scope to whichever strategy explicitly created them, never silently
+ * attached to a different one, including this system-authored one) AND
+ * `origin <> 'captured'` (§5.4's own promise: the default strategy has
+ * "zero CAPTURED fields" — `createField` (`fields-repository.ts` above)
+ * always writes `origin = 'captured'` for both `account`- and
+ * `strategy_var`-kind rows a trader explicitly typed into existence, so
+ * excluding `origin = 'captured'` is what actually keeps that promise,
+ * not `kind` alone). In today's schema this resolves to exactly the 9
+ * permanent `drv.*` rows every user gets at signup (`kind = 'derived'`,
+ * `origin = 'derived'`, seeded by `retrospeq.seed_derived_fields_for_user`
+ * from the `handle_new_user` trigger — see that migration's own header —
+ * which always runs well before a trader's first sync/manual-account-connect
+ * ever calls `ensureDefaultStrategyForUser`, so these rows are guaranteed
+ * to already exist by the time this read runs); it also correctly and
+ * automatically picks up any FUTURE `origin = 'prefilled'` account field a
+ * later slice might add (§3.1's schema comment already reserves that
+ * origin value, unused by any writer today) without this function itself
+ * needing to change.
+ *
+ * `state = 'active'` — an archived field is never offered (matches every
+ * other read in this file). `withUserConnection` — real RLS
+ * (`fields_owner_select`), `user_id = $1` scoped like every sibling read.
+ */
+export async function fetchDefaultStrategySeedFieldIds(userId: string): Promise<string[]> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `select id
+         from retrospeq.fields
+        where user_id = $1
+          and state = 'active'
+          and kind <> 'strategy_var'
+          and origin <> 'captured'
+        order by id`,
+      [userId],
+    );
+    return res.rows.map((row) => row.id);
+  });
+}
