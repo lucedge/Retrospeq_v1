@@ -184,8 +184,11 @@ test.describe('Dashboard (Module 08 §7/§8)', () => {
     await expect(page.locator('.dash[data-state="closeout"]')).toBeVisible();
     await expect(page.locator('.dash__headline')).toContainText('trade');
     await expect(page.locator('.dash__headline')).toContainText('to close out');
-    await expect(page.locator('.dash__trades li')).toHaveCount(1);
-    await expect(page.locator('.dash__trades .instrument')).toHaveText('EURUSD');
+    // Frame 1.14 -- restyled to `.rq-row` (true fixed-width lanes) +
+    // `.rq-track`/`.rq-fill`, not `.dash__trades` (that class no longer
+    // backs this state's markup at all).
+    await expect(page.locator('main.dash .rq-row')).toHaveCount(1);
+    await expect(page.locator('main.dash .rq-row__name')).toHaveText('EURUSD');
 
     // One primary .rq-btn on this state, per §7.1's own table.
     await expect(page.locator('main.dash a.rq-btn, main.dash button.rq-btn')).toHaveCount(1);

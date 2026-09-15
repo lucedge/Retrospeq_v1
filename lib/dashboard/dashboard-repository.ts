@@ -119,6 +119,18 @@ export interface DashboardTradeSummary {
   instrument: string;
   direction: string;
   openedAt: string;
+  /**
+   * Frame 1.14's own R-mark row (`.rq-row` + `.rq-track`/`.rq-fill`) needs
+   * a real signed value to size/side the bar. `trades.r_multiple` is
+   * already computed at CLOSE time (`lib/ingestion/sync.ts`, before
+   * confirm) — a "closed unconfirmed" trade genuinely has one whenever the
+   * stop was known throughout the trade (`lib/ingestion/trade-facts.ts`).
+   * `null` exactly when the stop was never known (never a fabricated 0) —
+   * the page renders an empty, flat track for that case, same "not
+   * applicable" honesty `formatRMultiple` already establishes for
+   * `/trades`.
+   */
+  rMultiple: string | null;
 }
 
 /**
@@ -145,6 +157,16 @@ export interface DashboardOpenPositionSummary extends DashboardTradeSummary {
    *  non-null (never a capless gauge); `riskPct` alone still renders as a
    *  plain stat either way. */
   riskCapPct: string | null;
+  /**
+   * Frame 1.17's grouping question — real, pre-existing data
+   * (`trades.grouping_confidence`, Module 02 §4.3) surfaced here so this
+   * screen can show the SAME ambient chip `/trades` already renders
+   * (`GroupingChip.tsx`) without a second grouping-detection pipeline.
+   * `'ambiguous'` is the one value the chip ever reacts to (§4.3's own
+   * confidence bands) — any other value (`'confident_single'`,
+   * `'confident_multi'`, etc.) renders no chip at all.
+   */
+  groupingConfidence: string;
 }
 
 export interface CloseoutTarget {
@@ -199,8 +221,14 @@ export type DashboardState =
     }
   | { kind: 'clear'; syncDegraded: boolean };
 
-function toSummary(t: { id: string; instrument: string; direction: string; opened_at: string }): DashboardTradeSummary {
-  return { id: t.id, instrument: t.instrument, direction: t.direction, openedAt: t.opened_at };
+function toSummary(t: {
+  id: string;
+  instrument: string;
+  direction: string;
+  opened_at: string;
+  r_multiple: string | null;
+}): DashboardTradeSummary {
+  return { id: t.id, instrument: t.instrument, direction: t.direction, openedAt: t.opened_at, rMultiple: t.r_multiple };
 }
 
 function toOpenPositionSummary(
@@ -210,10 +238,12 @@ function toOpenPositionSummary(
     direction: string;
     opened_at: string;
     risk_pct: string | null;
+    r_multiple: string | null;
+    grouping_confidence: string;
   },
   riskCapPct: string | null,
 ): DashboardOpenPositionSummary {
-  return { ...toSummary(t), riskPct: t.risk_pct, riskCapPct };
+  return { ...toSummary(t), riskPct: t.risk_pct, riskCapPct, groupingConfidence: t.grouping_confidence };
 }
 
 /** The most restrictive (smallest) active GLOBAL `lte` rule value on the

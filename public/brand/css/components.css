@@ -545,7 +545,15 @@
 .grouping-chip { background: var(--rq-surface-2); border-radius: var(--rq-radius-md); padding: var(--rq-space-3); display: flex; flex-direction: column; gap: 10px; }
 .grouping-chip__q { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink); }
 .grouping-chip__actions { display: flex; gap: 6px; }
-.grouping-chip__actions button { flex: 1; min-height: 36px; border-radius: var(--rq-radius-pill); background: var(--rq-surface); box-shadow: inset 0 0 0 1px var(--rq-line); font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); color: var(--rq-ink); }
+/* `a` alongside `button`: "Separate" is a real navigation (Module 08
+   dashboard dispatch, frame 1.17) to `/trades#trade-<id>` -- this screen
+   has no inline fills section of its own to expand in place, unlike
+   `/trades`' own `.rq-cost`-based chip. Visually identical either way. */
+.grouping-chip__actions button, .grouping-chip__actions a {
+  flex: 1; min-height: 36px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--rq-radius-pill); background: var(--rq-surface); box-shadow: inset 0 0 0 1px var(--rq-line);
+  font-size: var(--rq-text-sm); font-weight: var(--rq-weight-medium); color: var(--rq-ink); text-decoration: none;
+}
 .grouping-chip__actions .ghost { box-shadow: none; color: var(--rq-ink-faint); }
 
 /* ---------- Milestone (inline, quiet, never a modal) ---------- */

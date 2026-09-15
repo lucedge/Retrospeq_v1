@@ -183,8 +183,10 @@ test.describe('Onboarding sequence + router (Module 08 §5.1/§5.6/§9, Slice 08
     await expect(page.locator('h1')).toContainText("We've imported");
     await expect(page.locator('h1 .rq-num')).toHaveText('3');
     await expect(page.getByText('Nothing conclusive yet', { exact: false })).toBeVisible();
-    // One primary button on this screen, full stop.
-    await expect(page.locator('.hook a.rq-btn, .hook button.rq-btn')).toHaveCount(1);
+    // One primary button on this screen, full stop -- frame 1.9 restyle
+    // moved the CTA into its own `.push` sibling below `.hook` (matching
+    // the mockup exactly), so this no longer scopes to `.hook` itself.
+    await expect(page.locator('a.rq-btn, button.rq-btn')).toHaveCount(1);
     await page.screenshot({ path: 'tmp/dev-screenshots/onboarding-hook-honest-fallback.png', fullPage: true });
 
     // Step 5 (real): "Set up three rules" leads to the already-shipped

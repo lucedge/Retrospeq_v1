@@ -19,6 +19,7 @@ import { fetchRecentMilestoneForUser } from "@/lib/engagement/events-repository"
 import { copyForMilestone } from "@/lib/engagement/milestone-copy";
 import { fetchFieldIntroductionOfferForUser } from "@/lib/onboarding/field-introduction-repository";
 import { FieldIntroductionOffer } from "./FieldIntroductionOffer";
+import { DashboardGroupingChip } from "./DashboardGroupingChip";
 import { weekStartForServerDay } from "@/lib/rules/week-boundary";
 import {
   formatAge,
@@ -26,7 +27,11 @@ import {
   formatDirection,
   formatRiskPct,
 } from "../trades/format";
-import { formatDayOfWeek } from "./format";
+import {
+  formatDayOfWeek,
+  formatDirectionLetter,
+  rTrackFill,
+} from "./format";
 
 /**
  * Module 08 (Onboarding & Home) §7/§8 — the dashboard, all four §7.1
@@ -402,10 +407,25 @@ export default async function DashboardPage() {
           <span className="rq-num">{count}</span> position
           {count === 1 ? "" : "s"} open.
         </h1>
-        <ul className="dash__trades">
+        {/*
+          Not `.dash__trades` (that class's own `> li { display: flex;
+          align-items: center }` is the CLOSEOUT row shape below -- a
+          horizontal instrument/dir/time lane -- and would lay an
+          open-position CARD plus a grouping chip out side-by-side instead
+          of stacked). Frames 1.13/1.17 show the card as a plain block; a
+          plain flex-column list is the honest generalisation to "more
+          than one open position," not a reuse of an unrelated primitive.
+        */}
+        <ul className="flex flex-col gap-3">
           {state.positions.map((p) => (
-            <li key={p.id}>
+            <li key={p.id} className="flex flex-col gap-2">
               <OpenPositionCard position={p} now={now} />
+              {/* Frame 1.17 -- ambient, dismissible, never a modal (Module
+                  02 §4.3). Renders only for the one confidence band that
+                  ever asks -- see `DashboardGroupingChip.tsx`'s own header. */}
+              {p.groupingConfidence === "ambiguous" ? (
+                <DashboardGroupingChip tradeId={p.id} />
+              ) : null}
             </li>
           ))}
         </ul>
@@ -426,15 +446,52 @@ export default async function DashboardPage() {
           <span className="rq-num">{count}</span> trade{count === 1 ? "" : "s"}{" "}
           to close out.
         </h1>
-        <ul className="dash__trades">
-          {state.trades.map((t) => (
-            <li key={t.id}>
-              <span className="instrument">{t.instrument}</span>
-              <span className="dir">{formatDirection(t.direction)}</span>
-              <time dateTime={t.openedAt}>{formatClockTime(t.openedAt)}</time>
-            </li>
-          ))}
-        </ul>
+        {/* Frame 1.14 -- "the day reads as three marks," `.rq-row` (true
+            fixed-width lanes) + the `.rq-rrow` track/fill primitive for a
+            real, signed R value per trade -- not `.dash__trades` (a
+            different, plain instrument/dir/time row this frame doesn't
+            use at all). `t.rMultiple` is real (`trades.r_multiple`,
+            computed at close time); `null` renders an honest empty track,
+            never a fabricated bar -- see `DashboardTradeSummary`'s own
+            header. */}
+        <div>
+          {state.trades.map((t) => {
+            const fill = rTrackFill(t.rMultiple);
+            return (
+              <div className="rq-row" key={t.id}>
+                <span className="rq-row__name">{t.instrument}</span>
+                <span className="rq-row__meta">
+                  {formatDirectionLetter(t.direction)}
+                </span>
+                <div className="rq-track">
+                  {fill ? (
+                    <i
+                      className="rq-fill"
+                      style={
+                        // `fill.pct` is 0-100 against the HALF-track (the
+                        // zero line sits at 50% of the full track's own
+                        // width, per `.rq-track::before`) -- halved here
+                        // so a maxed-out 100% never overflows past the
+                        // track's own right/left edge.
+                        fill.side === "pos"
+                          ? { left: "50%", width: `${fill.pct / 2}%` }
+                          : { right: "50%", width: `${fill.pct / 2}%` }
+                      }
+                    />
+                  ) : null}
+                </div>
+                <span className="sr-only">
+                  {t.rMultiple === null
+                    ? "R not applicable -- the stop was never known."
+                    : `${t.rMultiple}R`}
+                </span>
+                <span className="rq-row__end rq-num">
+                  {formatClockTime(t.openedAt)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
         <div className="push">
           <Link href={closeOutHref} className="rq-btn rq-btn--block">
             Close out the day
