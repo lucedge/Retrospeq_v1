@@ -14,6 +14,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
+    // The shared dev Supabase project is remote: ~130ms per round trip and
+    // ~5s to open a fresh pooled connection. Live tests' own beforeAll/
+    // afterAll (seed + erasure-flagged cleanup) routinely exceed Vitest's
+    // 10s default, which surfaced as six "Hook timed out" suite failures in
+    // the 2026-09-15 phase-end sweep while every test inside them passed.
+    hookTimeout: 30_000,
     include: ['**/*.test.ts'],
     // `analytics-registry-schema.independent-verify.rls.test.ts` is
     // DESTRUCTIVE against the shared dev DB: it drops CHECK constraints and
@@ -22,9 +28,10 @@ export default defineConfig({
     // "permission denied" / missing constraints. That produced 20 failures
     // in one `vitest run rls.test` sweep (2026-09-15) and was repeatedly
     // written off as an `analytic_user_suppression` flake. It is excluded
-    // here and run ALONE by `npm run test:exclusive`, which `check` and
-    // `check:security` both invoke — never delete the exclusion without
-    // moving the file's grant/constraint surgery somewhere isolated.
+    // here AND named again in `check`/`check:security`'s own --exclude
+    // flags (a CLI --exclude REPLACES this list, it does not add to it),
+    // then run ALONE by `npm run test:exclusive` — never drop either copy
+    // without moving the file's grant/constraint surgery somewhere isolated.
     exclude: [
       'node_modules',
       '.next',
