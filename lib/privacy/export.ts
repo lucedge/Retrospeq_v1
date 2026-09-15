@@ -2,6 +2,11 @@ import 'server-only';
 import { withServiceRoleConnection } from '@/lib/supabase/direct';
 import { countUnusedRecoveryCodes } from '@/lib/auth/mfa-recovery-repository';
 import { RECOVERY_CODE_COUNT } from '@/lib/auth/mfa-recovery-codes';
+import {
+  EXPORT_TABLE_REGISTRY,
+  fetchOwnedRows,
+  type OwnedRowsResult,
+} from './export-tables';
 
 /**
  * Module 01 story 5.1: "JSON + CSV bundle ... of all user-owned rows"
@@ -10,20 +15,24 @@ import { RECOVERY_CODE_COUNT } from '@/lib/auth/mfa-recovery-codes';
  * signed URL, `data_requests` status updates) per this slice's own
  * dispatch: "keep the actual 'assemble the bundle' logic as a separate,
  * callable function that a future queue worker could call unchanged"
- * once Module 02 adds real trade-volume data and this can no longer run
- * synchronously inside a Server Action (§11's "< 5 min p95" budget).
+ * once this can no longer run synchronously inside a Server Action
+ * (§11's "< 5 min p95" budget).
  *
- * HONEST SCOPE, stated explicitly rather than left implicit: this repo
- * has no `fills`/`trades` tables yet (Module 02 isn't built) — the
- * export bundle below is every real, existing user-owned row today:
- * profile, trading accounts (credentials excluded — they are, by
- * design, unreadable even to the service role's own application code
- * path here; `account_credentials` is never queried by this function at
- * all), subscription, and MFA recovery-code metadata (a count, never the
- * codes themselves — those are one-way-hashed and were never retrievable
- * even before erasure). AGENTS.md "never invent fake export content" —
- * when Module 02 lands, this function grows a `trades`/`fills` section;
- * it does not fabricate one now.
+ * COMPLETENESS (2026-09-15 slice, closing the gap PROGRESS.md's own
+ * cross-cutting follow-up named: "omits trades/rules"): `profile`,
+ * `tradingAccounts`, `subscription`, and `mfa` are the original
+ * hand-typed sections, kept exactly as-shaped for backward
+ * compatibility. `tables` is new — every OTHER real `retrospeq` table
+ * carrying a `user_id` column, driven by `export-tables.ts`'s own
+ * `EXPORT_TABLE_REGISTRY`, keyed by table name, each with its rows and
+ * a `truncated` flag (see `EXPORT_ROW_LIMIT`'s own header). Credential/
+ * security material (`account_credentials`, `mfa_recovery_codes`) and a
+ * handful of internal-analytics-engine-only tables are deliberately
+ * excluded, each with a written reason — see `EXPORT_EXCLUDED_TABLES`.
+ * `export-completeness.live.test.ts` enforces, against the real live
+ * schema, that every user-owned table is accounted for one of these
+ * three ways — never silently missed the way `trades`/`rules` were
+ * before this slice.
  *
  * Runs under `withServiceRoleConnection` with an explicit `userId`
  * filter on every query (00-foundation §3.2) — this is what makes the
@@ -66,6 +75,10 @@ export interface ExportBundle {
     recoveryCodesRemaining: number;
     recoveryCodesIssued: number;
   };
+  /** Every `EXPORT_TABLE_REGISTRY` table, keyed by table name — see this
+   *  file's own header and `export-tables.ts` for what's included/
+   *  excluded and why. */
+  tables: Record<string, OwnedRowsResult>;
 }
 
 export async function buildExportBundle(userId: string): Promise<ExportBundle> {
@@ -105,6 +118,23 @@ export async function buildExportBundle(userId: string): Promise<ExportBundle> {
   // (itself written by that user's RLS-enforced INSERT), never a
   // client-supplied value at this call site.
   const recoveryCodesRemaining = await countUnusedRecoveryCodes(userId);
+
+  // Every other user-owned table, generic-fetched per `export-tables.ts`'s
+  // own registry — one `withServiceRoleConnection` call per table, same
+  // explicit `userId` filter posture as every query above (never trusting
+  // RLS to narrow it, since it's bypassed here per this file's own header).
+  // Run concurrently (`getPool()`'s own `max: 3` bounds how many actually
+  // run at once — extra requests simply queue, never exceed the pool) —
+  // sequential awaits over 40+ tables would otherwise pay a full
+  // round-trip latency per table, one at a time, for no correctness
+  // reason (every fetch is independent, no shared transaction needed).
+  const tableEntries = await Promise.all(
+    EXPORT_TABLE_REGISTRY.map(async (spec) => {
+      const result = await withServiceRoleConnection((client) => fetchOwnedRows(client, userId, spec));
+      return [spec.table, result] as const;
+    }),
+  );
+  const tables: Record<string, OwnedRowsResult> = Object.fromEntries(tableEntries);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -147,6 +177,7 @@ export async function buildExportBundle(userId: string): Promise<ExportBundle> {
       // implies a full batch exists.
       recoveryCodesIssued: recoveryCodesRemaining > 0 ? RECOVERY_CODE_COUNT : 0,
     },
+    tables,
   };
 }
 

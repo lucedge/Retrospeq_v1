@@ -107,12 +107,15 @@ const WITH_SERVICE_ROLE_CONNECTION_ALLOWLIST = new Set<string>([
   // create but never update its own request row.
   'lib/privacy/data-requests-repository.ts',
   // Module 01 story 5.1: `buildExportBundle` reads `profiles`/
-  // `trading_accounts`/`subscriptions` for a user with no live session
-  // to scope `withUserConnection` to (the function is written to be
-  // callable by a future queue worker unchanged — see that file's own
-  // doc comment) — every query still filters explicitly on `userId`
-  // sourced from the export request's own owner-INSERTed row, never a
-  // client-supplied value at this call site.
+  // `trading_accounts`/`subscriptions` (and, since the 2026-09-15
+  // completeness slice, every OTHER `EXPORT_TABLE_REGISTRY` table —
+  // `export-tables.ts`'s own header — every real user-owned table except
+  // the explicitly denylisted credential/security ones) for a user with
+  // no live session to scope `withUserConnection` to (the function is
+  // written to be callable by a future queue worker unchanged — see that
+  // file's own doc comment) — every query still filters explicitly on
+  // `userId` sourced from the export request's own owner-INSERTed row,
+  // never a client-supplied value at this call site.
   'lib/privacy/export.ts',
   // Module 01 stories 5.2/5.3: `erasure_tombstones` has no client policy
   // at all (see the migration's own comment) — service role only, for

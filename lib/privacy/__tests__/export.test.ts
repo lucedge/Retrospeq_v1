@@ -14,6 +14,39 @@ vi.mock('@/lib/auth/mfa-recovery-repository', () => ({
 }));
 
 import { buildExportBundle, tradingAccountsToCsv } from '../export';
+import { EXPORT_TABLE_REGISTRY } from '../export-tables';
+
+/**
+ * Query-content-based mock, not call-order-based: `buildExportBundle`
+ * now issues 40+ `withServiceRoleConnection` calls (one per
+ * `EXPORT_TABLE_REGISTRY` table, run concurrently via `Promise.all`) on
+ * top of the three original hand-typed queries — a call-order array
+ * (this file's own pre-2026-09-15 shape) would silently mis-map the
+ * moment that count changes. Every mocked query instead inspects its own
+ * SQL text for which `retrospeq.<table>` it targets and returns that
+ * table's canned rows (or `{ rows: [] }` for every table this test
+ * doesn't care about) — resilient to `EXPORT_TABLE_REGISTRY` growing.
+ */
+function mockServiceRoleQueriesByTable(perTableRows: Record<string, unknown[]>): void {
+  withServiceRoleConnectionMock.mockImplementation(async (fn: (c: unknown) => unknown) =>
+    fn({
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('retrospeq.profiles')) {
+          return { rows: perTableRows.profiles ?? [] };
+        }
+        if (sql.includes('retrospeq.trading_accounts')) {
+          return { rows: perTableRows.trading_accounts ?? [] };
+        }
+        if (sql.includes('retrospeq.subscriptions')) {
+          return { rows: perTableRows.subscriptions ?? [] };
+        }
+        const match = /from\s+retrospeq\.(\w+)/.exec(sql);
+        const table = match?.[1];
+        return { rows: (table && perTableRows[table]) ?? [] };
+      }),
+    }),
+  );
+}
 
 describe('buildExportBundle', () => {
   beforeEach(() => {
@@ -21,15 +54,11 @@ describe('buildExportBundle', () => {
   });
 
   it('assembles profile + trading accounts + subscription + mfa metadata, all scoped to the given userId', async () => {
-    const responses = [
-      { rows: [{ display_name: 'Ada', locale: 'en', timezone: 'UTC', telemetry_opt_out: false, onboarding_stage: 'created', created_at: '2026-01-01T00:00:00Z' }] },
-      { rows: [{ id: 'acct-1', label: 'FTMO', platform: 'mt5', account_kind: 'personal', base_currency: 'USD', day_rollover: 'America/New_York 17:00', sync_tier: 't0', status: 'connected', connected_at: '2026-01-02T00:00:00Z', disconnected_at: null, created_at: '2026-01-01T00:00:00Z' }] },
-      { rows: [{ plan: 'free', status: 'active', current_period_end: null }] },
-    ];
-    let callIndex = 0;
-    withServiceRoleConnectionMock.mockImplementation(async (fn: (c: unknown) => unknown) =>
-      fn({ query: vi.fn().mockResolvedValue(responses[callIndex++]) }),
-    );
+    mockServiceRoleQueriesByTable({
+      profiles: [{ display_name: 'Ada', locale: 'en', timezone: 'UTC', telemetry_opt_out: false, onboarding_stage: 'created', created_at: '2026-01-01T00:00:00Z' }],
+      trading_accounts: [{ id: 'acct-1', label: 'FTMO', platform: 'mt5', account_kind: 'personal', base_currency: 'USD', day_rollover: 'America/New_York 17:00', sync_tier: 't0', status: 'connected', connected_at: '2026-01-02T00:00:00Z', disconnected_at: null, created_at: '2026-01-01T00:00:00Z' }],
+      subscriptions: [{ plan: 'free', status: 'active', current_period_end: null }],
+    });
     countUnusedRecoveryCodesMock.mockResolvedValue(10);
 
     const bundle = await buildExportBundle('user-1');
@@ -51,9 +80,7 @@ describe('buildExportBundle', () => {
   });
 
   it('degrades honestly to null profile/subscription and empty accounts when nothing exists (never fabricates)', async () => {
-    withServiceRoleConnectionMock.mockImplementation(async (fn: (c: unknown) => unknown) =>
-      fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
-    );
+    mockServiceRoleQueriesByTable({});
 
     const bundle = await buildExportBundle('user-1');
 
@@ -61,6 +88,34 @@ describe('buildExportBundle', () => {
     expect(bundle.tradingAccounts).toEqual([]);
     expect(bundle.subscription).toBeNull();
     expect(bundle.mfa).toEqual({ recoveryCodesRemaining: 0, recoveryCodesIssued: 0 });
+  });
+
+  it('includes every EXPORT_TABLE_REGISTRY table in bundle.tables, each honestly empty with no data', async () => {
+    mockServiceRoleQueriesByTable({});
+
+    const bundle = await buildExportBundle('user-1');
+
+    for (const spec of EXPORT_TABLE_REGISTRY) {
+      expect(bundle.tables[spec.table]).toEqual({ rows: [], truncated: false });
+    }
+    // account_credentials / mfa_recovery_codes are never a registry
+    // table at all — the denylist is enforced by omission from the
+    // registry itself, not by a runtime filter (see export-tables.ts).
+    expect(bundle.tables.account_credentials).toBeUndefined();
+    expect(bundle.tables.mfa_recovery_codes).toBeUndefined();
+  });
+
+  it('surfaces a real row for a registry table (e.g. trades) under bundle.tables, not fabricated', async () => {
+    mockServiceRoleQueriesByTable({
+      trades: [{ id: 'trade-1', user_id: 'user-1', instrument: 'EURUSD', r_multiple: '1.5000' }],
+    });
+
+    const bundle = await buildExportBundle('user-1');
+
+    expect(bundle.tables.trades.rows).toEqual([
+      { id: 'trade-1', user_id: 'user-1', instrument: 'EURUSD', r_multiple: '1.5000' },
+    ]);
+    expect(bundle.tables.trades.truncated).toBe(false);
   });
 });
 
@@ -72,6 +127,7 @@ describe('tradingAccountsToCsv', () => {
       profile: null,
       subscription: null,
       mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
+      tables: {},
       tradingAccounts: [
         {
           id: 'acct-1',
@@ -105,6 +161,7 @@ describe('tradingAccountsToCsv', () => {
       profile: null,
       subscription: null,
       mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
+      tables: {},
       tradingAccounts: [
         {
           id: 'acct-1',
@@ -132,6 +189,7 @@ describe('tradingAccountsToCsv', () => {
       profile: null,
       subscription: null,
       mfa: { recoveryCodesRemaining: 0, recoveryCodesIssued: 0 },
+      tables: {},
       tradingAccounts: [],
     });
     expect(csv.split('\n')).toHaveLength(1);
