@@ -17,9 +17,12 @@ import { RuleEditor } from './RuleEditor';
  * `scope` OMITTED FROM THIS SCREEN ENTIRELY — a deliberate, documented
  * scope-narrowing, not an oversight (00-foundation §12: log deviations).
  * Story 1.5's `scope = 'strategy'` requires a real `scopeId` (a strategy
- * to attach to), and Module 03 (Field Registry & Strategy) has not been
- * built in this repo yet — there is no strategy picker to offer and no
- * strategy any such rule could reference. Every rule this screen creates
+ * to attach to). Strategies DO exist now (Module 03 shipped 2026-09-09),
+ * so the remaining gap is only the picker UI plus stories 1.5-1.7's
+ * strategy-scoped authoring rules — still unbuilt, tracked in PROGRESS.
+ * `createRuleInternal` verifies the caller owns any `scopeId` it is given
+ * (security sweep 2026-09-15), so adding a picker later needs no new
+ * server-side ownership work. Every rule this screen creates
  * is therefore `scope: 'global'`, matching `createRule`'s own default
  * shape for the guided front door (Slice 10a). Once Module 03 ships, this
  * screen (or a follow-up sub-slice) is where a real strategy-scope toggle
