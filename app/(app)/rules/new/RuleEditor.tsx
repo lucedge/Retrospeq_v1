@@ -7,6 +7,7 @@ import { getOperand, type OperandCatalogueEntry, type OperandGroup } from '@/lib
 import { soleAuthorableOp } from '@/lib/rules/editable-operands';
 import { renderSentence } from '@/lib/rules/render-sentence';
 import { formatUsageFraction } from '@/lib/entitlements/messages';
+import type { DiscoveryItem, DiscoveryResult } from '@/lib/review/discovery';
 import { createRule, previewRule, type PreviewRuleActionState } from '../actions';
 
 /**
@@ -23,19 +24,37 @@ import { createRule, previewRule, type PreviewRuleActionState } from '../actions
  * own precedent of writing these down rather than assuming they're
  * obvious):
  *
- * - NO operand-picker keyboard field. The operand chooser is a native
- *   `<select>` grouped by catalogue `group` via `<optgroup>` — this repo's
- *   own established precedent for "choose one of many named things" on a
- *   FORM screen (not a fast-capture pre-entry screen), e.g.
- *   `ManualEntryForm.tsx`'s account `<select>`. Story 1.1's "no operator
- *   dropdown anywhere" is about the COMPARISON OPERATOR (lte/gte/is_true/
- *   etc.), not which rule TYPE to author — and it is satisfied literally
- *   here: there is no operator control anywhere on this screen at all,
- *   because `lib/rules/editable-operands.ts` only ever offers operands
- *   with exactly one authorable operator, resolved automatically via
- *   `soleAuthorableOp`. A polished ranked-discovery replacement for this
- *   plain picker (leading with the trader's own behaviour, story 1.3) is
- *   Slice 10c's job, not this one's.
+ * - NO operand-picker keyboard field on the CATALOGUE'S select itself. The
+ *   operand chooser is a native `<select>` grouped by catalogue `group`
+ *   via `<optgroup>` — this repo's own established precedent for "choose
+ *   one of many named things" on a FORM screen (not a fast-capture
+ *   pre-entry screen), e.g. `ManualEntryForm.tsx`'s account `<select>`.
+ *   Story 1.1's "no operator dropdown anywhere" is about the COMPARISON
+ *   OPERATOR (lte/gte/is_true/etc.), not which rule TYPE to author — and
+ *   it is satisfied literally here: there is no operator control anywhere
+ *   on this screen at all, because `lib/rules/editable-operands.ts` only
+ *   ever offers operands with exactly one authorable operator, resolved
+ *   automatically via `soleAuthorableOp`.
+ * - DISCOVERY (Slice 10c, story 1.3, §6.1's `.discovery` reference markup,
+ *   inventory row 3.10): a ranked list of this trader's OWN active
+ *   detections (`lib/review/discovery.ts`, computed server-side) sits
+ *   ABOVE the catalogue picker, each item a plain `.discovery__btn` list
+ *   button (never `.rq-btn` — only one primary button per view, "Add
+ *   rule"). Clicking one calls the SAME `handleSelectOperand` the
+ *   catalogue's own `<select>` uses, pre-filling the stepper at the
+ *   analytic's own resolved threshold (`DiscoveryItem.seedValue`) instead
+ *   of the generic bounds midpoint — the identical "seed a real number
+ *   from the trader's own history" posture `guided-front-door.ts`
+ *   established, applied here to a detection-derived value instead of a
+ *   distribution percentile. The full catalogue (grouped `<select>` +
+ *   `<input type="search">`, §6.1's own markup) now sits behind a
+ *   `<details class="catalogue"><summary>Browse all rule types</summary>`
+ *   disclosure, collapsed by default — "the catalogue sits behind search
+ *   for those who want it" (design-decisions.md, "Discovery, not
+ *   browsing"). Search is a plain client-side label substring filter over
+ *   the SAME `operandsByGroup` map, not a second data source — this is a
+ *   FORM screen, so a keyboard here is allowed (unlike a fast-capture
+ *   entry screen).
  * - Numeric/duration value: the SAME `.rq-step` stepper Slice 10a
  *   established (no native range slider — that primitive does not exist
  *   in the shipped design system, see `GuidedFrontDoor.tsx`'s own header
@@ -107,36 +126,47 @@ function countDecimals(step: number): number {
   return i === -1 ? 0 : s.length - i - 1;
 }
 
-/** Bounds-midpoint default, rounded to the operand's own step — the same
- *  honest "middle of what this rule type even allows" fallback
- *  `guided-front-door.ts` uses when there is no history to seed from
- *  (that file's own function is `server-only` and cannot be imported into
- *  this client component, so this is a small, deliberate duplicate — same
- *  precedent as `GuidedFrontDoor.tsx`'s own inline `step()` function not
- *  importing from `guided-front-door.ts` either). This general editor does
- *  not attempt per-operand history-based seeding beyond this — the guided
- *  front door already covers the three operands where that investment
- *  pays off (§5.10); building a second, general history-seeding pipeline
- *  for all ~20 offerable operands is out of this sub-slice's scope, and
- *  the live preview immediately tells the trader whether this starting
- *  number is even meaningful for their own history. */
+/** Rounds an arbitrary raw number to the operand's own `step`, clamped into
+ *  `[min, max]` — shared by `boundsMidpointDefault` below and, since Slice
+ *  10c, by a discovery item's own seeded value (already close to a valid
+ *  step but not guaranteed to land on one exactly, e.g. a rounded-up
+ *  minute count from `resolveDetectionRuleProposal`). */
+function roundToBoundsStep(raw: number, bounds: { min: number; max: number; step: number }): number {
+  const min = new Decimal(bounds.min);
+  const step = new Decimal(bounds.step);
+  const stepsFromMin = new Decimal(raw).minus(min).dividedBy(step).toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+  const stepped = min.plus(stepsFromMin.times(step));
+  return Decimal.max(bounds.min, Decimal.min(bounds.max, stepped)).toNumber();
+}
+
+/** Bounds-midpoint default — the same honest "middle of what this rule type
+ *  even allows" fallback `guided-front-door.ts` uses when there is no
+ *  history to seed from (that file's own function is `server-only` and
+ *  cannot be imported into this client component, so this is a small,
+ *  deliberate duplicate — same precedent as `GuidedFrontDoor.tsx`'s own
+ *  inline `step()` function not importing from `guided-front-door.ts`
+ *  either). This general editor does not attempt per-operand history-based
+ *  seeding beyond this and a discovery item's own resolved threshold — the
+ *  guided front door already covers the three operands where distribution-
+ *  percentile seeding pays off (§5.10); building a second, general
+ *  history-seeding pipeline for all ~20 offerable operands is out of this
+ *  sub-slice's scope, and the live preview immediately tells the trader
+ *  whether this starting number is even meaningful for their own history. */
 function boundsMidpointDefault(bounds: { min: number; max: number; step: number }): number {
   const min = new Decimal(bounds.min);
   const max = new Decimal(bounds.max);
-  const step = new Decimal(bounds.step);
-  const mid = min.plus(max).dividedBy(2);
-  const stepsFromMin = mid.minus(min).dividedBy(step).toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
-  const stepped = min.plus(stepsFromMin.times(step));
-  return Decimal.max(bounds.min, Decimal.min(bounds.max, stepped)).toNumber();
+  return roundToBoundsStep(min.plus(max).dividedBy(2).toNumber(), bounds);
 }
 
 type Phase = 'editing' | 'submitting' | 'done';
 
 export function RuleEditor({
   operandIds,
+  discovery,
   entitlement: initialEntitlement,
 }: {
   operandIds: string[];
+  discovery: DiscoveryResult;
   entitlement: EntitlementSummary;
 }) {
   const [phase, setPhase] = useState<Phase>('editing');
@@ -144,6 +174,11 @@ export function RuleEditor({
   const [value, setValue] = useState<number>(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [doneRendered, setDoneRendered] = useState<string | null>(null);
+  // Slice 10c: plain client-side label filter over the catalogue's own
+  // grouped list -- this is a FORM screen, not a fast-capture one, so a
+  // keyboard here is allowed (see this file's own header). No second data
+  // source; `operandsByGroup` below is filtered by substring match.
+  const [catalogueSearch, setCatalogueSearch] = useState('');
   // `page.tsx`'s `canForUser` snapshot is only ever correct at the moment
   // the Server Component rendered -- this component can stay mounted
   // across many sequential `createRule` calls in one session (the "Write
@@ -171,9 +206,25 @@ export function RuleEditor({
     return groups;
   }, [operandIds]);
 
+  const filteredOperandsByGroup = useMemo(() => {
+    const query = catalogueSearch.trim().toLowerCase();
+    if (!query) return operandsByGroup;
+    const filtered = new Map<OperandGroup, OperandCatalogueEntry[]>();
+    for (const [group, operands] of operandsByGroup) {
+      const matches = operands.filter((o) => o.label.toLowerCase().includes(query));
+      if (matches.length > 0) filtered.set(group, matches);
+    }
+    return filtered;
+  }, [operandsByGroup, catalogueSearch]);
+
   const selectedOperand = selectedOperandId ? getOperand(selectedOperandId) : undefined;
 
-  function handleSelectOperand(operandId: string) {
+  /** Shared by the catalogue's own `<select>` (no `seedValue` -- falls back
+   *  to the bounds midpoint, unchanged from before Slice 10c) and a
+   *  discovery item's list button (`seedValue` set to the SAME threshold
+   *  `resolveDetectionRuleProposal` would propose, see this file's own
+   *  header). */
+  function handleSelectOperand(operandId: string, seedValue?: number) {
     setSelectedOperandId(operandId);
     setSubmitError(null);
     if (!operandId) return;
@@ -187,9 +238,8 @@ export function RuleEditor({
       // header). Nothing to set here.
       return;
     }
-    if (operand.bounds) {
-      setValue(boundsMidpointDefault(operand.bounds));
-    }
+    if (!operand.bounds) return;
+    setValue(roundToBoundsStep(seedValue ?? boundsMidpointDefault(operand.bounds), operand.bounds));
   }
 
   if (phase === 'done') {
@@ -231,29 +281,41 @@ export function RuleEditor({
         </p>
       )}
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="operand-picker" className="rq-label">
-          What do you want a rule about?
-        </label>
-        <select
-          id="operand-picker"
-          className="rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
-          value={selectedOperandId}
-          disabled={phase === 'submitting'}
-          onChange={(e) => handleSelectOperand(e.target.value)}
-        >
-          <option value="">Choose a rule type…</option>
-          {[...operandsByGroup.entries()].map(([group, operands]) => (
-            <optgroup key={group} label={GROUP_LABELS[group]}>
-              {operands.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </div>
+      <DiscoverySection discovery={discovery} disabled={phase === 'submitting'} onSelect={handleSelectOperand} />
+
+      <details className="catalogue">
+        <summary>Browse all rule types</summary>
+        <input
+          type="search"
+          placeholder="Search rules…"
+          aria-label="Search rule types"
+          value={catalogueSearch}
+          onChange={(e) => setCatalogueSearch(e.target.value)}
+        />
+        <div className="flex flex-col gap-2">
+          <label htmlFor="operand-picker" className="rq-label">
+            What do you want a rule about?
+          </label>
+          <select
+            id="operand-picker"
+            className="rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
+            value={selectedOperandId}
+            disabled={phase === 'submitting'}
+            onChange={(e) => handleSelectOperand(e.target.value)}
+          >
+            <option value="">Choose a rule type…</option>
+            {[...filteredOperandsByGroup.entries()].map(([group, operands]) => (
+              <optgroup key={group} label={GROUP_LABELS[group]}>
+                {operands.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      </details>
 
       {submitError && (
         <p className="rq-sub" role="alert">
@@ -310,6 +372,75 @@ export function RuleEditor({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * §6.1's `.discovery` reference markup, inventory row 3.10 — Slice 10c,
+ * story 1.3: "Discovery leads with ranked detections; the catalogue sits
+ * behind search." `discovery.items` arrives already ranked/filtered
+ * server-side (`lib/review/discovery.ts` -- see that file's own header
+ * for the ranking + filtering rules); this component only renders it.
+ *
+ * Each item is a plain `.discovery__btn` list button, deliberately NOT
+ * `.rq-btn` (one `.rq-btn` per view -- "Add rule" -- is the only primary
+ * action on this screen; a discovery item only PRE-SELECTS an operand, it
+ * does not itself save anything). `.discovery__evidence` already carries
+ * the design system's own mono/tabular-numeral styling; `rq-num` is added
+ * alongside it anyway, matching this repo's own convention of marking
+ * every numeric value explicitly rather than relying on a component class
+ * alone (e.g. `.rq-step__val rq-num` elsewhere in this same file).
+ *
+ * EMPTY STATE ("Not enough data yet" is a correct state, not a bug,
+ * AGENTS.md non-negotiable): zero items means either genuinely too little
+ * trade history for any detection to have cleared its own volume/rate/
+ * persistence gates, or every pattern that DID clear them already has a
+ * rule, or maps to no operand this trader's own accounts can support
+ * today -- this component cannot and does not distinguish those cases
+ * (nor invent a reason), it just states the honest fact plainly. The
+ * catalogue stays fully reachable below regardless (never gated on
+ * discovery having anything to show).
+ */
+function DiscoverySection({
+  discovery,
+  disabled,
+  onSelect,
+}: {
+  discovery: DiscoveryResult;
+  disabled: boolean;
+  onSelect: (operandId: string, seedValue?: number) => void;
+}) {
+  return (
+    <section className="discovery" aria-labelledby="disc-h">
+      <h2 id="disc-h" className="rq-h2" style={{ fontSize: '16px' }}>
+        Based on your last {discovery.windowDays} days
+      </h2>
+      {discovery.items.length === 0 ? (
+        <p className="rq-sub hint">
+          Not enough data yet — keep logging trades and patterns from your own history will show
+          up here.
+        </p>
+      ) : (
+        <>
+          <p className="hint rq-sub">You might want rules about:</p>
+          <ul className="discovery__list">
+            {discovery.items.map((item: DiscoveryItem) => (
+              <li key={item.analyticId}>
+                <button
+                  type="button"
+                  className="discovery__btn"
+                  disabled={disabled}
+                  onClick={() => onSelect(item.operandId, item.seedValue ?? undefined)}
+                >
+                  <span className="discovery__name">{item.label}</span>
+                  <span className="discovery__evidence rq-num">{item.evidence}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 

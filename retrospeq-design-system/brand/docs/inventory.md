@@ -60,7 +60,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 3.7 | `/rules/new` | Rule editor: sentence with one blank, stepper + range, live preview, "Starts soft" | 04 §6.1 | new | ◐ |
 | 3.8 | `/rules/new` | Preview bands (healthy / too tight / too loose) | 04 §5.8 | new | ◐ |
 | 3.9 | `/rules/new` | Tighten-only rejection (strategy-scoped) | 04 §6.1 | new | ○ (blocked) |
-| 3.10 | `/rules/new` | Discovery: led by own behaviour + catalogue | 04 §6.1 | new | ○ (10c) |
+| 3.10 | `/rules/new` | Discovery: led by own behaviour + catalogue | 04 §6.1 | new | ◐ (10c, coder-done, needs review) |
 | 3.11 | `/rules` | Edit threshold inline | 04 story 2.5 | new | ◐ |
 | 3.12 | `/strategies` | List; free-tier gate ("Strategies are a Pro feature") | 03 §5; 01 §4.3 | new | ◐ |
 | 3.13 | `/strategies/new` | Builder step 1: name | 03 §5.1 | new | ◐ |

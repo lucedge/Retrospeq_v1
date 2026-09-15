@@ -3,6 +3,7 @@ import { canForUser } from '@/lib/entitlements/service';
 import { formatUsageFraction } from '@/lib/entitlements/messages';
 import { fetchAccountSyncTiers } from '@/lib/rules/rules-repository';
 import { getEditableOperands } from '@/lib/rules/editable-operands';
+import { fetchDiscoveryForUser } from '@/lib/review/discovery';
 import { RuleEditor } from './RuleEditor';
 
 /**
@@ -54,6 +55,13 @@ import { RuleEditor } from './RuleEditor';
  * IDS are sent to the client; `RuleEditor.tsx` re-resolves each one's full
  * catalogue entry via the same static `getOperand()` lookup rather than
  * this page serialising catalogue objects into a prop.
+ *
+ * DISCOVERY (Slice 10c, story 1.3, inventory row 3.10): `fetchDiscoveryForUser`
+ * (`lib/review/discovery.ts`) reads this trader's OWN active `detections`
+ * (Module 05) and ranks the ones with an honest Module 04 operand mapping
+ * -- see that file's own header for the full filtering/ranking reasoning.
+ * Fetched in the same `Promise.all` as the other two page-load reads, no
+ * separate round trip.
  */
 export default async function NewRulePage() {
   const supabase = await createClient();
@@ -71,9 +79,10 @@ export default async function NewRulePage() {
     );
   }
 
-  const [accountSyncTiers, entitlement] = await Promise.all([
+  const [accountSyncTiers, entitlement, discovery] = await Promise.all([
     fetchAccountSyncTiers(user.id),
     canForUser(user.id, 'rules.create'),
+    fetchDiscoveryForUser(user.id),
   ]);
 
   const operandIds = getEditableOperands(accountSyncTiers).map((o) => o.id);
@@ -92,6 +101,7 @@ export default async function NewRulePage() {
 
       <RuleEditor
         operandIds={operandIds}
+        discovery={discovery}
         entitlement={{
           allowed: entitlement.allowed,
           limit: entitlement.limit,
