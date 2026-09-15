@@ -61,6 +61,21 @@ export interface ExportTableSpec {
    *  truncation-safety requires here (no chronological claim is made
    *  for those specific tables). */
   readonly orderBy: readonly string[];
+  /** Columns holding genuinely free-form, user-TYPED text (checked
+   *  against the real migration DDL, not guessed) — a strategy/field
+   *  name, a trigger-condition sentence, a rendered rule sentence. This
+   *  is `export-csv.ts`'s own CSV-formula-injection guard input
+   *  (prefixes a leading `= + - @` / tab / CR with `'`); deliberately
+   *  NOT applied to numeric-as-string columns (e.g. `r_multiple`,
+   *  `risk_pct` — Postgres `numeric` comes back from `pg` as a JS
+   *  string, and a legitimate negative value like `"-1.5000"` must
+   *  never be mangled by a formula-injection guard meant for prose).
+   *  Omitted (defaults to `[]`) for the majority of tables, which carry
+   *  no free-text column of their own (enums, ids, numbers, jsonb —
+   *  jsonb values are JSON-stringified by `export-csv.ts` and so are
+   *  self-quoting: `JSON.stringify` of a string always starts with `"`,
+   *  never `=`/`+`/`-`/`@`). */
+  readonly freeTextColumns?: readonly string[];
 }
 
 export const EXPORT_TABLE_REGISTRY: readonly ExportTableSpec[] = [
@@ -135,6 +150,7 @@ export const EXPORT_TABLE_REGISTRY: readonly ExportTableSpec[] = [
     columns: ['id', 'user_id', 'name', 'kind', 'data_type', 'origin', 'owner_strategy_id', 'config', 'min_tier', 'state', 'created_at', 'archived_at'],
     plainDateColumns: [],
     orderBy: ['created_at'],
+    freeTextColumns: ['name'], // user-typed field label (field_registry_schema.sql: `name text not null`)
   },
   {
     table: 'fills',
@@ -219,6 +235,7 @@ export const EXPORT_TABLE_REGISTRY: readonly ExportTableSpec[] = [
     columns: ['rule_id', 'version', 'user_id', 'operand_id', 'op', 'value', 'rendered', 'created_at', 'superseded_at'],
     plainDateColumns: [],
     orderBy: ['created_at'],
+    freeTextColumns: ['rendered'], // rendered sentence for display/audit (rulebook_schema.sql: `rendered text not null`)
   },
   {
     table: 'rules',
@@ -231,12 +248,14 @@ export const EXPORT_TABLE_REGISTRY: readonly ExportTableSpec[] = [
     columns: ['id', 'user_id', 'name', 'current_version', 'is_default', 'state', 'created_at'],
     plainDateColumns: [],
     orderBy: ['created_at'],
+    freeTextColumns: ['name'], // user-typed strategy name
   },
   {
     table: 'strategy_versions',
     columns: ['strategy_id', 'version', 'user_id', 'name', 'fields', 'triggers', 'created_at', 'superseded_at'],
     plainDateColumns: [],
     orderBy: ['created_at'],
+    freeTextColumns: ['name'], // user-typed strategy name, snapshotted per version
   },
   {
     table: 'sync_runs',
@@ -273,6 +292,7 @@ export const EXPORT_TABLE_REGISTRY: readonly ExportTableSpec[] = [
     columns: ['id', 'user_id', 'strategy_id', 'text', 'sort_order', 'state', 'created_at', 'retired_at'],
     plainDateColumns: [],
     orderBy: ['created_at'],
+    freeTextColumns: ['text'], // user-typed trigger-condition sentence
   },
   {
     table: 'trigger_evaluations',

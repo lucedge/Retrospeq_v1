@@ -7,7 +7,8 @@ import {
   type DataRequestRow,
 } from './data-requests-repository';
 import { recordAuditEvent } from './audit-repository';
-import { buildExportBundle, tradingAccountsToCsv } from './export';
+import { buildExportBundle } from './export';
+import { buildFullExportCsv } from './export-csv';
 import { ensureExportBucketExists, uploadExportObject, createSignedExportUrl } from './storage';
 
 /**
@@ -97,7 +98,10 @@ export async function runExportJob(requestId: string): Promise<void> {
 
   try {
     const bundle = await buildExportBundle(request.user_id);
-    const csv = tradingAccountsToCsv(bundle);
+    // Full multi-table CSV (README + profile/tradingAccounts/subscription/
+    // mfa + every `EXPORT_TABLE_REGISTRY` table) — see export-csv.ts's own
+    // header for why this stays one file rather than one-per-table.
+    const csv = buildFullExportCsv(bundle);
 
     await ensureExportBucketExists();
 

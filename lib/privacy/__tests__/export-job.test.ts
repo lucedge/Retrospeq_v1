@@ -7,7 +7,7 @@ const {
   updateDataRequestStatusMock,
   recordAuditEventMock,
   buildExportBundleMock,
-  tradingAccountsToCsvMock,
+  buildFullExportCsvMock,
   ensureExportBucketExistsMock,
   uploadExportObjectMock,
   createSignedExportUrlMock,
@@ -18,7 +18,7 @@ const {
   updateDataRequestStatusMock: vi.fn(),
   recordAuditEventMock: vi.fn(),
   buildExportBundleMock: vi.fn(),
-  tradingAccountsToCsvMock: vi.fn(),
+  buildFullExportCsvMock: vi.fn(),
   ensureExportBucketExistsMock: vi.fn(),
   uploadExportObjectMock: vi.fn(),
   createSignedExportUrlMock: vi.fn(),
@@ -36,7 +36,9 @@ vi.mock('../audit-repository', () => ({
 }));
 vi.mock('../export', () => ({
   buildExportBundle: buildExportBundleMock,
-  tradingAccountsToCsv: tradingAccountsToCsvMock,
+}));
+vi.mock('../export-csv', () => ({
+  buildFullExportCsv: buildFullExportCsvMock,
 }));
 vi.mock('../storage', () => ({
   ensureExportBucketExists: ensureExportBucketExistsMock,
@@ -53,7 +55,7 @@ describe('runExportJob', () => {
     vi.clearAllMocks();
     getDataRequestByIdMock.mockResolvedValue(REQUEST);
     buildExportBundleMock.mockResolvedValue({ tradingAccounts: [] });
-    tradingAccountsToCsvMock.mockReturnValue('id,label\n');
+    buildFullExportCsvMock.mockReturnValue('id,label\n');
     createSignedExportUrlMock.mockImplementation(async (path: string) => `https://signed.example/${path}`);
     updateDataRequestStatusMock.mockResolvedValue(undefined);
     recordAuditEventMock.mockResolvedValue(undefined);
@@ -115,7 +117,7 @@ describe('requestExport', () => {
     createDataRequestMock.mockResolvedValue(REQUEST);
     getDataRequestByIdMock.mockResolvedValue({ ...REQUEST, status: 'completed' });
     buildExportBundleMock.mockResolvedValue({ tradingAccounts: [] });
-    tradingAccountsToCsvMock.mockReturnValue('id,label\n');
+    buildFullExportCsvMock.mockReturnValue('id,label\n');
     createSignedExportUrlMock.mockResolvedValue('https://signed.example/x');
   });
 

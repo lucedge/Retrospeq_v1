@@ -181,11 +181,19 @@ export async function buildExportBundle(userId: string): Promise<ExportBundle> {
   };
 }
 
-/** `tradingAccounts` is the only genuinely tabular section today — the
- *  CSV half of story 5.1's "JSON + CSV bundle." Once Module 02 exists,
- *  `trades`/`fills` become the natural CSV export target instead/as
- *  well; this function's shape (one flat table -> one CSV string) is
- *  written to extend, not to be replaced. */
+/** Kept for backward compatibility and its own direct unit tests
+ *  (`export.test.ts`) — the ORIGINAL, trading-accounts-only CSV export,
+ *  from before Module 02 (`trades`/`fills`) or this registry
+ *  (`export-tables.ts`) existed. **Not** what `export-job.ts` uploads as
+ *  `export.csv` any more: that's `export-csv.ts`'s `buildFullExportCsv`,
+ *  which covers every `EXPORT_TABLE_REGISTRY` table (trades, fills,
+ *  rules/rule_versions/rule_evaluations, strategies/strategy_versions,
+ *  fields, etc.) plus this same trading-accounts section, generated from
+ *  the registry so it can't silently fall behind the JSON side again —
+ *  see that file's own header for the full story (fixes the QA FAIL on
+ *  589807c, which correctly found this function alone no longer matched
+ *  the "JSON + CSV bundle ... trades, fills, rules, evaluations,
+ *  strategies, fields" promise on `/privacy` and the export-ready email). */
 export function tradingAccountsToCsv(bundle: ExportBundle): string {
   const headers = [
     'id',

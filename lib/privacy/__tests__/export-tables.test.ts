@@ -47,6 +47,20 @@ describe('export-tables registry', () => {
       for (const col of spec.plainDateColumns) {
         expect(spec.columns).toContain(col);
       }
+      // Every freeTextColumns entry (the CSV formula-injection guard's
+      // input) must be a real selected column too.
+      for (const col of spec.freeTextColumns ?? []) {
+        expect(spec.columns).toContain(col);
+      }
+    }
+  });
+
+  it('freeTextColumns never includes a table\'s orderBy/plainDateColumns (those are timestamps/ids, never free-typed prose)', () => {
+    for (const spec of EXPORT_TABLE_REGISTRY) {
+      for (const col of spec.freeTextColumns ?? []) {
+        expect(spec.orderBy).not.toContain(col);
+        expect(spec.plainDateColumns).not.toContain(col);
+      }
     }
   });
 

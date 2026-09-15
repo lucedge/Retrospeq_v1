@@ -20,6 +20,7 @@ import {
   EXPORT_EXCLUDED_TABLES,
 } from '../export-tables';
 import { buildExportBundle } from '../export';
+import { buildFullExportCsv } from '../export-csv';
 
 /**
  * Module 01 story 5.1 / §8's own E2E line, "export completeness against
@@ -144,6 +145,17 @@ describe.skipIf(!env)('export bundle completeness/denylist/isolation (live DB)',
       // The honest, non-reversible fact IS exported (count, never the codes).
       expect(bundle.mfa.recoveryCodesRemaining).toBe(1);
     }, 30_000);
+
+    it('the CSV bundle (export-csv.ts) never contains the same denylisted markers either', async () => {
+      const bundle = await buildExportBundle(user.id);
+      const csv = buildFullExportCsv(bundle);
+
+      expect(csv).not.toContain('## account_credentials');
+      expect(csv).not.toContain('## mfa_recovery_codes');
+      expect(csv).not.toContain('DO-NOT-LEAK');
+      expect(csv).not.toContain('super-secret-plaintext-marker');
+      expect(csv).not.toContain('recovery-code-hash-marker');
+    }, 30_000);
   });
 
   describe('cross-user isolation', () => {
@@ -195,6 +207,16 @@ describe.skipIf(!env)('export bundle completeness/denylist/isolation (live DB)',
       const serializedA = JSON.stringify(bundleA);
       expect(serializedA).not.toContain('B-ONLY-MARKER');
       expect(serializedA).not.toContain('B-strategy-marker');
+    }, 30_000);
+
+    it("the CSV bundle (export-csv.ts) preserves the same isolation — user A's CSV never contains B's rows", async () => {
+      const bundleA = await buildExportBundle(userA.id);
+      const csvA = buildFullExportCsv(bundleA);
+
+      expect(csvA).toContain('A-ONLY-MARKER');
+      expect(csvA).not.toContain('B-ONLY-MARKER');
+      expect(csvA).toContain('A-strategy-marker');
+      expect(csvA).not.toContain('B-strategy-marker');
     }, 30_000);
   });
 });
