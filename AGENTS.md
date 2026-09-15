@@ -64,6 +64,7 @@ Wired twice, don't fight it: `<link href="/brand/css/index.css">` in `app/layout
 - **Scoped, not full.** `verify` runs tests only in the directories touched; E2E only for changed routes from tier 2; the full unit/live/E2E suites are phase-end only. Commit after every gate PASS.
 - **Testing bar** (00-foundation §9): 90% lines on grouping/rule/statistics engines, 70% overall; property tests on grouping + rule-evaluation invariants; RLS isolation on 100% of tables; E2E core flow + one failure path per module; golden-fixture replay for anything touching grouping.
 - **Docs are part of a slice** (00-foundation §12): ADR per deliberate deviation (`docs/adr/`), runbook entry per alerting condition, inline comments on non-obvious migration constraints. qa checks; coder writes.
+- **Commit with explicit paths, never `git add -A`** while any agent is dispatched — a broad add sweeps another agent's in-progress files into your commit (orchestrator did exactly this on 2026-09-15).
 - **Ledger is ≤ 200 lines** (`PROGRESS.md`; history in `docs/ledger/`). A gate isn't done until its own ≤ 20-line entry is written (`.claude/skills/ledger/SKILL.md`) — sessions get cut off.
 - **UI is looked at, not just asserted**: Playwright screenshot → `Read` the PNG. `npm run test:user` for throwaway accounts; clean up.
 
