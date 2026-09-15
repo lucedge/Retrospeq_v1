@@ -31,6 +31,7 @@ const {
   fetchActiveGlobalRuleVersionsForOperandMock,
   fetchCurrentRuleForEditMock,
   insertRuleAndVersionMock,
+  isStrategyOwnedByUserMock,
   applyRuleEditMock,
   previewMock,
   checkPromotionEligibilityForUserMock,
@@ -56,6 +57,7 @@ const {
   fetchActiveGlobalRuleVersionsForOperandMock: vi.fn(),
   fetchCurrentRuleForEditMock: vi.fn(),
   insertRuleAndVersionMock: vi.fn(),
+  isStrategyOwnedByUserMock: vi.fn(),
   applyRuleEditMock: vi.fn(),
   previewMock: vi.fn(),
   checkPromotionEligibilityForUserMock: vi.fn(),
@@ -95,6 +97,7 @@ vi.mock('@/lib/rules/rules-repository', async (importOriginal) => {
     fetchActiveGlobalRuleVersionsForOperand: fetchActiveGlobalRuleVersionsForOperandMock,
     fetchCurrentRuleForEdit: fetchCurrentRuleForEditMock,
     insertRuleAndVersion: insertRuleAndVersionMock,
+    isStrategyOwnedByUser: isStrategyOwnedByUserMock,
     applyRuleEdit: applyRuleEditMock,
     fetchRulesForUser: fetchRulesForUserMock,
     fetchRuleVersionChangesForUser: fetchRuleVersionChangesForUserMock,
@@ -171,6 +174,7 @@ beforeEach(() => {
   fetchActiveGlobalRuleVersionsForOperandMock.mockReset().mockResolvedValue([]);
   fetchCurrentRuleForEditMock.mockReset();
   insertRuleAndVersionMock.mockReset().mockResolvedValue({ ruleId: 'rule-new-1', version: 1 });
+  isStrategyOwnedByUserMock.mockReset().mockResolvedValue(true);
   applyRuleEditMock.mockReset();
   previewMock.mockReset();
   checkPromotionEligibilityForUserMock.mockReset();
@@ -301,6 +305,21 @@ describe('createRule', () => {
     const result = await createRule({ operandId: 'day_of_week', op: 'not_in', value: ['mon', 'tue', 'wed'], scope: 'global' });
     expect(result.error?.code).toBe('RULE_UNSATISFIABLE');
     expect(insertRuleAndVersionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a strategy rule whose scopeId is not one of the caller\'s strategies (security sweep P1)', async () => {
+    isStrategyOwnedByUserMock.mockResolvedValue(false);
+    const result = await createRule({
+      operandId: 'risk_pct',
+      op: 'lte',
+      value: 1,
+      scope: 'strategy',
+      scopeId: '01927e00-0000-7000-8000-000000000009',
+    });
+    expect(result.error?.code).toBe('STRATEGY_NOT_FOUND');
+    expect(isStrategyOwnedByUserMock).toHaveBeenCalledWith(FAKE_USER.id, '01927e00-0000-7000-8000-000000000009');
+    expect(insertRuleAndVersionMock).not.toHaveBeenCalled();
+    expect(canForUserMock).not.toHaveBeenCalled();
   });
 
   it('requires scopeId for scope="strategy" (Zod boundary)', async () => {

@@ -18,6 +18,7 @@ import {
   fetchRuleRenderedText,
   fetchRulesForUser,
   insertRuleAndVersion,
+  isStrategyOwnedByUser,
   RuleCreateCapExceededError,
   RuleEditConflictError,
 } from '../rules-repository';
@@ -117,6 +118,26 @@ describe.skipIf(!env)('rules-repository — createRule/editRule transaction corr
     await deleteTestAuthUser(env, user.id).catch(() => {});
     await db.end();
   });
+
+  it('isStrategyOwnedByUser is true only for the caller\'s own strategy, never another user\'s (security sweep P1)', async () => {
+    const other = await createTestAuthUser(env!, 'rules-repo-other');
+    try {
+      const mine = await db.query(
+        `insert into retrospeq.strategies (user_id, name, current_version) values ($1, 'Owned Strategy', 1) returning id`,
+        [user.id],
+      );
+      const theirs = await db.query(
+        `insert into retrospeq.strategies (user_id, name, current_version) values ($1, 'Other Strategy', 1) returning id`,
+        [other.id],
+      );
+      expect(await isStrategyOwnedByUser(user.id, mine.rows[0].id)).toBe(true);
+      expect(await isStrategyOwnedByUser(user.id, theirs.rows[0].id)).toBe(false);
+      expect(await isStrategyOwnedByUser(user.id, '01927e00-0000-7000-8000-00000000dead')).toBe(false);
+    } finally {
+      await db.query('delete from retrospeq.strategies where user_id = any($1)', [[user.id, other.id]]);
+      await deleteTestAuthUser(env!, other.id).catch(() => {});
+    }
+  }, 30_000);
 
   it('insertRuleAndVersion writes both rows atomically, current_version = 1', async () => {
     const result = await insertRuleAndVersion({

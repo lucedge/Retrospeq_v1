@@ -18,6 +18,7 @@ import {
   fetchAccountSyncTiers,
   fetchActiveGlobalRuleVersionsForOperand,
   insertRuleAndVersion,
+  isStrategyOwnedByUser,
 } from '@/lib/rules/rules-repository';
 
 /**
@@ -164,6 +165,13 @@ export async function createRuleInternal(userId: string, input: CreateRuleIntern
     operand = validateOperandOpValue(operandId, op, value);
   } catch (err) {
     return structuralValidationErrorState(err);
+  }
+
+  // Ownership — a strategy rule's scopeId must be one of the caller's own
+  // strategies (security sweep 2026-09-15, P1). Checked before any other
+  // read so an unowned id learns nothing about tiers or entitlements.
+  if (scope === 'strategy' && (scopeId === null || !(await isStrategyOwnedByUser(userId, scopeId)))) {
+    return { error: { code: 'STRATEGY_NOT_FOUND', user_message: "We couldn't find that strategy.", retryable: false } };
   }
 
   // Step 4 — tier gating (§4.1: "Tier gating is not cosmetic").

@@ -772,3 +772,16 @@ export async function deleteAllRulesForUser(userId: string): Promise<void> {
     await client.query('delete from retrospeq.rules where user_id = $1', [userId]);
   });
 }
+
+/**
+ * Security sweep 2026-09-15 (P1): `createRule` accepted any uuid as a
+ * strategy rule's `scopeId` without checking the strategy is the caller's.
+ * RLS-enforced read (`withUserConnection`) plus an explicit `user_id`
+ * filter, same shape as `fields-repository.ts`'s `assertStrategyOwnedByUser`.
+ */
+export async function isStrategyOwnedByUser(userId: string, strategyId: string): Promise<boolean> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query('select 1 from retrospeq.strategies where id = $1 and user_id = $2', [strategyId, userId]);
+    return (res.rowCount ?? 0) > 0;
+  });
+}
