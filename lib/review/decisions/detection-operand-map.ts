@@ -12,54 +12,51 @@ import { REENTRY_THRESHOLD_SECONDS, CONSECUTIVE_LOSS_STREAK_THRESHOLD } from '@/
  * catalogue marks `computableToday`; anything else is `null`, never a
  * guess** (that file's own header, restated here for the same reason).
  *
- * RECONCILIATION (logged in full in PROGRESS.md's decision log): this
- * slice's own dispatch names the shape with an illustrative example —
- * "re-entry-after-loss -> time_since_last_loss minimum minutes" — as the
- * obvious, name-correct cross-reference. Checking `operand-catalogue.ts`
- * for real (not assumed) finds every one of the FIVE v1 detection
- * analytics' own obvious operand counterpart is `computableToday: false`
- * today, for the SAME reason each one is a detection in the first place:
- * `time_since_last_loss`, `trades_today`, `consecutive_losses`, `daily_
- * loss_pct` all say, verbatim, "cross-trade aggregation, not built this
- * slice" (Module 04's own catalogue entries, unrelated to Module 05's
- * separate, independent reimplementation of the same facts for detection
- * purposes — `occurrence-detectors.ts`'s own header names this exact
- * boundary). `risk_pct` (mapped from `risk.spread`) IS `computableToday:
- * true`, but `risk.spread`'s own occurrence definition is a per-user IQR
- * outlier fence computed fresh at detection-run time and never persisted
- * on `detections` (`detections-repository.ts`'s own row shape has no
- * fence/threshold column) — there is no honest value to derive a `lte`
- * cap from without re-running that detector's own baseline computation,
- * which this review-time card does not do. **The practical result: every
- * one of today's five real analytics resolves to `null` here** — the
- * "This pattern can't become a rule yet" honest state (still declinable
- * via "Not yet") is therefore the ONLY reachable outcome in production
- * right now, not a hypothetical edge case. This is a genuine, structural
- * product gap (not a bug in this file) — noted in `docs/infra-gaps.md`:
- * closing it needs either Module 04 building the missing cross-trade
- * operands, or `detections` persisting the actual measured threshold/
- * fence value it computed, whichever a future slice's own dispatch picks.
+ * RECONCILIATION, ORIGINAL (2026-09-15, logged in full in PROGRESS.md's
+ * decision log): this slice's own dispatch names the shape with an
+ * illustrative example — "re-entry-after-loss -> time_since_last_loss
+ * minimum minutes" — as the obvious, name-correct cross-reference. At the
+ * time this file was first written, every one of the FIVE v1 detection
+ * analytics' own obvious operand counterpart was `computableToday: false`
+ * ("cross-trade aggregation, not built this slice") — so every one of
+ * today's five real analytics resolved to `null` here, making "This
+ * pattern can't become a rule yet" the ONLY reachable outcome in
+ * production.
  *
- * Two of the five (`seq.reentry_after_loss`, `seq.consecutive_losses`) DO
- * have a real, non-guessed, non-per-user CONSTANT this file can honestly
- * turn into a threshold the moment their operand's own `computableToday`
- * flips true — `occurrence-detectors.ts`'s own exported `REENTRY_
- * THRESHOLD_SECONDS`/`CONSECUTIVE_LOSS_STREAK_THRESHOLD`, the SAME
- * constants that file's own header already established are the real
- * detection threshold, not placeholder copy (see that file's header for
- * the "repeated identically across five independent documents" evidence).
- * Those two branches are written for real below, not stubbed, following
- * `graduation-operand-map.ts`'s own precedent of implementing a
- * currently-unreachable branch correctly rather than leaving it as dead
- * code waiting for a second bug report (that file's own `bool`-segment
- * branch header makes the identical argument). The other three
- * (`seq.trades_per_day`, `seq.daily_loss_breach`, `risk.spread`) have NO
- * such fixed constant — each one's own "threshold" is itself a per-user
- * statistic (a baseline median or IQR fence) computed once at detection-
- * run time and gone by the time this card renders — so they stay `null`
- * unconditionally; there is nothing this file could honestly compute for
- * them without re-deriving that statistic from raw trades, which is out
- * of this slice's own scope.
+ * UPDATE (same day, follow-up slice — "make the cross-trade operands
+ * truthfully computableToday"): `lib/rules/cross-trade-operand-values.ts`
+ * (Slice 4) and `lib/rules/freeze-evaluations.ts` (Slice 5) were
+ * re-verified against the real, running freeze path (not re-derived from
+ * scratch) and found to genuinely, honestly compute `time_since_last_loss`
+ * and `consecutive_losses` end-to-end in production — `operand-
+ * catalogue.ts` now marks both `computableToday: true` for real. The two
+ * branches below (`seq.reentry_after_loss`, `seq.consecutive_losses`) are
+ * consequently now REACHABLE in production, not merely correctly-written
+ * dead code — they resolve a real `DetectionRuleProposal` using
+ * `occurrence-detectors.ts`'s own exported `REENTRY_THRESHOLD_SECONDS`/
+ * `CONSECUTIVE_LOSS_STREAK_THRESHOLD` constants (the SAME numbers that
+ * file's own header already established as the real detection threshold,
+ * not placeholder copy — see that file's header for the "repeated
+ * identically across five independent documents" evidence).
+ *
+ * The other three (`seq.trades_per_day`, `seq.daily_loss_breach`,
+ * `risk.spread`) STILL resolve to `null` — this is now their ONLY reason,
+ * and it did not change: each one's own "threshold" is itself a per-user
+ * statistic (a baseline median or IQR fence) computed once at
+ * detection-run time and never persisted anywhere on `retrospeq.detections`
+ * (`detections-repository.ts`'s own row shape — `occurrences`, `base_rate`,
+ * `outcome_avg_r`/`outcome_baseline_avg_r`, `distinct_days` — has no
+ * fence/threshold column). `trades_today` and `daily_loss_pct` (the two
+ * operands `seq.trades_per_day`/`seq.daily_loss_breach` would obviously map
+ * to) are now ALSO `computableToday: true` — re-checked deliberately, in
+ * case that changed this reasoning — but `computableToday` only answers
+ * "can a value be assembled for a given TRADE," not "is there a persisted
+ * per-user BASELINE this card can turn into a rule threshold," which is a
+ * genuinely different, still-missing piece of data. Deriving one here would
+ * mean re-running that detector's own baseline computation inside a
+ * review-time card, which this file does not do. Closing this needs
+ * `detections` persisting the actual measured threshold/fence value at
+ * computation time — noted in `docs/infra-gaps.md`, not attempted here.
  */
 
 export interface DetectionRuleProposal {

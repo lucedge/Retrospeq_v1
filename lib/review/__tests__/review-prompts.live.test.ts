@@ -14,13 +14,20 @@ import { _clearAnalyticConfigCacheForTests } from '@/lib/analytics/config-cache'
 
 vi.mock('server-only', () => ({}));
 
-// These tests prove ranking, the single-detection cap and the combined 3-cap.
-// Whether a detection pattern can become a rule is a separate gate
-// (`selectDetectionCandidates` → `resolveDetectionRuleProposal`, unit-tested in
-// prompt-candidates/__tests__/detection-candidates.test.ts). As of 2026-09-15
-// every real analytic resolves null, so the ranking fixtures stub it to
-// "proposable" — except where `realDetectionProposals` is switched on to
-// prove today's real behaviour.
+// These tests prove ranking, the single-detection cap and the combined 3-cap,
+// using SYNTHETIC per-test analytic ids (`seq.multikind_low_<ts>`, etc.) that
+// can never match any real case in `resolveDetectionRuleProposal`'s switch —
+// so those fixtures stub the gate to "proposable" regardless, keeping ranking
+// coverage independent of which real analytics happen to be rule-mappable
+// today. Whether a REAL detection pattern can become a rule is a separate
+// gate (`selectDetectionCandidates` → `resolveDetectionRuleProposal`,
+// unit-tested in `lib/review/decisions/__tests__/detection-operand-map.test.ts`).
+// As of 2026-09-15, 2 of the 5 real v1 analytics (`seq.reentry_after_loss`,
+// `seq.consecutive_losses`) resolve to a real proposal; the other 3
+// (`seq.trades_per_day`, `seq.daily_loss_breach`, `risk.spread`) still
+// resolve null (no persisted per-user baseline/threshold on
+// `retrospeq.detections` to derive a rule cap from) — `realDetectionProposals`
+// switches the gate to its real, unmocked behaviour to prove that.
 const detectionProposalGate = vi.hoisted(() => ({ realDetectionProposals: false }));
 vi.mock('@/lib/review/decisions/detection-operand-map', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/review/decisions/detection-operand-map')>();
@@ -500,7 +507,7 @@ describe.skipIf(!env)('lib/review/review-prompts.ts + review-prompts-repository.
     expect(dbRows.rows.every((r) => r.review_id === reviewId)).toBe(true);
   }, 180_000);
 
-  it('REAL TODAY: a detection whose pattern maps to no computable operand is not offered -- promotion takes the third slot instead', async () => {
+  it('REAL TODAY: a detection with no persisted per-user threshold to derive a rule from is not offered -- promotion takes the third slot instead', async () => {
     if (!env) return;
     detectionProposalGate.realDetectionProposals = true;
     try {
@@ -522,8 +529,15 @@ describe.skipIf(!env)('lib/review/review-prompts.ts + review-prompts-repository.
       const gradFieldId = nextId('real_det_grad');
       await seedBoolField(user.id, strategyId, gradFieldId);
       await insertFinding(user.id, strategyId, gradFieldId, { n: 45, deltaWinRate: 0.3 });
-      const detId = `seq.reentry_after_loss_real_${Date.now()}`;
-      await insertDetection(user.id, detId, 40);
+      // A REAL, unsuffixed analytic id -- `seq.trades_per_day` is one of the
+      // three still-null cases (per-user baseline median, never persisted on
+      // `retrospeq.detections`), unlike `seq.reentry_after_loss`/
+      // `seq.consecutive_losses`, which now genuinely resolve (see this
+      // file's own header). `seedConfig: false` avoids an "on conflict do
+      // nothing" no-op fight with the real seeded analytic_config row this
+      // id already has in the migration data.
+      const detId = 'seq.trades_per_day';
+      await insertDetection(user.id, detId, 40, { seedConfig: false });
       const promoRuleId = await insertRule(user.id, { createdAt, severity: 'soft', rendered: 'Promotion candidate rule' });
       for (let i = 0; i < 20; i++) {
         const tradeId = await seedBareTrade(user.id, accountId, daysAgo(now, 30), 100 + i);

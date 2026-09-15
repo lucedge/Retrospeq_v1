@@ -54,6 +54,38 @@
  * fact-assembly logic, real OR stubbed, for either bucket. `factNote` on
  * every entry says exactly what the mapping is (or would need to be).
  *
+ * ## UPDATE (this slice, 2026-09-15) — 20 of the cross-trade operands are
+ * now genuinely computable, not just documented as a future slice's job
+ *
+ * The paragraph above describes the ORIGINAL (Slice 1) state. Since then,
+ * `lib/rules/cross-trade-operand-values.ts` (Slice 4) built real, tested
+ * cross-trade queries for 20 of the operands below, and
+ * `lib/rules/freeze-evaluations.ts` (Slice 5) genuinely calls
+ * `assembleCrossTradeOperandValuesWithClient` inside Module 02's real
+ * confirm transaction and merges the result into the `TradeFacts` object
+ * every eligible rule is evaluated against — re-verified directly by
+ * reading both files (not taken on faith) while doing this flip: every one
+ * of the 20 is a real, parameterized, `decimal.js`-correct query, honestly
+ * `null` (never a fabricated 0/false) exactly where no legitimate value
+ * exists (no prior trade, no prior loss, equity unknown, trade still
+ * open), and correctly rollover/week-boundary-aware (scoped to
+ * `trades.server_day`, Module 02's own rollover-aware column, and
+ * `lib/rules/week-boundary.ts`'s ISO-week convention — never a raw
+ * timestamp re-derivation). Those 20 are flipped to `computableToday: true`
+ * below, each `factNote` updated to name the real function that computes
+ * it. The remaining 10 (see each entry's own `factNote` for why — a
+ * missing schema column, a missing module, T1-only data, or a genuinely
+ * undecided product question) are UNCHANGED, still `false` — this flip
+ * does not touch them. Flipping the flag does NOT, by itself, change what
+ * the general rule editor (`editable-operands.ts`, which never gated on
+ * this flag) or the preview engine (`preview.ts`, which deliberately gates
+ * on `DISTRIBUTION_OPERAND_IDS` instead, per that file's own documented
+ * reasoning) offer — this flag's only real consumers are
+ * `computable-operand-values.ts`'s own test (single-trade subset),
+ * `graduation-operand-map.ts`, and `detection-operand-map.ts` (Module 06),
+ * both of which read this flag as "the underlying fact can genuinely be
+ * assembled," which is now honestly true for these 20.
+ *
  * A real, load-bearing gotcha this file must get right (per
  * `docs/adr/0012-risk-pct-stored-as-percentage-number.md`, which names
  * "Module 04's rule expression engine evaluating a risk-pct operand" as
@@ -172,9 +204,9 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: "Never let today's loss exceed {value}% of your account." },
     bounds: { min: 0.5, max: 10, step: 0.5 },
-    computableToday: false,
+    computableToday: true,
     factNote:
-      'Needs a running sum of realized_pnl (and open risk) across every trade in the current server_day for the account — cross-trade day-state aggregation, not a single trades row. Not built this slice.',
+      "Cross-trade day-state aggregation, built and wired at freeze (lib/rules/cross-trade-operand-values.ts's fetchClosedTradesForPnlWindow + computeDayWeekPnl, merged into TradeFacts by freeze-evaluations.ts). Magnitude of today's running realized-P&L loss so far (0 when flat/profitable — a real value, not a placeholder), scoped to the trade's own server_day (rollover-aware) and account. null only when trading_accounts.starting_equity is unknown (docs/adr/0013) — never a fabricated percentage.",
   },
   {
     id: 'weekly_loss_pct',
@@ -187,8 +219,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: "Never let this week's loss exceed {value}% of your account." },
     bounds: { min: 1, max: 20, step: 1 },
-    computableToday: false,
-    factNote: 'Same as daily_loss_pct, widened to a week-state (streak-count semantics, AGENTS.md: "Streak counts weeks, not days") window — cross-trade aggregation, not built this slice.',
+    computableToday: true,
+    factNote: 'Same as daily_loss_pct, widened to the ISO week (Monday-start, lib/rules/week-boundary.ts — AGENTS.md: "Streak counts weeks, not days") containing the trade\'s own server_day — same computeDayWeekPnl output (cross-trade-operand-values.ts), weeklyLossPct field, wired at freeze identically to daily_loss_pct. null only when starting_equity is unknown.',
   },
   {
     id: 'size_vs_avg',
@@ -201,8 +233,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Never size a position more than {value}x your average.' },
     bounds: { min: 1.0, max: 5.0, step: 0.1 },
-    computableToday: false,
-    factNote: "Needs the trader's own historical average position size across prior trades — cross-trade aggregation, not built this slice.",
+    computableToday: true,
+    factNote: "The trader's own historical average peak_volume across up to 200 confirmed prior trades in the last 12 months on the same account (lib/rules/cross-trade-operand-values.ts's fetchPriorPeakVolumes + computeSizeVsAvg), wired at freeze. null when there is no prior trade in the window, or this trade's own peak_volume is missing — never a fabricated ratio.",
   },
   {
     id: 'total_open_risk',
@@ -215,8 +247,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Never let your total open risk exceed {value}% of your account.' },
     bounds: { min: 0.5, max: 10, step: 0.5 },
-    computableToday: false,
-    factNote: 'Needs risk summed across every currently-OPEN position at once — cross-trade aggregation (portfolio heat), not built this slice.',
+    computableToday: true,
+    factNote: "Sum of risk_pct across every currently-OPEN trade on this account (including the reference trade itself, per §5.4 — lib/rules/cross-trade-operand-values.ts's fetchOpenRiskSum), wired at freeze. Never null (an empty open-position set genuinely sums to 0); a null-valued open position's own risk_pct contributes 0 to the sum, a documented limitation, not a silent gap.",
   },
   {
     id: 'correlated_exposure',
@@ -255,8 +287,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Stop trading after {value} losses in a row.' },
     bounds: { min: 1, max: 10, step: 1 },
-    computableToday: false,
-    factNote: "Needs the count of consecutive losing trades immediately preceding this one — cross-trade streak aggregation, not built this slice. The fact value would be 'consecutive losses entering this trade', compared via lte to the rule's threshold.",
+    computableToday: true,
+    factNote: "Count of consecutive losing CONFIRMED trades immediately preceding this one on the same account, walked backward from the most recent (lib/rules/cross-trade-operand-values.ts's fetchPriorOutcomesDescending + computeConsecutiveLosses), wired at freeze. A scratch breaks the streak the same as a win (documented judgment call). 0 (never null) when the account has no prior confirmed trade — a genuinely zero-length streak, not missing data.",
   },
   {
     id: 'trades_today',
@@ -269,8 +301,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Never take more than {value} trades in a day.' },
     bounds: { min: 1, max: 20, step: 1 },
-    computableToday: false,
-    factNote: 'Needs a count of trades already taken this server_day — cross-trade aggregation, not built this slice. Per §5.4: "Session rules attach to the trade that crossed the line."',
+    computableToday: true,
+    factNote: 'Count of trades on this account opened on this trade\'s own server_day (rollover-aware, INCLUDING the reference trade itself per §5.4\'s "attach the break to the fourth trade") — lib/rules/cross-trade-operand-values.ts\'s fetchTradesUpToReferenceInWeek + computeDayWeekCounts, wired at freeze. Never null (a fresh account\'s first trade counts as 1).',
   },
   {
     id: 'trades_this_week',
@@ -283,8 +315,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Never take more than {value} trades in a week.' },
     bounds: { min: 1, max: 100, step: 1 },
-    computableToday: false,
-    factNote: 'Same as trades_today, widened to a week window (AGENTS.md: "Streak counts weeks, not days") — cross-trade aggregation, not built this slice.',
+    computableToday: true,
+    factNote: 'Same as trades_today, widened to the ISO week (Monday-start, lib/rules/week-boundary.ts — AGENTS.md: "Streak counts weeks, not days") containing the trade\'s own server_day — same computeDayWeekCounts output, tradesThisWeek field, wired at freeze identically to trades_today. Never null.',
   },
   {
     id: 'daily_pnl_pct',
@@ -297,9 +329,9 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: "Stop trading once today's P&L drops below {value}%." },
     bounds: { min: -10, max: 0, step: 0.5 },
-    computableToday: false,
+    computableToday: true,
     factNote:
-      "Distinct from daily_loss_pct (Risk and size group): this is the signed running day P&L (the ambient-strip fact shown in §6.1's reference markup, e.g. 'Day P&L: -2.1%'), not a dedicated loss-magnitude cap. Needs cross-trade day-state aggregation, not built this slice.",
+      "Distinct from daily_loss_pct (Risk and size group): this is the signed running day P&L (the ambient-strip fact shown in §6.1's reference markup, e.g. 'Day P&L: -2.1%'), not a dedicated loss-magnitude cap. Same computeDayWeekPnl output as daily_loss_pct (lib/rules/cross-trade-operand-values.ts), dailyPnlPct field, wired at freeze. null only when starting_equity is unknown.",
   },
   {
     id: 'giveback_from_peak',
@@ -312,8 +344,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: "Stop trading once you've given back {value}% of today's peak profit." },
     bounds: { min: 5, max: 100, step: 5 },
-    computableToday: false,
-    factNote: "Needs the day's peak running P&L tracked over time, then how much has been given back since — cross-trade peak-tracking aggregation, not built this slice.",
+    computableToday: true,
+    factNote: "The day's peak running realized P&L (chronologically tracked, never a later or eventual peak) versus how much has been given back since, as of this trade's own opened_at — lib/rules/cross-trade-operand-values.ts's computeDayWeekPnl, givebackFromPeak field, wired at freeze. null when today never reached a positive peak yet (nothing to give back from) — an honest 'operand missing', never a fabricated 0. Equity-independent (same-currency ratio), computable even when starting_equity is unknown.",
   },
 
   // ----------------------------------------------------------------
@@ -371,8 +403,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { gte: 'Wait at least {value} minutes between trades.' },
     bounds: { min: 1, max: 240, step: 1 },
-    computableToday: false,
-    factNote: "Needs the PREVIOUS trade's closed_at (or opened_at) timestamp for this account — cross-trade lookup, not built this slice.",
+    computableToday: true,
+    factNote: "Whole minutes between this trade's own opened_at and the most recent CONFIRMED prior trade's closed_at on the same account (lib/rules/cross-trade-operand-values.ts's fetchLastTradeTimings + minutesSince), wired at freeze. null when there is no qualifying prior trade (account start) — never a fabricated infinite duration.",
   },
   {
     id: 'time_since_last_loss',
@@ -385,8 +417,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { gte: 'Wait at least {value} minutes after a loss before entering again.' },
     bounds: { min: 1, max: 240, step: 1 },
-    computableToday: false,
-    factNote: "Needs the most recent trade with outcome='loss' and its closed_at — cross-trade lookup filtered by outcome, not built this slice.",
+    computableToday: true,
+    factNote: "Whole minutes between this trade's own opened_at and the most recent CONFIRMED prior trade with outcome='loss' on the same account (lib/rules/cross-trade-operand-values.ts's fetchLastTradeTimings + minutesSince), wired at freeze. null when the account has no prior confirmed loss — never a fabricated infinite duration.",
   },
   {
     id: 'hold_seconds',
@@ -427,8 +459,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     evaluation: 'pre_entry',
     tier: 't0',
     phrasing: { is_true: 'Always set a target before entering.' },
-    computableToday: false,
-    factNote: "No trades column stores a target value. fills.target_at_fill exists on the ENTRY fill, but is not surfaced onto trades by trade-facts.ts (lib/ingestion/trade-facts.ts) today — would need a join via trade_fills, not built this slice.",
+    computableToday: true,
+    factNote: "fills.target_at_fill on this trade's own entry-role trade_fills row, joined at freeze (lib/rules/cross-trade-operand-values.ts's fetchTradeFillPlan + computeEntryExitOperands). null when the trade has no entry-role row at all (a flip-opened trade, ADR 0001 — there is no entry fill to have set a target) — never a fabricated false.",
   },
   {
     id: 'planned_rr',
@@ -441,8 +473,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { gte: 'Never take a trade with a planned reward-to-risk below {value}.' },
     bounds: { min: 0.5, max: 10, step: 0.1 },
-    computableToday: false,
-    factNote: "trades.r_multiple is the REALIZED ratio (known only at close), not a planned-at-entry figure — no trades column stores the plan. Would need target_at_fill and initial_stop from the entry fill, same gap as target_set_at_entry. Not built this slice.",
+    computableToday: true,
+    factNote: "trades.r_multiple is the REALIZED ratio (known only at close), not a planned-at-entry figure. Computed at freeze as reward distance (entry fill's own price to fills.target_at_fill) over risk distance (entry fill's own price to trades.initial_stop) — lib/rules/cross-trade-operand-values.ts's fetchTradeFillPlan + computePlannedRr. null when any input is missing (no entry-role row, no target set, stop unknown) or risk distance is degenerately zero — never a fabricated ratio.",
   },
   {
     id: 'order_type',
@@ -482,8 +514,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     evaluation: 'at_close',
     tier: 't0',
     phrasing: { is_false: 'Never add to a position after entry.' },
-    computableToday: false,
-    factNote: "No trades column records 'was volume added after the initial entry' as a boolean — trade_events rows with kind='add' exist per-trade but are not rolled up onto trades. Not built this slice.",
+    computableToday: true,
+    factNote: "True the moment any role='add' retrospeq.trade_fills row exists for this trade (lib/rules/cross-trade-operand-values.ts's fetchTradeFillRoleCounts + computeAddedAfterEntry), wired at freeze. Never null — always a real true/false.",
   },
   {
     id: 'added_to_a_loser',
@@ -508,8 +540,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { gte: 'Scale out of every position at least {value} time(s).' },
     bounds: { min: 0, max: 5, step: 1 },
-    computableToday: false,
-    factNote: "lib/ingestion/trade-facts.ts's computeTradeFacts() DOES compute a scaleOutCount value in memory (count of trim/exit-role members), but it is NOT persisted as a trades column in the current schema (supabase/migrations/20260822010000_ingestion_schema.sql has no such column) — the value exists transiently in Module 02's own pipeline but is not yet exposed as a durable fact this evaluator could read. Not built this slice.",
+    computableToday: true,
+    factNote: "count(*) of role in ('trim','exit') retrospeq.trade_fills rows for this trade (lib/rules/cross-trade-operand-values.ts's fetchTradeFillRoleCounts, proven equivalent to lib/ingestion/trade-facts.ts's own in-memory scaleOutCount by that file's own unit test against the golden fixtures), wired at freeze. Never null — 0 when no trim/exit fills exist yet.",
   },
   {
     id: 'peak_risk_vs_planned',
@@ -536,8 +568,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Reach full position size within {value} minutes of entry.' },
     bounds: { min: 1, max: 120, step: 1 },
-    computableToday: false,
-    factNote: "Needs the timestamp of the LAST 'add' event that reached peak_volume, compared to the entry timestamp — trade_events has the per-event timestamps but this comparison is not assembled anywhere yet. Not built this slice.",
+    computableToday: true,
+    factNote: "First timestamp the running volume (chronologically walked across trade_fills + the entry-side trade_events row, ADR 0001) reaches this trade's own already-stored peak_volume, minutes from the first entry event (lib/rules/cross-trade-operand-values.ts's fetchTradeVolumeEvents + computeTimeToFullSize), wired at freeze. null when there are no volume events at all, or the running total never exactly reaches peak_volume (a data inconsistency reported as not-computable, never guessed).",
   },
 
   // ----------------------------------------------------------------
@@ -583,8 +615,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { in: 'Only close trades for these reasons: {value}.' },
     options: ['sl', 'tp', 'manual', 'so', 'unknown'],
-    computableToday: false,
-    factNote: "Options reuse fills.close_reason's own established CHECK-constraint vocabulary (supabase/migrations/20260822010000_ingestion_schema.sql) verbatim — a real cross-reference, not invented. The value itself lives on the EXIT fill, not surfaced onto trades directly (would need a join via trade_fills for the exit-role member). Not built this slice.",
+    computableToday: true,
+    factNote: "Options reuse fills.close_reason's own established CHECK-constraint vocabulary (supabase/migrations/20260822010000_ingestion_schema.sql) verbatim — a real cross-reference, not invented. Read off this trade's own exit-role trade_fills row, joined at freeze (lib/rules/cross-trade-operand-values.ts's fetchTradeFillPlan + computeEntryExitOperands). null only for a still-open trade with no exit-role row yet — structurally unreachable at freeze time, since freeze only ever runs on already-closed/confirmed trades.",
   },
   {
     id: 'exit_vs_target',
@@ -597,8 +629,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { gte: 'Never exit more than {value}% short of your target.' },
     bounds: { min: 0, max: 100, step: 5 },
-    computableToday: false,
-    factNote: 'Needs a target value, same gap as target_set_at_entry/planned_rr above (no trades column stores it). Not built this slice.',
+    computableToday: true,
+    factNote: "Progress toward target as a percentage (100 = exited exactly at target, 0 = no progress from the entry fill's own price — see cross-trade-operand-values.ts's own header for the full direction-mapping reasoning) — lib/rules/cross-trade-operand-values.ts's fetchTradeFillPlan + computeEntryExitOperands, wired at freeze. null when the trade is still open (no exit_price_avg yet), no target was set at entry, or the entry-to-target distance is degenerately zero.",
   },
   {
     id: 'held_past_stop',
@@ -642,8 +674,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     tier: 't0',
     phrasing: { lte: 'Never trade more than {value} different instruments in a day.' },
     bounds: { min: 1, max: 10, step: 1 },
-    computableToday: false,
-    factNote: "Needs a distinct-instrument count across today's other trades — cross-trade aggregation, not built this slice.",
+    computableToday: true,
+    factNote: "Distinct-instrument count across today's (this trade's own server_day, rollover-aware) trades on this account, INCLUDING the reference trade itself — lib/rules/cross-trade-operand-values.ts's computeDayWeekCounts, instrumentsToday field, wired at freeze. Never null.",
   },
   {
     id: 'first_time_instrument',
@@ -654,8 +686,8 @@ export const OPERAND_CATALOGUE: readonly OperandCatalogueEntry[] = [
     evaluation: 'pre_entry',
     tier: 't0',
     phrasing: { is_false: "Never trade an instrument you haven't traded before." },
-    computableToday: false,
-    factNote: "Needs a full-history scan (has this account ever traded this instrument before this trade) — cross-trade aggregation, not built this slice.",
+    computableToday: true,
+    factNote: "Full-history existence scan on this account for this instrument, opened strictly before this trade (lib/rules/cross-trade-operand-values.ts's fetchHasPriorInstrumentTrade), wired at freeze. Deliberately NOT restricted to status='confirmed' — a plain existence fact, per that file's own header. Never null — always a real true/false.",
   },
 
   // ----------------------------------------------------------------

@@ -10,19 +10,17 @@ import {
 
 vi.mock('server-only', () => ({}));
 
-// The DETECTION test below proves mute-survives-recompute. Whether a pattern
-// can become a rule is a separate gate (`selectDetectionCandidates` →
-// `resolveDetectionRuleProposal`, unit-tested in detection-candidates.test.ts);
-// every real analytic resolves null today (2026-09-15), which would drop the
-// candidate before muting is ever exercised — so it's stubbed "proposable" here.
-vi.mock('@/lib/review/decisions/detection-operand-map', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/review/decisions/detection-operand-map')>();
-  return {
-    ...actual,
-    resolveDetectionRuleProposal: () =>
-      ({ operand: { id: 'stub' }, op: 'gte', value: 1 } as unknown as ReturnType<typeof actual.resolveDetectionRuleProposal>),
-  };
-});
+// The DETECTION test below proves mute-survives-recompute, using the real
+// `seq.reentry_after_loss` analytic id the detection engine actually writes.
+// No module mock needed here anymore: `resolveDetectionRuleProposal` now
+// genuinely resolves `seq.reentry_after_loss` to a real proposal (Module 04's
+// `time_since_last_loss` operand was flipped to `computableToday: true` once
+// its cross-trade freeze-wiring was independently re-verified — see
+// `lib/review/decisions/detection-operand-map.ts`'s own header, "UPDATE").
+// The other detection ids this file uses for the exclusions test
+// (`seq.trades_per_day`, `seq.consecutive_losses`) are excluded by
+// tier/classification/rule_proposable, never reaching the rule-proposal gate
+// at all, so this file needs no stub either way for those.
 vi.setConfig({ testTimeout: 120_000 });
 
 /**

@@ -8,9 +8,18 @@
 // E2E is NOT run here: `npm run e2e:changed` runs only when a route with a
 // spec changed behaviour (tier ≥ 2), full suites only at phase end.
 import { execSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const forced = process.argv[2];
-const changed = execSync('git diff --name-only HEAD; git ls-files --others --exclude-standard', { encoding: 'utf8' }).split('\n').filter(Boolean);
+// `git diff --name-only` includes deleted files (still "changed" for
+// classify-change.mjs's own tiering purposes) -- but eslint/tsc/vitest can
+// only run against a path that still exists on disk, so filter those out
+// here rather than letting a legitimate file deletion crash every later
+// step with an ENOENT-shaped "no files matching the pattern" error.
+const changed = execSync('git diff --name-only HEAD; git ls-files --others --exclude-standard', { encoding: 'utf8' })
+  .split('\n')
+  .filter(Boolean)
+  .filter(existsSync);
 let tier;
 if (forced !== undefined) tier = Number(forced);
 else { const r = spawnSync('node', ['scripts/classify-change.mjs'], { encoding: 'utf8' }); process.stdout.write(r.stdout); tier = r.status; }

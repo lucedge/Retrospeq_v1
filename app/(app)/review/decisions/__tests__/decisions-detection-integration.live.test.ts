@@ -7,7 +7,6 @@ import {
   readRlsTestEnv,
   type EnvBundle,
 } from '@/lib/supabase/__tests__/rls-test-helpers';
-import { getOperand } from '@/lib/rules/operand-catalogue';
 import { detectionSubjectId } from '@/lib/review/prompt-candidates/stable-subject-id';
 
 /**
@@ -19,15 +18,19 @@ import { detectionSubjectId } from '@/lib/review/prompt-candidates/stable-subjec
  * `@/lib/rate-limit/limiter`, `next/cache` are mocked; every domain write
  * runs for real.
  *
- * `detection-operand-map.ts`'s own header documents that every one of
- * today's five real v1 detection analytics resolves to `null` — the
- * "accept creates a real rule" path is therefore ALSO forced open here via
- * one additional module mock (`resolveDetectionRuleProposal`, real `risk_
- * pct` operand — a real, already-computableToday catalogue entry, not an
- * invented one), so the write path itself gets real coverage rather than
- * being untestable dead code until a future catalogue slice ships. The
- * genuinely-unsupported-today case (`risk.spread`) is tested separately,
- * unmocked, against the REAL map.
+ * UPDATE (2026-09-15, follow-up slice): this file originally mocked
+ * `resolveDetectionRuleProposal` to force `seq.reentry_after_loss` onto a
+ * substitute `risk_pct` operand, because at the time `detection-operand-
+ * map.ts`'s own header documented every one of the five real v1 detection
+ * analytics as resolving to `null` (`time_since_last_loss`, the operand
+ * `seq.reentry_after_loss` actually maps to, was `computableToday: false`).
+ * That flag was re-verified and flipped to `true` for real (the freeze path
+ * genuinely computes it — see `operand-catalogue.ts`'s own "UPDATE" header),
+ * so `seq.reentry_after_loss` now resolves for real, unmocked, against the
+ * REAL map — this suite's own assertions never depended on the specific
+ * operand/op/value chosen (only that `acceptDetectionDecision` creates SOME
+ * real rule), so no other change was needed. The genuinely-unsupported-today
+ * case (`risk.spread`) is tested separately below, also unmocked.
  */
 const env = readRlsTestEnv();
 
@@ -44,23 +47,6 @@ vi.mock('@/lib/rate-limit/http', () => ({ getClientIp: getClientIpMock }));
 vi.mock('@/lib/rate-limit/limiter', () => ({ enforceRateLimit: enforceRateLimitMock }));
 vi.mock('next/cache', () => ({ revalidatePath: revalidatePathMock }));
 vi.mock('server-only', () => ({}));
-
-// Forces the ONE analytic id this test suite uses for the "accept creates a
-// real rule" path onto a real, already-computableToday operand
-// (`risk_pct`) — every other analytic id falls through to the real map
-// (`risk.spread` stays genuinely unsupported, tested below).
-vi.mock('@/lib/review/decisions/detection-operand-map', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/review/decisions/detection-operand-map')>();
-  return {
-    ...actual,
-    resolveDetectionRuleProposal: (analyticId: string) => {
-      if (analyticId === 'seq.reentry_after_loss') {
-        return { operand: getOperand('risk_pct')!, op: 'lte' as const, value: 1.5 };
-      }
-      return actual.resolveDetectionRuleProposal(analyticId);
-    },
-  };
-});
 
 vi.setConfig({ testTimeout: 60_000 });
 

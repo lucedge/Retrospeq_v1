@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// cross-trade-operand-values.ts imports 'server-only' (it's a real
+// DB-touching module) -- mocked here purely so this file can import its
+// exported CROSS_TRADE_OPERAND_IDS constant without pulling in a live `pg`
+// dependency, matching cross-trade-operand-values.test.ts's own convention.
+vi.mock('server-only', () => ({}));
+
 import { OPERAND_CATALOGUE } from '../operand-catalogue';
+import { CROSS_TRADE_OPERAND_IDS } from '../cross-trade-operand-values';
 import {
   COMPUTABLE_OPERAND_IDS,
   extractComputableOperandValues,
@@ -30,12 +38,28 @@ function baseTrade(overrides: Partial<ComputableTradeRow> = {}): ComputableTrade
 }
 
 describe('computable-operand-values — the 8 computableToday extractors', () => {
-  it('COMPUTABLE_OPERAND_IDS matches operand-catalogue.ts exactly, no drift', () => {
-    const catalogueComputable = OPERAND_CATALOGUE.filter((o) => o.computableToday)
+  // Module 04 Slice 4/5 flipped the 20 cross-trade operands to
+  // `computableToday: true` too (real freeze-wiring, see operand-catalogue.ts's
+  // own "UPDATE" header) — this file's own 8 extractors are the SINGLE-TRADE
+  // subset only, so the correct invariant is now "every catalogue-computable
+  // operand that ISN'T cross-trade-built is exactly this file's 8," not "every
+  // catalogue-computable operand is this file's 8."
+  it('COMPUTABLE_OPERAND_IDS matches the single-trade subset of operand-catalogue.ts exactly, no drift', () => {
+    const catalogueSingleTradeComputable = OPERAND_CATALOGUE.filter(
+      (o) => o.computableToday && !CROSS_TRADE_OPERAND_IDS.includes(o.id),
+    )
       .map((o) => o.id)
       .sort();
-    expect([...COMPUTABLE_OPERAND_IDS].sort()).toEqual(catalogueComputable);
+    expect([...COMPUTABLE_OPERAND_IDS].sort()).toEqual(catalogueSingleTradeComputable);
     expect(COMPUTABLE_OPERAND_IDS).toHaveLength(8);
+  });
+
+  it('every CROSS_TRADE_OPERAND_IDS entry is also computableToday: true (freeze-wiring is real, per operand-catalogue.ts\'s own "UPDATE" header)', () => {
+    for (const id of CROSS_TRADE_OPERAND_IDS) {
+      const entry = OPERAND_CATALOGUE.find((o) => o.id === id);
+      expect(entry, `no catalogue entry for cross-trade operand "${id}"`).toBeDefined();
+      expect(entry!.computableToday, `${id} should be computableToday: true`).toBe(true);
+    }
   });
 
   describe('risk_pct -> trades.initial_risk_pct (NOT trades.risk_pct/peak)', () => {

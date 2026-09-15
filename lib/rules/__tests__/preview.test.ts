@@ -33,12 +33,15 @@ describe('lib/rules/preview.ts', () => {
   describe('operand_not_computable — distinct from insufficient_history, never conflated', () => {
     it('returns operand_not_computable for an operand outside DISTRIBUTION_OPERAND_IDS, without ever querying operand_distributions', async () => {
       const { preview } = await import('../preview');
-      // weekly_loss_pct is computableToday: false AND has no cross-trade
-      // distribution computation built (unlike daily_loss_pct/
-      // consecutive_losses, which Slice 9 made distribution-backed even
-      // though their computableToday flag stayed false -- see preview.ts's
-      // own header for why the gate checks DISTRIBUTION_OPERAND_IDS, not
-      // computableToday).
+      // weekly_loss_pct has no cross-trade DISTRIBUTION computation built
+      // (unlike daily_loss_pct/consecutive_losses, which Slice 9 made
+      // distribution-backed) -- see preview.ts's own header for why the
+      // gate checks DISTRIBUTION_OPERAND_IDS, not computableToday.
+      // weekly_loss_pct is now ALSO computableToday: true (Module 04's
+      // cross-trade freeze-wiring flip, 2026-09-15, unrelated to this
+      // preview-specific gate), same as daily_loss_pct/consecutive_losses
+      // already were when Slice 9 wired their distribution -- confirming
+      // this gate genuinely does NOT key off that flag.
       const result = await preview('user-1', 'weekly_loss_pct', 'lte', 2);
       expect(result.state).toBe('operand_not_computable');
       expect(result.guidance).toMatch(/isn't available/i);
@@ -52,7 +55,7 @@ describe('lib/rules/preview.ts', () => {
     });
   });
 
-  describe('daily_loss_pct / consecutive_losses — computableToday: false but distribution-backed since Slice 9, gate fixed post-Slice-9', () => {
+  describe('daily_loss_pct / consecutive_losses — distribution-backed since Slice 9 (now ALSO computableToday: true since 2026-09-15, confirming the preview gate never depended on that flag)', () => {
     it('daily_loss_pct proceeds past the gate and queries operand_distributions (insufficient_history when no row exists)', async () => {
       queryMock.mockResolvedValueOnce({ rows: [] });
       const { preview } = await import('../preview');

@@ -41,11 +41,15 @@ describe('preview — property: never issues a write, for any operand/op/value/b
     'instrument',
     'pre_entry_captured_before_fill',
   );
-  // NOT in DISTRIBUTION_OPERAND_IDS -- daily_loss_pct/consecutive_losses
-  // are deliberately excluded from this list post-Slice-9: they are
-  // computableToday: false but ARE distribution-backed, so preview() now
-  // genuinely queries operand_distributions for them (see preview.ts's
-  // header and preview.test.ts's own dedicated describe block).
+  // NOT in DISTRIBUTION_OPERAND_IDS -- the real gate preview.ts checks
+  // (see that file's own header for why it's this list, not
+  // `computableToday`, post-Slice-9's daily_loss_pct/consecutive_losses
+  // fix). `weekly_loss_pct`/`planned_rr` are now ALSO `computableToday:
+  // true` (Module 04's cross-trade freeze-wiring flip, 2026-09-15) but
+  // still correctly absent from DISTRIBUTION_OPERAND_IDS -- no
+  // `recomputeOperandDistributionsForUser` writer exists for them yet, so
+  // preview() still has nothing to query. `stop_moved_against` stays
+  // computableToday: false (T1-only, no position_snapshots data exists).
   const notComputableOperandIdArb = fc.constantFrom('weekly_loss_pct', 'stop_moved_against', 'planned_rr');
   const opArb = fc.constantFrom('lte', 'gte', 'eq', 'neq', 'in', 'not_in', 'between', 'is_true', 'is_false');
   const bucketArb = fc.record({
@@ -81,7 +85,7 @@ describe('preview — property: never issues a write, for any operand/op/value/b
     );
   });
 
-  it('never issues ANY database call for a computableToday: false operand, regardless of op/value', async () => {
+  it('never issues ANY database call for an operand outside DISTRIBUTION_OPERAND_IDS, regardless of op/value', async () => {
     await fc.assert(
       fc.asyncProperty(notComputableOperandIdArb, opArb, fc.double({ noNaN: true }), async (operandId, op, value) => {
         queryMock.mockReset();
