@@ -15,7 +15,22 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
     include: ['**/*.test.ts'],
-    exclude: ['node_modules', '.next', 'fixtures/**'],
+    // `analytics-registry-schema.independent-verify.rls.test.ts` is
+    // DESTRUCTIVE against the shared dev DB: it drops CHECK constraints and
+    // revokes `select ... from authenticated` for the duration of an
+    // assertion, so any test file running in parallel with it sees
+    // "permission denied" / missing constraints. That produced 20 failures
+    // in one `vitest run rls.test` sweep (2026-09-15) and was repeatedly
+    // written off as an `analytic_user_suppression` flake. It is excluded
+    // here and run ALONE by `npm run test:exclusive`, which `check` and
+    // `check:security` both invoke — never delete the exclusion without
+    // moving the file's grant/constraint surgery somewhere isolated.
+    exclude: [
+      'node_modules',
+      '.next',
+      'fixtures/**',
+      'lib/supabase/__tests__/analytics-registry-schema.independent-verify.rls.test.ts',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

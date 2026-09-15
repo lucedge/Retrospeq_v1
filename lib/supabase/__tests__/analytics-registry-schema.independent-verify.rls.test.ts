@@ -51,6 +51,8 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
   beforeAll(async () => {
     if (!env) return;
     db = await connectAsOwner(env);
+    // Heal anything a previously-killed run left dropped/revoked.
+    await restoreSchemaGuards(db);
     user = await createTestAuthUser(env, 'analytics-iv');
   }, 30_000);
 
@@ -65,11 +67,36 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
     await db.end();
   }, 30_000);
 
-  describe('1a. malformed analytic_config row — CHECK constraint bypassed, real bad row on the wire', () => {
+  /**
+ * Restores every schema guard this file deliberately removes: both
+ * `analytic_config` CHECK constraints and `authenticated`'s SELECT on
+ * `analytic_user_suppression`. Idempotent, so it doubles as SELF-HEALING —
+ * a run killed mid-test (which skips `finally`) previously left the shared
+ * dev DB permanently missing `analytic_config_min_account_tier_check`, and
+ * the revoked grant made every parallel test file fail with "permission
+ * denied" (20 failures in one sweep, 2026-09-15, long mistaken for an
+ * `analytic_user_suppression` flake). Called in `beforeAll` and in every
+ * `finally` below. This file also runs ALONE — see `vitest.exclusive.config.ts`.
+ */
+async function restoreSchemaGuards(db: Client): Promise<void> {
+  await db.query(`do $$ begin
+    if not exists (select 1 from pg_constraint where conname = 'analytic_config_min_account_tier_check') then
+      alter table retrospeq.analytic_config
+        add constraint analytic_config_min_account_tier_check check (min_account_tier in ('t0', 't1', 't2'));
+    end if;
+    if not exists (select 1 from pg_constraint where conname = 'analytic_config_min_plan_check') then
+      alter table retrospeq.analytic_config
+        add constraint analytic_config_min_plan_check check (min_plan in ('free', 'pro'));
+    end if;
+  end $$;`);
+  await db.query('grant select on retrospeq.analytic_user_suppression to authenticated');
+}
+
+describe('1a. malformed analytic_config row — CHECK constraint bypassed, real bad row on the wire', () => {
     it('a row with an out-of-vocabulary min_plan (CHECK dropped to allow it) resolves canRender to false, never throws, never a guessed plan', async () => {
       const { canRender } = await import('../../analytics/registry-runtime-service');
 
-      await db.query('alter table retrospeq.analytic_config drop constraint analytic_config_min_plan_check');
+      await db.query('alter table retrospeq.analytic_config drop constraint if exists analytic_config_min_plan_check');
       try {
         await db.query(
           `insert into retrospeq.analytic_config (analytic_id, enabled, min_plan, cohort_only, min_account_tier)
@@ -85,10 +112,7 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
         expect(result.reason).toBe('config_unavailable');
       } finally {
         await db.query('delete from retrospeq.analytic_config where analytic_id = $1', [ANALYTIC_ID]);
-        await db.query(
-          `alter table retrospeq.analytic_config
-             add constraint analytic_config_min_plan_check check (min_plan in ('free', 'pro'))`,
-        );
+        await restoreSchemaGuards(db);
       }
 
       // Constraint genuinely restored — a real bad value is rejected again.
@@ -104,7 +128,7 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
     it('a row with an out-of-vocabulary min_account_tier (CHECK dropped) resolves canRender to false, never throws', async () => {
       const { canRender } = await import('../../analytics/registry-runtime-service');
 
-      await db.query('alter table retrospeq.analytic_config drop constraint analytic_config_min_account_tier_check');
+      await db.query('alter table retrospeq.analytic_config drop constraint if exists analytic_config_min_account_tier_check');
       try {
         await db.query(
           `insert into retrospeq.analytic_config (analytic_id, enabled, min_plan, cohort_only, min_account_tier)
@@ -116,10 +140,7 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
         expect(result).toEqual({ canRender: false, reason: 'config_unavailable' });
       } finally {
         await db.query('delete from retrospeq.analytic_config where analytic_id = $1', [ANALYTIC_ID]);
-        await db.query(
-          `alter table retrospeq.analytic_config
-             add constraint analytic_config_min_account_tier_check check (min_account_tier in ('t0', 't1', 't2'))`,
-        );
+        await restoreSchemaGuards(db);
       }
     });
   });
@@ -147,7 +168,7 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
           reason: 'config_unavailable',
         });
       } finally {
-        await db.query('grant select on retrospeq.analytic_user_suppression to authenticated');
+        await restoreSchemaGuards(db);
       }
 
       // Privilege genuinely restored — behaviour returns to normal.
@@ -170,7 +191,13 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
       const VALID_REASONS = new Set(['ok', 'config_unavailable', 'not_configured', 'disabled', 'plan', 'cohort', 'suppressed', 'tier']);
 
       try {
-        for (let i = 0; i < 12; i++) {
+        // 4 trials, not 12: every `canRender` opens its own pooled
+        // connection to the remote shared dev project (~5s each with TLS
+        // + role setup), so 12 trials took 69s against a 30s timeout —
+        // measured 2026-09-15, not guessed. A torn read is a per-trial
+        // property, so fewer trials lose no coverage; the timeout below is
+        // sized to the measured cost with headroom.
+        for (let i = 0; i < 4; i++) {
           const flip = db.query(`update retrospeq.analytic_config set enabled = $2 where analytic_id = $1`, [
             ANALYTIC_ID,
             i % 2 === 0,
@@ -191,7 +218,7 @@ describe.skipIf(!env)('Module 05 Slice 05a — independent adversarial verificat
       } finally {
         await db.query('delete from retrospeq.analytic_config where analytic_id = $1', [ANALYTIC_ID]);
       }
-    }, 30_000);
+    }, 60_000);
   });
 
   describe('2. user_cohorts — fresh self-insert adversarial attempt (docs/adr/0020 re-derived independently)', () => {
