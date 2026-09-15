@@ -474,7 +474,7 @@ describe.skipIf(!env)('review/decisions/actions.ts — relaxation (live DB)', ()
     // 2. Second call: the NEXT prompt is now the graduation one, and this
     //    free user is blocked there -- per-prompt gating, not per-screen.
     const second = await fetchNextDecision();
-    expect(second).toEqual({ success: true, status: 'plan_required' });
+    expect(second).toEqual({ success: true, status: 'plan_required', kind: 'graduation' });
 
     // 3. Upgrading resolves the block -- the SAME prompt is now reachable.
     await setPlan(user.id, 'pro');
