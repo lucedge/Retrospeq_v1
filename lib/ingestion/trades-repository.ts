@@ -33,7 +33,7 @@ export async function listOpenTrades(userId: string): Promise<TradeRow[]> {
       `select ${TRADE_COLUMNS}
          from retrospeq.trades
         where user_id = $1 and status = 'open'
-        order by opened_at desc`,
+        order by opened_at desc, id desc`,
       [userId],
     );
     return res.rows;
@@ -103,7 +103,7 @@ export async function listTradesForAccountDay(
       `select ${TRADE_COLUMNS}
          from retrospeq.trades
         where user_id = $1 and account_id = $2 and server_day = $3
-        order by opened_at asc`,
+        order by opened_at asc, id asc`,
       [userId, accountId, serverDay],
     );
     return res.rows;

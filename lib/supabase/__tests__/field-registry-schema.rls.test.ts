@@ -152,10 +152,17 @@ describe.skipIf(!env)('retrospeq field-registry schema — RLS shape audit (live
     `);
     expect(Number(res.rows[0]!.bad_count)).toBe(0);
 
+    // Subset, not equality: on a fresh project with zero profiles there are
+    // no derived rows at all, and equality only ever passed on the old shared
+    // dev project because it already had users. "Exactly 9 per profile" above
+    // plus "every id is in the catalogue" here still pins each profile to the
+    // exact 9-entry set; seeding itself is proven with a real signup in
+    // 'handle_new_user — derived-field seeding at signup' below.
     const distinctIds = await db.query<{ id: string }>(
       `select distinct id from retrospeq.fields where kind = 'derived' order by id`,
     );
-    expect(distinctIds.rows.map((r) => r.id)).toEqual([...DERIVED_FIELD_IDS].sort());
+    const unexpected = distinctIds.rows.map((r) => r.id).filter((id) => !(DERIVED_FIELD_IDS as readonly string[]).includes(id));
+    expect(unexpected).toEqual([]);
   });
 });
 
