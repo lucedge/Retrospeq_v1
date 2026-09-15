@@ -672,6 +672,21 @@ export const RATE_LIMITS = {
     ip: { limit: 25, windowSeconds: 3600 },
     email: { limit: 15, windowSeconds: 3600 },
   },
+
+  /**
+   * Module 08 (Onboarding & Home) §5.5 — `app/(app)/dashboard/actions.ts`'s
+   * `acceptFieldIntroductionOffer`/`declineFieldIntroductionOffer`. Same
+   * "never ship a new write path without a scope from day one" posture
+   * `reviewDecision`'s own header established. A real trader can
+   * structurally only ever see this offer once per ~30-day cooldown
+   * episode (`field-introduction.ts`'s own eligibility gate), so — like
+   * `reviewDecision` — this budget exists purely to stop a scripted flood
+   * against one session/IP, not to accommodate legitimate volume.
+   */
+  fieldIntroductionOffer: {
+    ip: { limit: 25, windowSeconds: 3600 },
+    email: { limit: 15, windowSeconds: 3600 },
+  },
 } as const satisfies Record<string, { ip: RateLimitRule; email?: RateLimitRule }>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;

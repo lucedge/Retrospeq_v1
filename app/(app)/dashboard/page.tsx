@@ -17,6 +17,8 @@ import {
 } from "@/lib/engagement/week-completeness-repository";
 import { fetchRecentMilestoneForUser } from "@/lib/engagement/events-repository";
 import { copyForMilestone } from "@/lib/engagement/milestone-copy";
+import { fetchFieldIntroductionOfferForUser } from "@/lib/onboarding/field-introduction-repository";
+import { FieldIntroductionOffer } from "./FieldIntroductionOffer";
 import { weekStartForServerDay } from "@/lib/rules/week-boundary";
 import {
   formatAge,
@@ -58,6 +60,19 @@ import { formatDayOfWeek } from "./format";
  * line, never a modal/push. XP itself is deliberately NOT rendered
  * anywhere on Home (§5.4: "may be shown quietly on a profile screen;
  * nothing depends on it") — out of this slice's own scope entirely.
+ *
+ * **Frame 1.19's field-introduction offer, Module 08 §5.5**: the Clear
+ * state also, independently, may show the "Set up fields" offer
+ * (`FieldIntroductionOffer`), framed by a REAL derived finding
+ * (`fetchFieldIntroductionOfferForUser` — see that file's own header for
+ * exactly what "≥1 derived finding shown" and "not offered in the last 30
+ * days" mean here, and for a disclosed, pre-existing reachability gap:
+ * the silent default strategy has zero fields, so no finding — derived or
+ * otherwise — is ever computed for it without a field attached first).
+ * `null` whenever any §5.5 condition fails — never a placeholder offer.
+ * This is the ONE `.rq-btn` the Clear state ever shows (it otherwise has
+ * none), matching the mockup's own caption: "the offer carries the
+ * view's one primary."
  */
 
 const STREAK_STRIP_WEEKS = 12;
@@ -483,17 +498,33 @@ export default async function DashboardPage() {
   const currentWeekStart = weekStartForServerDay(
     now.toISOString().slice(0, 10),
   );
-  const [adherenceResult, engagementSummary, recentWeeks, recentMilestone] =
-    await Promise.all([
-      fetchAdherenceDisplay(),
-      fetchEngagementSummaryForUser(user.id),
-      fetchRecentWeekCompletenessForUser(
-        user.id,
-        currentWeekStart,
-        STREAK_STRIP_WEEKS,
-      ),
-      fetchRecentMilestoneForUser(user.id, now),
-    ]);
+  const [
+    adherenceResult,
+    engagementSummary,
+    recentWeeks,
+    recentMilestone,
+    fieldIntroductionOffer,
+  ] = await Promise.all([
+    fetchAdherenceDisplay(),
+    fetchEngagementSummaryForUser(user.id),
+    fetchRecentWeekCompletenessForUser(
+      user.id,
+      currentWeekStart,
+      STREAK_STRIP_WEEKS,
+    ),
+    fetchRecentMilestoneForUser(user.id, now),
+    fetchFieldIntroductionOfferForUser(user.id, now).catch((err) => {
+      // §7.2/§12's own "Home never shows an error" posture, applied to
+      // this one additional read too — a failure here degrades to "no
+      // offer this render," never an error branch on an otherwise-healthy
+      // Clear state.
+      console.error(
+        "[dashboard] fetchFieldIntroductionOfferForUser failed -- degrading to no offer this render (Module 08 §5.5):",
+        err,
+      );
+      return null;
+    }),
+  ]);
 
   return (
     <main className="dash" data-state="clear">
@@ -541,6 +572,14 @@ export default async function DashboardPage() {
             {copyForMilestone(recentMilestone.milestoneId)}
           </p>
         </div>
+      ) : null}
+
+      {/* Frame 1.19 -- the field-introduction offer, ONLY when every §5.5
+          condition genuinely clears (never a placeholder). See this file's
+          own header and `fetchFieldIntroductionOfferForUser`'s for the
+          full eligibility/reachability reasoning. */}
+      {fieldIntroductionOffer ? (
+        <FieldIntroductionOffer statement={fieldIntroductionOffer.statement} />
       ) : null}
 
       {/* The quiet "next finding" projection line (§7.3's own worked

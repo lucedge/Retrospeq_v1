@@ -319,6 +319,88 @@ export async function advanceOnboardingStage(
 }
 
 /**
+ * Module 08 §5.5 -- Slice: field-introduction offer (frame 1.19). Two
+ * narrow, STAGE-BLIND updates, deliberately NOT routed through
+ * `advanceOnboardingStage`: both `fields_offered_at` (stamped when the
+ * offer is actually shown) and `fields_declined_count` (incremented on a
+ * "Not now") can legitimately happen at ANY onboarding stage — e.g. a
+ * trader who is still mid-import when they cross 30 confirmed trades on a
+ * fast broker sync — and neither one should ever risk throwing
+ * `OnboardingStageRegressionError` (which `advanceOnboardingStage` would,
+ * had this file instead tried to pass the CURRENT stage back to itself as
+ * a same-stage no-op target — an extra fetch-then-write round trip this
+ * avoids entirely by never touching `stage` at all here). Kept in this
+ * file, not a new one, because they mutate the exact same row this file
+ * already owns — same "extend, don't duplicate" instruction that placed
+ * `advanceOnboardingStage`'s `fieldsOfferedAt`/`incrementFieldsDeclinedCount`
+ * extras here in the first place (this file's own header already
+ * anticipated a "§5.5" caller).
+ */
+
+/** Stamps `fields_offered_at = now()` — called exactly once per offer
+ *  "episode" by `lib/onboarding/field-introduction-repository.ts`'s
+ *  `fetchFieldIntroductionOfferForUser`, the moment it decides to show the
+ *  offer (see that file's own header for why this is NOT re-stamped on
+ *  every subsequent render of the same still-unresolved offer). Best-effort
+ *  callers should use `recordFieldsOfferedBestEffort` below; this throws on
+ *  a genuine DB failure, matching every other direct repository write in
+ *  this file. */
+export async function recordFieldsOffered(userId: string): Promise<OnboardingState> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<OnboardingStateRow>(
+      `update retrospeq.onboarding_state
+          set fields_offered_at = now(), updated_at = now()
+        where user_id = $1
+        returning ${SELECT_COLUMNS}`,
+      [userId],
+    );
+    const row = res.rows[0];
+    if (!row) throw new OnboardingStateNotFoundError(userId);
+    return mapRow(row);
+  });
+}
+
+/** Best-effort wrapper, same posture as `advanceOnboardingStageBestEffort`
+ *  — a render must never fail (or hide an otherwise-real offer from the
+ *  trader) just because this side-write couldn't commit. */
+export async function recordFieldsOfferedBestEffort(userId: string): Promise<void> {
+  try {
+    await recordFieldsOffered(userId);
+  } catch (err) {
+    console.error(
+      `[onboarding] recordFieldsOffered(${userId}) failed -- the field-introduction offer will re-stamp on the ` +
+        `next eligible render instead (Module 08 §5.5; docs/runbook.md "onboarding_state field-offer stamp failing"):`,
+      err,
+    );
+  }
+}
+
+/**
+ * Story 5.5's own line: "Declining is free and recorded." Increments
+ * `fields_declined_count` by exactly 1 against whatever the row currently
+ * holds (same atomic-`+1`-in-the-UPDATE reasoning `advanceOnboardingStage`'s
+ * own `incrementFieldsDeclinedCount` extra documents) — never an absolute
+ * overwrite, so two concurrent declines can't clobber each other. Called
+ * directly from the Server Action (`app/(app)/dashboard/actions.ts`), never
+ * best-effort — a decline the trader explicitly clicked must either commit
+ * or the action must honestly report failure, not silently drop it.
+ */
+export async function recordFieldsDeclined(userId: string): Promise<OnboardingState> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<OnboardingStateRow>(
+      `update retrospeq.onboarding_state
+          set fields_declined_count = fields_declined_count + 1, updated_at = now()
+        where user_id = $1
+        returning ${SELECT_COLUMNS}`,
+      [userId],
+    );
+    const row = res.rows[0];
+    if (!row) throw new OnboardingStateNotFoundError(userId);
+    return mapRow(row);
+  });
+}
+
+/**
  * Module 08 §5.1/§5.3 -- Slice 08b's shared best-effort wrapper around
  * `advanceOnboardingStage`, for every call site that is a side effect of
  * some OTHER already-successful operation (a broker connect, a completed

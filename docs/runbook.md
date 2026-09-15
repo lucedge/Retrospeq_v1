@@ -2335,3 +2335,47 @@ builder remains available as a manual workaround for Pro users, and free
 users are the primary audience §5.4 is written for, so a transient miss
 here is a UX gap (no immediate logging path) rather than a data-integrity
 one.
+
+## `onboarding_state` field-offer stamp failing (§5.5 field-introduction offer)
+
+**Source:** Module 08 (Onboarding & Home) §5.5 — the field-introduction
+offer (frame 1.19). Owning code:
+`lib/onboarding/onboarding-state-repository.ts`'s
+`recordFieldsOfferedBestEffort`, called exactly once per offer "episode"
+from `lib/onboarding/field-introduction-repository.ts`'s
+`fetchFieldIntroductionOfferForUser`, the moment it decides to actually
+show the offer on `/dashboard`.
+
+**What this means operationally:** matches this file's `onboarding_state`
+stage-advance entry's posture exactly — a failure here must never turn an
+otherwise-successful Home page render into an error, and never hide an
+offer the trader genuinely qualifies for. `recordFieldsOfferedBestEffort`
+never throws; a genuine DB failure is logged as `[onboarding]
+recordFieldsOffered(...) failed`. Separately, `app/(app)/dashboard/page.tsx`
+wraps the ENTIRE `fetchFieldIntroductionOfferForUser` read (including the
+`findings`/`analytic_renders` join, not just the stamp) in its own
+`.catch()`, logging `[dashboard] fetchFieldIntroductionOfferForUser
+failed` and degrading to "no offer this render" — same §7.2/§12 "Home
+never shows an error" posture the rest of this page's reads already use.
+
+**Left unaddressed**, `fields_offered_at` stays at its previous value (or
+`null`, for a trader who has never been shown the offer), so the SAME
+offer instance is simply re-evaluated (and, if still eligible, re-shown
+and re-stamped) on the trader's next visit to `/dashboard` — self-healing,
+not a data-integrity issue. The only user-visible effect of a persistent
+failure here is the 30-day cooldown never actually starting, so the offer
+could show on every visit instead of once per episode until the write
+finally succeeds.
+
+**How to check:** grep application logs for `[onboarding]
+recordFieldsOffered(` or `[dashboard] fetchFieldIntroductionOfferForUser
+failed`. A quick live check for a specific trader: `select
+fields_offered_at, fields_declined_count from retrospeq.onboarding_state
+where user_id = $1`.
+
+**Is this alertable?** No alerting infrastructure exists in this repo yet
+(matching every other runbook entry's own standing caveat). Not urgent to
+page on: the worst case is a mildly-too-frequent nudge on Home, never a
+data-loss or security issue, and the offer's own eligibility gate
+(`docs/infra-gaps.md`'s "silent default strategy never gets a derived
+finding" entry) means it is not reachable for most traders yet regardless.

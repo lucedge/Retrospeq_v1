@@ -26,7 +26,7 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | 1.16 | `/dashboard` | Degraded: Clear + quiet sync indicator (never an error screen) | 08 §12 DASH_STATE_UNRESOLVED | new | ● |
 | 1.17 | `/dashboard` | Grouping chip on open position (same / separate / later) | 02 §5.2 | new | ◐ (trades) |
 | 1.18 | `/dashboard` | Milestone inline (`role=status`), never a modal | 07 §6.1 | new | ● (most recent, within 7 days; nothing when none) |
-| 1.19 | `/dashboard` | Field-introduction offer (after month one, framed by a finding) | 08 §5.5, §8 | new | ○ |
+| 1.19 | `/dashboard` | Field-introduction offer (after month one, framed by a finding) | 08 §5.5, §8 | new | ◐ (built to mockup, real eligibility/decline/cooldown; unreachable in practice until the default strategy carries a derived field — docs/infra-gaps.md) |
 | 1.20 | shell | Four tabs + Settings entry; phone column; light + dark | 08 §7.5 | S04 | ● |
 
 ## Batch 2 · trades (Module 02 §5; Module 04 §5.9; Module 06 §4.1)
