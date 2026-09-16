@@ -80,6 +80,29 @@ export default function ConnectAccountPage() {
         )}
       </div>
 
+      {/* `pending` gates both error blocks: `useActionState`'s own
+          `state` only updates once a submission RESOLVES, so without this
+          guard a stale error from a PREVIOUS attempt stays on screen
+          (contradicting the "Checking your account" heading above) for
+          the whole of a new, still-in-flight submission — caught via the
+          screenshot self-check (1.3's "verifying" capture initially showed
+          the prior attempt's rejection box under the new pending state). */}
+      {!pending && state?.error?.code === 'CONNECT_CREDENTIAL_TOO_PERMISSIVE' && (
+        <div className="alert alert--blocking" role="alert">
+          <h2>That password can place trades</h2>
+          <p>
+            We did not save it. Please use your investor password instead — it gives us the
+            same history without the ability to trade.
+          </p>
+        </div>
+      )}
+
+      {!pending && state?.error && state.error.code !== 'CONNECT_CREDENTIAL_TOO_PERMISSIVE' && (
+        <div className="alert" role="alert">
+          <p>{state.error.user_message}</p>
+        </div>
+      )}
+
       <fieldset className="flex flex-col gap-2" disabled={pending}>
         <legend className="rq-label">Platform</legend>
         <div className="segmented" role="radiogroup" aria-label="Platform">
@@ -170,29 +193,6 @@ export default function ConnectAccountPage() {
           No credentials needed. You&apos;ll log trades yourself — everything except
           auto-import still works.
         </p>
-      )}
-
-      {/* `pending` gates every error block below: `useActionState`'s own
-          `state` only updates once a submission RESOLVES, so without this
-          guard a stale error from a PREVIOUS attempt stays on screen
-          (contradicting the "Checking your account" heading above) for
-          the whole of a new, still-in-flight submission — caught via the
-          screenshot self-check (1.3's "verifying" capture initially showed
-          the prior attempt's rejection box under the new pending state). */}
-      {!pending && state?.error?.code === 'CONNECT_CREDENTIAL_TOO_PERMISSIVE' && (
-        <div className="alert alert--blocking" role="alert">
-          <h2>That password can place trades</h2>
-          <p>
-            We did not save it. Please use your investor password instead — it gives us the
-            same history without the ability to trade.
-          </p>
-        </div>
-      )}
-
-      {!pending && state?.error && state.error.code !== 'CONNECT_CREDENTIAL_TOO_PERMISSIVE' && (
-        <div className="alert" role="alert">
-          <p>{state.error.user_message}</p>
-        </div>
       )}
 
       <div className="push">
