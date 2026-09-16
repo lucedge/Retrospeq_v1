@@ -74,3 +74,56 @@ export function formatFillCount(count: number): string {
 export function formatDirection(direction: string): string {
   return direction === 'long' ? 'Long' : direction === 'short' ? 'Short' : direction;
 }
+
+/**
+ * UI batch 2 (frame 2.1's `.day-label`, "Wed 2 Aug") — one grouping
+ * label per calendar day in the day-grouped trade list. Fixed to UTC for
+ * the identical reason `formatClockTime` above already is (no single
+ * "correct" local day across a trader's possibly-multiple accounts).
+ * `dayKey` is the grouping key this label is derived from (kept
+ * separate and pure so `page.tsx` can group first, then label the
+ * group's first member once — never re-derives the boundary from a
+ * different formatter's own rounding).
+ */
+export function formatDayLabel(iso: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(iso));
+}
+
+export function dayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+/**
+ * Frame 2.9's heading, "Close out Wednesday" — the weekday name only,
+ * derived from the `server_day` (`YYYY-MM-DD`) close-out is already
+ * scoped to, never a second, independently-rounded date. Treated as a
+ * UTC calendar date (a bare date has no timezone of its own to be wrong
+ * about).
+ */
+export function formatWeekdayName(day: string): string {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`));
+}
+
+/**
+ * Frame 2.9's subhead, "3 trades · +0.9R on the day" — a real sum over
+ * whichever trades on the day have a KNOWN `r_multiple`. A trade with no
+ * stop ever recorded (`r_multiple: null`, "not applicable" — see
+ * `formatRMultiple`'s own header) contributes nothing to the sum rather
+ * than a fabricated zero; this is mathematically honest (an unknown
+ * addend is omitted, not assumed to be 0), not a silently narrowed claim
+ * — there is no copy anywhere that says "every trade counted".
+ */
+export function sumRMultiples(values: (string | null)[]): number {
+  let total = 0;
+  for (const value of values) {
+    if (value === null) continue;
+    const num = Number(value);
+    if (Number.isFinite(num)) total += num;
+  }
+  return total;
+}

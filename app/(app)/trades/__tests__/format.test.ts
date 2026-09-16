@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dayKey,
   formatAge,
   formatClockTime,
+  formatDayLabel,
   formatDirection,
   formatFillCount,
   formatRMultiple,
   formatRiskPct,
+  formatWeekdayName,
+  sumRMultiples,
 } from '../format';
 
 describe('formatRMultiple', () => {
@@ -81,5 +85,33 @@ describe('formatDirection', () => {
   it('long/short render as plain text labels, never a colour class', () => {
     expect(formatDirection('long')).toBe('Long');
     expect(formatDirection('short')).toBe('Short');
+  });
+});
+
+describe('formatDayLabel', () => {
+  it('matches frame 2.1\'s "Wed 2 Aug" exactly — weekday, day, month, no comma, no year', () => {
+    expect(formatDayLabel('2026-08-02T09:14:00Z')).toBe('Sun 2 Aug');
+  });
+});
+
+describe('dayKey', () => {
+  it('is the UTC calendar-day prefix of an ISO timestamp', () => {
+    expect(dayKey('2026-08-02T23:59:00Z')).toBe('2026-08-02');
+  });
+});
+
+describe('formatWeekdayName', () => {
+  it('renders a bare YYYY-MM-DD as its UTC weekday name, matching frame 2.9\'s "Close out Wednesday"', () => {
+    expect(formatWeekdayName('2026-08-05')).toBe('Wednesday');
+  });
+});
+
+describe('sumRMultiples', () => {
+  it('sums known values, treating null as "not applicable" — omitted, never a fabricated 0', () => {
+    expect(sumRMultiples(['1.8000', null, '-0.9000'])).toBeCloseTo(0.9);
+  });
+
+  it('an all-null day sums to a real, honest 0', () => {
+    expect(sumRMultiples([null, null])).toBe(0);
   });
 });

@@ -9,11 +9,16 @@ import { TRIM_REASONS, type TrimReason } from '@/lib/ingestion/trim-reason';
  * notification: Target · Trail · Discretionary · Fear · Time. Optional."
  * Rendered here at close-out (Slice 7b) since no real-time
  * fill-notification surface exists yet — see `trade-captures.ts`'s own
- * header for that scoping decision. Built on the design system's real
- * pick-one pills (`.rq-pills`/`.rq-pill.on`), the same component
- * `accounts/connect/page.tsx` uses for platform selection — there is no
- * dedicated `.chip` class in this repo's actual CSS (the reference markup's
- * `.chip` is illustrative, not a real selector here).
+ * header for that scoping decision.
+ *
+ * **UI batch 2 restyle (2026-09-16)**: the prior header here claimed
+ * "there is no dedicated `.chip` class in this repo's actual CSS" — stale
+ * (same class of stale comment batch 1b already found and fixed in
+ * `accounts/connect/page.tsx`/`ManualEntryForm.tsx`): `.trim-reason`/
+ * `.chips`/`.chip[aria-pressed]`/`.ghost` are real, already-shipped
+ * selectors (`components.css`, "Design program batch 6"), matching frame
+ * 2.11 exactly. Restyled from `.rq-pills` to those real classes; no
+ * behaviour change.
  *
  * "Skip" is a local, transient dismissal only (no server call, matching
  * `GroupingChip.tsx`'s own "Later" precedent) — §3.3 says "always
@@ -52,18 +57,16 @@ export function TrimReasonChips({
   }
 
   return (
-    <div className="flex flex-col gap-2" role="group" aria-labelledby={`trim-reason-h-${tradeId}`}>
-      <p id={`trim-reason-h-${tradeId}`} className="rq-sub">
-        Why did you trim?
-      </p>
-      <div className="rq-pills" role="radiogroup" aria-label="Trim reason">
+    <div className="trim-reason" role="group" aria-labelledby={`trim-reason-h-${tradeId}`}>
+      <p id={`trim-reason-h-${tradeId}`}>Why did you trim?</p>
+      <div className="chips" role="radiogroup" aria-label="Trim reason">
         {TRIM_REASONS.map((reason) => (
           <button
             key={reason}
             type="button"
             role="radio"
+            className={selected === reason ? 'chip on' : 'chip'}
             aria-checked={selected === reason}
-            className={selected === reason ? 'rq-pill on' : 'rq-pill'}
             onClick={() => handlePick(reason)}
             disabled={isPending}
           >
@@ -72,12 +75,7 @@ export function TrimReasonChips({
         ))}
       </div>
       {selected === null && (
-        <button
-          type="button"
-          className="rq-btn rq-btn--ghost"
-          onClick={() => setSkipped(true)}
-          disabled={isPending}
-        >
+        <button type="button" className="ghost" onClick={() => setSkipped(true)} disabled={isPending}>
           Skip
         </button>
       )}

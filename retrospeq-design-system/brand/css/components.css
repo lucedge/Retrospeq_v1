@@ -612,7 +612,8 @@
 .trade__r { width: 46px; flex-shrink: 0; text-align: right; font-size: var(--rq-text-sm); }
 .trade__time { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); color: var(--rq-ink-faint); width: 38px; text-align: right; flex-shrink: 0; }
 .trade__fillcount { font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); color: var(--rq-ink-faint); }
-.trade__summary[aria-expanded="true"] .trade__instrument { color: var(--rq-accent-ink); }
+.trade__summary[aria-expanded="true"] .trade__instrument,
+details.trade[open] > .trade__summary .trade__instrument { color: var(--rq-accent-ink); }
 .trade__fills { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 10px; }
 .trade__grouping { margin: 0; font-size: var(--rq-text-sm); color: var(--rq-ink-faint); display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -892,4 +893,6 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 .dash,
 .hook,
 .connect,
-.entry { flex: 1 1 auto; }
+.entry,
+.trades,
+.closeout { flex: 1 1 auto; }

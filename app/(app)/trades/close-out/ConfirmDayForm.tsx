@@ -23,17 +23,24 @@ import { confirmDayAction, type ConfirmDayActionState } from '../actions';
  * be permanently broken, neither of which is honest (AGENTS.md's "never
  * fake it"). The copy says so plainly instead.
  *
- * **Story 1.4, Slice 1 addition: `coverageGapBlocked`/`coverageGapCount`.**
- * `page.tsx` now runs the SAME overlap check `confirmDay`'s own
- * transaction runs (`listUnresolvedCoverageGapsForAccountDay`) BEFORE this
- * form ever renders, so a known gap is shown and the submit control is
- * genuinely `disabled` up front — §2's own acceptance text read literally
- * ("Coverage gap blocks confirm... confirm disabled"), not only refused
- * after a wasted round trip. The reactive `CONFIRM_DAY_COVERAGE_GAP`
- * error state below is kept as a second, independent layer (a gap that
- * appears between this page's own render and the moment the trader taps
- * submit is still caught) — never the only line of defence, matching
- * `confirmDay`'s own transaction as the real, final authority either way.
+ * **Story 1.4 addition: `coverageGapBlocked`.** `page.tsx` runs the SAME
+ * overlap check `confirmDay`'s own transaction runs
+ * (`listUnresolvedCoverageGapsForAccountDay`) BEFORE this form ever
+ * renders, so a known gap is shown (frame 2.10's own `.alert.alert--
+ * blocking`, rendered by `page.tsx` above the trades list, the frame's
+ * own position) and the submit control here is genuinely `disabled` up
+ * front. The reactive `CONFIRM_DAY_COVERAGE_GAP` error state below is
+ * kept as a second, independent layer (a gap that appears between the
+ * page's own render and the moment the trader taps submit is still
+ * caught) — never the only line of defence, matching `confirmDay`'s own
+ * transaction as the real, final authority either way.
+ *
+ * **UI batch 2 restyle (2026-09-16)**: every refusal state below now
+ * renders as the frame's own `.alert.alert--blocking[role=alert]` card
+ * (was a generic `.rq-well`); the button is the frame's `.rq-btn--block`
+ * with a centred `.rq-label` hint underneath, matching frame 2.9/2.11's
+ * `.push` block exactly. No behaviour change — same three error codes,
+ * same copy, same `Link` destinations.
  *
  * **Story 1.2 addition: no-trade-day framing.** `hasAnyTrades === false`
  * now renders the button's own label/hint as an explicit, positive
@@ -50,13 +57,11 @@ export function ConfirmDayForm({
   serverDay,
   hasAnyTrades,
   coverageGapBlocked = false,
-  coverageGapCount = 0,
 }: {
   accountId: string;
   serverDay: string;
   hasAnyTrades: boolean;
   coverageGapBlocked?: boolean;
-  coverageGapCount?: number;
 }) {
   const [state, formAction, pending] = useActionState<ConfirmDayActionState | undefined, FormData>(
     confirmDayAction,
@@ -94,38 +99,20 @@ export function ConfirmDayForm({
       <input type="hidden" name="serverDay" value={serverDay} />
       <input type="hidden" name="kind" value={hasAnyTrades ? 'traded' : 'deliberate_no_trade'} />
 
-      {/* Story 1.4 — proactive block, shown before any submit attempt.
-          See this file's own header for why this is additive to, never a
-          replacement for, the reactive CONFIRM_DAY_COVERAGE_GAP state
-          below. */}
-      {coverageGapBlocked && !state?.error && (
-        <div className="rq-well flex flex-col gap-2" role="alert" data-code="SYNC_COVERAGE_GAP">
-          <p className="rq-body">
-            {coverageGapCount} unresolved coverage gap{coverageGapCount === 1 ? '' : 's'} overlap this day —
-            confirming is blocked until the gap is filled.
-          </p>
-          <p className="rq-sub">
-            Sync isn&apos;t automated yet — check back once your broker history is complete.
-          </p>
-        </div>
-      )}
-
       {state?.error?.code === 'CONFIRM_DAY_COVERAGE_GAP' && (
-        <div className="rq-well flex flex-col gap-2" role="alert" data-code="SYNC_COVERAGE_GAP">
-          <p className="rq-body">{state.error.user_message}</p>
-          <p className="rq-sub">
-            Sync isn&apos;t automated yet — check back once your broker history is complete.
-          </p>
+        <div className="alert alert--blocking" role="alert" data-code="SYNC_COVERAGE_GAP">
+          <p>{state.error.user_message}</p>
+          <p>Sync isn&apos;t automated yet — check back once your broker history is complete.</p>
         </div>
       )}
 
       {state?.error?.code === 'CONFIRM_DAY_AMBIGUOUS_GROUPING' && (
-        <div className="rq-well flex flex-col gap-2" role="alert">
-          <p className="rq-body">{state.error.user_message}</p>
+        <div className="alert alert--blocking" role="alert">
+          <p>{state.error.user_message}</p>
           <ul className="flex flex-col gap-1">
             {(state.error.tradeIds ?? []).map((id) => (
               <li key={id}>
-                <Link href={`/trades#trade-${id}`} className="rq-sub underline">
+                <Link href={`/trades#trade-${id}`} className="link">
                   Review this trade
                 </Link>
               </li>
@@ -135,12 +122,12 @@ export function ConfirmDayForm({
       )}
 
       {state?.error?.code === 'CONFIRM_DAY_UNRESOLVED_BLOCK_ANOMALY' && (
-        <div className="rq-well flex flex-col gap-2" role="alert">
-          <p className="rq-body">{state.error.user_message}</p>
+        <div className="alert alert--blocking" role="alert">
+          <p>{state.error.user_message}</p>
           <ul className="flex flex-col gap-1">
             {(state.error.trades ?? []).map((t) => (
               <li key={t.tradeId}>
-                <Link href={`/trades#trade-${t.tradeId}`} className="rq-sub underline">
+                <Link href={`/trades#trade-${t.tradeId}`} className="link">
                   Review this trade (
                   {t.anomalyCode === 'FILL_LATE_ARRIVAL' ? 'a late fill arrived' : 'sync is still catching up'})
                 </Link>
@@ -156,11 +143,11 @@ export function ConfirmDayForm({
         </p>
       )}
 
-      <button type="submit" className="rq-btn" disabled={pending || coverageGapBlocked}>
+      <button type="submit" className="rq-btn rq-btn--block" disabled={pending || coverageGapBlocked}>
         {pending ? 'Closing out…' : hasAnyTrades ? 'Day done' : "I didn't trade today"}
       </button>
-      <p className="rq-sub">
-        {hasAnyTrades ? 'About thirty seconds.' : 'Recorded as a deliberate day off — your streak stays intact.'}
+      <p className="rq-label text-center mt-2">
+        {hasAnyTrades ? 'About thirty seconds' : 'Recorded as a deliberate day off — your streak stays intact.'}
       </p>
     </form>
   );

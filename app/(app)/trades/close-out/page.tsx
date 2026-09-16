@@ -9,10 +9,12 @@ import {
 import { TRIM_REASON_FIELD_ID, TRIM_REASONS, type TrimReason } from '@/lib/ingestion/trim-reason';
 import { fetchStrategyVersionFields } from '@/lib/fields/strategy-repository';
 import { fetchFieldsForUser } from '@/lib/fields/fields-repository';
-import { formatClockTime, formatDirection, formatRMultiple } from '../format';
+import { rTrackFill } from '../../dashboard/format';
+import { formatRMultiple, formatWeekdayName, sumRMultiples } from '../format';
 import { TrimReasonChips } from './TrimReasonChips';
 import { ConfirmDayForm } from './ConfirmDayForm';
 import { LateCaptureField, type LateCaptureDataType } from './LateCaptureField';
+import { AmbiguousGroupingResolver } from './AmbiguousGroupingResolver';
 
 /**
  * Module 06 (Review & Graduation) §2's daily close-out screen — stories
@@ -237,13 +239,56 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
       : new Map<string, Awaited<ReturnType<typeof fetchFieldsForUser>>[number]>();
 
   const coverageGapBlocked = coverageGaps.length > 0;
+  const dayTotalR = sumRMultiples(trades.map((t) => t.r_multiple));
+  // Frame 2.13 — proactive, from data already fetched above (the SAME
+  // Story 1.4 pattern this file's own header already established for
+  // coverage gaps: check before render, never only after a wasted
+  // submit). No new query.
+  const ambiguousTrades = trades.filter((t) => t.grouping_confidence === 'ambiguous');
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="closeout-h">
+    <section className="closeout flex flex-col gap-6" aria-labelledby="closeout-h">
       <h1 id="closeout-h" className="rq-h1">
-        Close out {day}
-        {account ? ` — ${account.label}` : ''}
+        Close out {formatWeekdayName(day)}
       </h1>
+      {account && trades.length > 0 && (
+        <p className="rq-sub">
+          <span className="rq-num">{trades.length}</span> trade{trades.length === 1 ? '' : 's'} ·{' '}
+          <span className="rq-num">{formatRMultiple(dayTotalR.toFixed(4))}</span> on the day · {account.label}
+        </p>
+      )}
+
+      {/* Frame 2.10 — proactive coverage-gap block, shown before the
+          trades list (the frame's own position), never only after a
+          wasted "Day done" tap. `Try again` is a real, honest re-fetch
+          of THIS page (re-runs `listUnresolvedCoverageGapsForAccountDay`
+          fresh) — not a fake retry-sync trigger, since no real
+          `BrokerAdapter` exists yet (standing infra gap) and a button
+          that CLAIMS to have re-synced anything would be exactly the
+          fabrication AGENTS.md forbids. `ConfirmDayForm`'s own reactive
+          refusal state (a gap appearing between this render and submit)
+          stays a second, independent layer near the button below. */}
+      {coverageGapBlocked && (
+        <div className="alert alert--blocking" role="alert">
+          <p>
+            {coverageGaps.length} unresolved coverage gap{coverageGaps.length === 1 ? '' : 's'} overlap this
+            day — confirming is blocked until sync catches up.
+          </p>
+          <Link href={`/trades/close-out?account=${accountId}&day=${day}`} className="rq-btn rq-btn--ghost">
+            Try again
+          </Link>
+        </div>
+      )}
+
+      {/* Frame 2.13 — ambiguous grouping questions, batched here, no
+          "Later" (see `AmbiguousGroupingResolver.tsx`'s own header). */}
+      {ambiguousTrades.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {ambiguousTrades.map((trade) => (
+            <AmbiguousGroupingResolver key={trade.id} tradeId={trade.id} instrument={trade.instrument} />
+          ))}
+        </div>
+      )}
 
       {trades.length === 0 ? (
         <p className="rq-sub">
@@ -251,32 +296,37 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
           — a real, logged decision, not a gap in your history.
         </p>
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="closeout__trades">
           {trades.map((trade) => {
             const missingFieldIds = missingFieldIdsByTrade.get(trade.id) ?? [];
+            const matched = preEntryTradeIds.has(trade.id);
+            const fill = rTrackFill(trade.r_multiple);
             return (
-              <li
-                key={trade.id}
-                className="rq-card flex flex-col gap-3"
-                data-capture={preEntryTradeIds.has(trade.id) ? 'matched' : 'unmatched'}
-              >
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="rq-row__name">{trade.instrument}</span>
-                  <span className="rq-sub">{formatDirection(trade.direction)}</span>
-                  <span className="rq-num">{formatRMultiple(trade.r_multiple)}</span>
-                  <time className="rq-sub" dateTime={trade.opened_at}>
-                    {formatClockTime(trade.opened_at)}
-                  </time>
-                  {/* §5.2's `chip--ok`/`chip--muted` — text-only, built on
-                      the design system's real `.rq-tag` (`--on`/`--muted`
-                      are not a red/green pair). */}
-                  <span className={preEntryTradeIds.has(trade.id) ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-                    {preEntryTradeIds.has(trade.id) ? 'Pre-entry captured' : 'No pre-entry capture'}
+              <li key={trade.id} className="flex flex-col gap-3">
+                <div className="closeout__trade" data-capture={matched ? 'matched' : 'unmatched'}>
+                  <span className="instrument">{trade.instrument}</span>
+                  <div className="rq-track">
+                    {fill && (
+                      <i
+                        className="rq-fill"
+                        style={
+                          fill.side === 'pos' ? { left: '50%', width: `${fill.pct / 2}%` } : { right: '50%', width: `${fill.pct / 2}%` }
+                        }
+                      />
+                    )}
+                  </div>
+                  <span className={matched ? 'chip chip--ok' : 'chip chip--muted'}>
+                    {matched ? 'Armed' : 'No capture'}
                   </span>
+                  {!matched && missingFieldIds.length > 0 && (
+                    <a href={`#latecap-${trade.id}`} className="link">
+                      Add now
+                    </a>
+                  )}
                 </div>
                 <TrimReasonChips tradeId={trade.id} initialReason={trimReasonByTrade.get(trade.id) ?? null} />
                 {missingFieldIds.length > 0 && (
-                  <div className="rq-well flex flex-col gap-3">
+                  <div id={`latecap-${trade.id}`} className="rq-well flex flex-col gap-3">
                     <p className="rq-sub">Missed pre-entry notes — fill them in now, marked as filled late.</p>
                     {missingFieldIds.map((fieldId) => {
                       const field = fieldDisplayById.get(fieldId);
@@ -313,13 +363,14 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
         </ul>
       )}
 
-      <ConfirmDayForm
-        accountId={accountId}
-        serverDay={day}
-        hasAnyTrades={trades.length > 0}
-        coverageGapBlocked={coverageGapBlocked}
-        coverageGapCount={coverageGaps.length}
-      />
+      <div className="push">
+        <ConfirmDayForm
+          accountId={accountId}
+          serverDay={day}
+          hasAnyTrades={trades.length > 0}
+          coverageGapBlocked={coverageGapBlocked}
+        />
+      </div>
     </section>
   );
 }

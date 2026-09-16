@@ -33,19 +33,21 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 
 | # | Route | Screen · state | Spec | Mockup | Built |
 |---|---|---|---|---|---|
-| 2.1 | `/trades` | List by day, R bars, pills All / Open / Unconfirmed | 02 §5.2 | S14 | ◐ |
-| 2.2 | `/trades` | Row expanded: fills table, "grouped automatically", split | 02 §5.2 | S15 | ◐ |
-| 2.3 | `/trades` | Join control (adjacent trades), split result | 02 §4.x | new | ◐ |
-| 2.4 | `/trades` | Not-a-decision toggle with explainer | 02 §5.2 | new | ◐ |
-| 2.5 | `/trades` | Empty: no trades yet / no account | 02 §5 | new | ◐ |
+| 2.1 | `/trades` | List by day, R bars, pills All / Open / Unconfirmed | 02 §5.2 | S14 | ● |
+| 2.2 | `/trades` | Row expanded: fills table, "grouped automatically", split | 02 §5.2 | S15 | ● (split stays one `.link` per eligible fill, not the frame's single generic link — `splitTrade` needs an exact boundary fill id, a documented pre-existing judgment call) |
+| 2.3 | `/trades` | Join control (adjacent trades), split result | 02 §4.x | new | ● |
+| 2.4 | `/trades` | Not-a-decision toggle with explainer | 02 §5.2 | new | ● (frame has no dedicated row of its own — it's the `.not-a-decision` label inside frame 2.2's expanded row) |
+| 2.5 | `/trades` | Empty: no trades yet / no account | 02 §5 | new | ● (mockup id 2.4, "Trades · empty" — see 2.3/2.4/2.5 numbering note below) |
 | 2.6 | `/trades/manual-entry` | Pre-entry capture: ambient strip (always on), conviction dots, setup pills, risk stepper, Arm | 04 §5.9, §6.1; 03 §4.4 | S08 | ◐ |
 | 2.7 | `/trades/manual-entry` | Ambient strip states: neutral / watch / breach (weight + edge only) | 04 §6.1 | new | ◐ |
 | 2.8 | `/trades/manual-entry` | Manual trade form (post-close fields allowed) | 08 §5.6 | new | ◐ |
-| 2.9 | `/trades/close-out` | Close out the day: matched / unmatched rows, "Add now" late capture, Day done | 02 §5.2; 06 §4.1, §5.1 | S09 | ◐ |
-| 2.10 | `/trades/close-out` | Coverage gap alert (blocks confirm, "Try again") | 02 §5.2 | new | ◐ |
-| 2.11 | `/trades/close-out` | Trim reason chips (target / trail / discretionary / fear / time / skip) | 02 §5.2 | new | ◐ |
+| 2.9 | `/trades/close-out` | Close out the day: matched / unmatched rows, "Add now" late capture, Day done | 02 §5.2; 06 §4.1, §5.1 | S09 | ● ("Add now" only screenshot-verified in its absent state — no missing-pre-entry-field fixture was seeded this session; the underlying `LateCaptureField` code is pre-existing and untouched) |
+| 2.10 | `/trades/close-out` | Coverage gap alert (blocks confirm, "Try again") | 02 §5.2 | new | ● ("Try again" is a real, honest re-fetch of the same URL, not a fake retry-sync — no `BrokerAdapter` exists to actually retry against) |
+| 2.11 | `/trades/close-out` | Trim reason chips (target / trail / discretionary / fear / time / skip) | 02 §5.2 | new | ● |
 | 2.12 | `/trades/close-out` | No-trade day: "I didn't trade today" | 06 §5.1 | new | ○ |
-| 2.13 | `/trades/close-out` | Ambiguous grouping to resolve before confirm | 06 §4.1 | new | ◐ |
+| 2.13 | `/trades/close-out` | Ambiguous grouping to resolve before confirm | 06 §4.1 | new | ● (proactive, from data already fetched for the coverage-gap check — same pattern; no "Later" option, matching the frame) |
+
+**2.3/2.4/2.5 numbering note**: the mockup's own `trades.html` frame ids run one slot off this table's row numbers — `id="2.3"` in the HTML is captioned "Trade · split/join" (→ this table's row 2.3), `id="2.4"` is captioned "Trades · empty" (→ this table's row 2.5). Row 2.4 (not-a-decision) has no frame id of its own. Cross-checked against the HTML's own `ex__t` captions, not assumed from row order.
 
 ## Batch 3 · rulebook (Module 04 §5.10, §6; Module 03 §5)
 

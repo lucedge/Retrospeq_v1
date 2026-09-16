@@ -6,27 +6,42 @@ import { joinTradesAction } from './actions';
 
 /**
  * Module 02 §4.7's "Manual join | Before freeze only, same block" —
- * one control per adjacent pair inside a `listJoinableTradeGroups` group
- * (`trades-repository.ts`), which already mirrors `joinTrades`'s own
- * eligibility precondition (`confirmed_at is null`, same block). Same
- * direct-Server-Action-call + `router.refresh()` posture as
- * `SplitControl.tsx`, for the identical reason: a join absorbs one trade
- * id into another, so there is no local field to optimistically update.
+ * frame 2.3's `.alert.alert--blocking` card, one per adjacent pair inside
+ * a `listJoinableTradeGroups` group (`trades-repository.ts`), which
+ * already mirrors `joinTrades`'s own eligibility precondition
+ * (`confirmed_at is null`, same block).
+ *
+ * **UI batch 2 restyle**: was a bare ghost button inside a plain
+ * `.rq-card`; now the frame's own `.rq-btn--equal` pair — "Keep
+ * separate" (a real, local, permanent-enough dismissal: doing nothing
+ * already IS "keep separate", there is no write for that state, same
+ * "Later" precedent `GroupingChip.tsx` already established for an
+ * equivalent no-op choice) and "Join" (the same real
+ * `joinTradesAction` write as before). Neither is styled or labelled as
+ * the recommended choice — a join absorbs one trade id into another, so
+ * `router.refresh()` on success rather than a local optimistic update
+ * (identical posture to `SplitControl.tsx`, for the identical reason).
  */
 export function JoinControl({
   tradeIdA,
   tradeIdB,
-  label,
+  description,
+  ariaLabel,
 }: {
   tradeIdA: string;
   tradeIdB: string;
-  label: string;
+  description: string;
+  ariaLabel: string;
 }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [joined, setJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  function handleClick() {
+  if (dismissed || joined) return null;
+
+  function handleJoin() {
     setError(null);
     startTransition(async () => {
       const formData = new FormData();
@@ -41,19 +56,27 @@ export function JoinControl({
         setError('Something went wrong. Please try again.');
         return;
       }
+      setJoined(true);
       router.refresh();
     });
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <button type="button" className="rq-btn rq-btn--ghost" onClick={handleClick} disabled={isPending}>
-        {isPending ? 'Joining…' : `Join with ${label}`}
-      </button>
+    <div className="alert alert--blocking" role="group" aria-label={ariaLabel}>
+      <h2>Join these into one trade?</h2>
+      <p>{description}</p>
+      <div className="rq-btn-row">
+        <button type="button" className="rq-btn rq-btn--equal" onClick={() => setDismissed(true)} disabled={isPending}>
+          Keep separate
+        </button>
+        <button type="button" className="rq-btn rq-btn--equal" onClick={handleJoin} disabled={isPending}>
+          {isPending ? 'Joining…' : 'Join'}
+        </button>
+      </div>
       {error && (
-        <span className="rq-sub" role="alert">
+        <p className="rq-sub" role="alert">
           {error}
-        </span>
+        </p>
       )}
     </div>
   );

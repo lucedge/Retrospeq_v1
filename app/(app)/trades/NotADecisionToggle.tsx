@@ -68,7 +68,7 @@ export function NotADecisionToggle({ tradeId, initialValue }: { tradeId: string;
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="flex items-center gap-2">
+      <label className="not-a-decision">
         <input
           type="checkbox"
           checked={checked}
@@ -76,11 +76,9 @@ export function NotADecisionToggle({ tradeId, initialValue }: { tradeId: string;
           onChange={(e) => handleChange(e.target.checked)}
           aria-describedby={`not-a-decision-hint-${tradeId}`}
         />
-        <span className="rq-body">Not a decision</span>
+        <span>Not a decision</span>
+        <small id={`not-a-decision-hint-${tradeId}`}>Stays in your P&amp;L, excluded from analysis.</small>
       </label>
-      <p id={`not-a-decision-hint-${tradeId}`} className="rq-sub">
-        Stays in your P&amp;L, excluded from analysis.
-      </p>
       {errorMessage && (
         <p className="rq-sub" role="alert">
           {errorMessage}

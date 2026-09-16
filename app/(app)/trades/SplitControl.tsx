@@ -50,12 +50,7 @@ export function SplitControl({ tradeId, fillId }: { tradeId: string; fillId: str
 
   return (
     <span className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        className="rq-btn rq-btn--ghost px-3 py-1.5 text-xs"
-        onClick={handleClick}
-        disabled={isPending}
-      >
+      <button type="button" className="link" onClick={handleClick} disabled={isPending}>
         {isPending ? 'Splitting…' : 'Split here'}
       </button>
       {error && (
