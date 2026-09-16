@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatReviewPeriodLine, fractionTrend } from '../format';
+import { formatReviewPeriodLine, fractionTrend, ringDashOffset, ringText } from '../format';
 
 describe('formatReviewPeriodLine', () => {
   it('a single week (covers_weeks = 1) renders "Week of <periodStart>"', () => {
@@ -38,5 +38,36 @@ describe('fractionTrend', () => {
 
   it('treats a zero-total current fraction as ratio 0, never divides by zero / NaN', () => {
     expect(fractionTrend({ followed: 0, total: 0 }, { followed: 10, total: 20 })).toBe('down');
+  });
+});
+
+describe('ringDashOffset (frame 4.1/4.3/4.4/4.5 .rq-ring completeness)', () => {
+  it('is 0 (full ring) when every traded day was closed out', () => {
+    expect(ringDashOffset(5, 5)).toBe(0);
+    expect(ringDashOffset(3, 3)).toBe(0);
+  });
+
+  it('matches frame 4.4\'s worked example: 6 of 7 renders offset 20, not a bare percentage', () => {
+    expect(ringDashOffset(6, 7)).toBe(20);
+  });
+
+  it('is 138 (fully empty ring) for a zero-trade week — never a fabricated partial fill', () => {
+    expect(ringDashOffset(0, 0)).toBe(138);
+  });
+
+  it('never goes negative or exceeds the dasharray, even for out-of-range inputs', () => {
+    expect(ringDashOffset(9, 5)).toBe(0);
+    expect(ringDashOffset(-1, 5)).toBe(138);
+  });
+});
+
+describe('ringText (frame 4.1/4.3/4.4/4.5 .rq-ring__text)', () => {
+  it('renders "closed/traded" when the week had any trading', () => {
+    expect(ringText(5, 5)).toBe('5/5');
+    expect(ringText(6, 7)).toBe('6/7');
+  });
+
+  it('renders an honest em dash for a zero-trade week, never "0/0"', () => {
+    expect(ringText(0, 0)).toBe('—');
   });
 });

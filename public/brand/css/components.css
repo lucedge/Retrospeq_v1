@@ -905,4 +905,5 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 .strategies,
 .strategy,
 .fields,
-.field-new { flex: 1 1 auto; }
+.field-new,
+.review { flex: 1 1 auto; }

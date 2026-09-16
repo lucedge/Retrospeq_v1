@@ -10,19 +10,34 @@ import { acceptGraduationDecision, deferGraduationDecision } from './actions';
  * (§2.1 story 2.1: "Part 2 decisions, one at a time. Never interleaved").
  *
  * MAPPING §5.1's reference markup to this repo's REAL, already-shipped
- * design-system classes (not the spec's own illustrative BEM names, which
- * were never shipped as CSS — see docs/adr/0040 for the full reasoning):
- *   - `.evidence`/`.decision-actions` containers -> plain Tailwind layout
- *     (`flex flex-col gap-*`), matching `/review/page.tsx`'s own identical
- *     translation of §5.1's Part 1 markup into this repo's real primitives.
- *   - `.cost` -> `.rq-cost`, an ALREADY-SHIPPED component built for exactly
- *     this "trade-off to weigh, not a warning to dismiss" purpose
- *     (`public/brand/css/components.css`'s own header comment on it).
- *   - `button.primary`/`button.ghost` -> `.rq-btn`/`.rq-btn--ghost` — this
- *     repo's real one-primary-per-view pair, not `.rq-btn--equal` (that's
- *     reserved for a truly symmetric, no-default choice like relaxation's
- *     future recommit/adjust pair — graduation's accept/defer is NOT
- *     symmetric, matching §5.1's own `primary`/`ghost` naming).
+ * design-system classes: `.evidence`/`.evidence__statement`/
+ * `.evidence__meta`/`.hint`/`.decision-actions`/`.review`/
+ * `.review--decision`/`.review__step` are ALL real, shipped classes as of
+ * the 2026-09-14 "Design program batch 6" (`components.css`) — docs/adr/
+ * 0040's original claim that these "were never shipped as CSS" is now
+ * STALE (UI batch 4, 2026-09-17); restyled onto the real markup rather
+ * than the Tailwind-only stand-in ADR 0040 originally used. The cost box
+ * deliberately STAYS `.rq-cost` (not frame 4.6's own literal `.cost`
+ * class) — both are byte-identical CSS (`components.css`'s "Cost note"
+ * primitive vs its "Review: decision" section's `.cost`, a duplicate
+ * introduced when the mockup HTML was authored) but `.rq-cost` is the
+ * catalogued, cross-screen-reused primitive (retrospeq-rules.md's
+ * Containers list, also used by `/rules/new`'s preview) — "reuse before
+ * adding," not a second parallel class for the same job. `button.primary`/
+ * `button.ghost` -> `.rq-btn`/`.rq-btn--ghost`, both `--block` per frame
+ * 4.6's own literal markup — this repo's real one-primary-per-view pair,
+ * not `.rq-btn--equal` (that's reserved for a truly symmetric, no-default
+ * choice like relaxation's recommit/adjust pair — graduation's
+ * accept/defer is NOT symmetric, matching §5.1's own `primary`/`ghost`
+ * naming). Frame 4.6 also shows an `.rq-cmp` two-bar comparison
+ * (conviction 4–5 vs "the rest") — deliberately NOT added here:
+ * `GraduationPromptDetail` has no separate structured win-rate fields,
+ * only the pre-rendered `statement` sentence (docs/adr/0035 decision #1,
+ * "statement is pre-rendered copy"), and parsing percentages back out of
+ * that prose to feed a bar chart is exactly what AGENTS.md's "never by
+ * parsing a number back out of prose" rules out (batch 3's own preview-
+ * band lesson). The evidence statement/meta text carries the same
+ * information honestly instead.
  *
  * PROGRESSION TO THE NEXT DECISION — a genuine, load-bearing judgment call
  * (docs/adr/0040 decision 3), found empirically during this slice's own
@@ -111,24 +126,24 @@ export function DecisionCard({
   }
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="dec-h">
-      <p className="rq-sub">
+    <section className="review review--decision" aria-labelledby="dec-h">
+      <p className="review__step">
         Decision <span className="rq-num">{initialIndex}</span> of <span className="rq-num">{initialTotal}</span>
       </p>
       <h1 id="dec-h" className="rq-h1">
         Make {detail.fieldName.toLowerCase()} a rule?
       </h1>
 
-      <div className="rq-card flex flex-col gap-2">
-        <p className="rq-body">{detail.statement}</p>
-        <p className="rq-sub">{detail.meta}</p>
+      <div className="evidence">
+        <p className="evidence__statement">{detail.statement}</p>
+        <p className="evidence__meta">{detail.meta}</p>
       </div>
 
       <div className="rq-cost" role="note">
         <p className="rq-body">{detail.costLine}</p>
       </div>
 
-      <p className="rq-sub">{detail.hint}</p>
+      <p className="hint">{detail.hint}</p>
 
       {state.errorMessage && (
         <p className="rq-sub" role="alert">
@@ -137,18 +152,18 @@ export function DecisionCard({
       )}
 
       {detail.canAccept ? (
-        <div className="flex flex-col gap-2">
-          <button type="button" className="rq-btn" disabled={isPending} onClick={handleAccept}>
+        <div className="push decision-actions">
+          <button type="button" className="rq-btn rq-btn--block" disabled={isPending} onClick={handleAccept}>
             Add the rule
           </button>
-          <button type="button" className="rq-btn rq-btn--ghost" disabled={isPending} onClick={handleDefer}>
+          <button type="button" className="rq-btn rq-btn--ghost rq-btn--block" disabled={isPending} onClick={handleDefer}>
             Not yet
           </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="push decision-actions">
           <p className="rq-sub">{detail.blockedReason}</p>
-          <button type="button" className="rq-btn rq-btn--ghost" disabled={isPending} onClick={handleDefer}>
+          <button type="button" className="rq-btn rq-btn--ghost rq-btn--block" disabled={isPending} onClick={handleDefer}>
             Not yet
           </button>
         </div>

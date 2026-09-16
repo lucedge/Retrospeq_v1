@@ -40,6 +40,18 @@ import { recommitRelaxationDecision, adjustRelaxationDecision } from './actions'
  * submit has already replaced this component server-side by the time the
  * client's own `await` resolves. Only the FAILURE branch can ever paint
  * against a still-mounted instance.
+ *
+ * **UI batch 4 restyle (2026-09-17)**: outer markup switched to the real,
+ * shipped `.review review--decision`/`.evidence`/`.decision-frame`
+ * classes (frame 4.7) in place of ad hoc Tailwind. The button pair
+ * deliberately STAYS `.rq-btn--equal`, not frame 4.7's own literal
+ * `.choice`/`.decision-actions--equal` markup — both are visually
+ * identical (an ink inset-ring, no fill) but `.rq-btn--equal` is the
+ * primitive catalogue's own named, non-negotiable-rule-referenced class
+ * for exactly this "symmetric, no-default choice" job (retrospeq-rules.md
+ * hard rule 4) and ADR 0041's own reconciliation already chose it
+ * deliberately — switching to `.choice` here would relitigate that call
+ * for a purely cosmetic reason, not a fidelity fix.
  */
 
 interface CardState {
@@ -78,20 +90,20 @@ export function RelaxationDecisionCard({
   }
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="rel-h">
-      <p className="rq-sub">
+    <section className="review review--decision" aria-labelledby="rel-h">
+      <p className="review__step">
         Decision <span className="rq-num">{initialIndex}</span> of <span className="rq-num">{initialTotal}</span>
       </p>
       <h1 id="rel-h" className="rq-h1">
         Which one is true?
       </h1>
 
-      <div className="rq-card flex flex-col gap-2">
-        <p className="rq-body">{detail.statement}</p>
-        <p className="rq-sub">{detail.meta}</p>
+      <div className="evidence">
+        <p className="evidence__statement">{detail.statement}</p>
+        <p className="evidence__meta">{detail.meta}</p>
       </div>
 
-      <p className="rq-body">{detail.decisionFrame}</p>
+      <p className="decision-frame">{detail.decisionFrame}</p>
 
       {state.errorMessage && (
         <p className="rq-sub" role="alert">
@@ -100,16 +112,18 @@ export function RelaxationDecisionCard({
       )}
 
       {detail.canDecide && detail.currentLabel !== null && detail.newLabel !== null ? (
-        <div className="rq-btn-row">
-          <button type="button" className="rq-btn rq-btn--equal" disabled={isPending} onClick={handleRecommit} data-action="recommit">
-            Keep {detail.currentLabel}
-          </button>
-          <button type="button" className="rq-btn rq-btn--equal" disabled={isPending} onClick={handleAdjust} data-action="adjust">
-            Change to {detail.newLabel}
-          </button>
+        <div className="push decision-actions">
+          <div className="rq-btn-row">
+            <button type="button" className="rq-btn rq-btn--equal" disabled={isPending} onClick={handleRecommit} data-action="recommit">
+              Keep {detail.currentLabel}
+            </button>
+            <button type="button" className="rq-btn rq-btn--equal" disabled={isPending} onClick={handleAdjust} data-action="adjust">
+              Change to {detail.newLabel}
+            </button>
+          </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="push decision-actions">
           <p className="rq-sub">{detail.blockedReason}</p>
           <Link href="/review" className="rq-btn rq-btn--ghost">
             Back to your review

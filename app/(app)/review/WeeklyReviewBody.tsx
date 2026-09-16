@@ -6,7 +6,7 @@ import type { WeeklyReadPayload } from '@/lib/review/weekly-read-payload';
 import type { FindingPayload } from '@/lib/analytics/findings-payload';
 import type { RuleChangeAnnotation } from '@/lib/rules/rule-change-annotations';
 import { formatRMultiple } from '../trades/format';
-import { fractionTrend } from './format';
+import { fractionTrend, ringDashOffset, ringText } from './format';
 import { closeWeeklyReview, type CloseWeeklyReviewResult } from './actions';
 
 /**
@@ -46,6 +46,7 @@ export function WeeklyReviewBody({
   outcome,
   consistency,
   adherence,
+  coversWeeks,
   ruleChangeAnnotations,
   findings,
   pendingCount,
@@ -54,6 +55,7 @@ export function WeeklyReviewBody({
   outcome: WeeklyReadPayload['outcome'];
   consistency: WeeklyReadPayload['consistency'];
   adherence: WeeklyReadPayload['adherence'];
+  coversWeeks: number;
   ruleChangeAnnotations: RuleChangeAnnotation[];
   findings: WeeklyReadPayload['findings'];
   pendingCount: number;
@@ -69,13 +71,13 @@ export function WeeklyReviewBody({
     // /dashboard — nothing else on this screen, the read/decisions panels
     // above are gone.
     return (
-      <section className="review review--close flex flex-col gap-3" aria-labelledby="review-close-h" role="status">
-        <p className="review__step rq-sub">Done</p>
+      <section className="review review--close" aria-labelledby="review-close-h" role="status">
+        <p className="review__step">Done</p>
         <h1 id="review-close-h" className="rq-h1">
           Week closed.
         </h1>
-        <p className="review__summary rq-body">{state.closeSummary}</p>
-        <p className="review__next rq-sub">Next review Sunday. Nothing to do until then.</p>
+        <p className="review__summary">{state.closeSummary}</p>
+        <p className="review__next">Next review Sunday. Nothing to do until then.</p>
         <Link href="/dashboard" className="rq-btn rq-btn--ghost">
           Back to home
         </Link>
@@ -84,92 +86,141 @@ export function WeeklyReviewBody({
   }
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="review-h">
-      <div className="flex flex-col gap-1">
-        <p className="rq-sub">{periodLine}</p>
-        <h1 id="review-h" className="rq-h1">
-          <span className="rq-num">{outcome.tradeCount}</span> {outcome.tradeCount === 1 ? 'trade' : 'trades'} ·{' '}
-          <span className="rq-num">{outcome.daysTradedCount}</span> {outcome.daysTradedCount === 1 ? 'day' : 'days'} ·{' '}
-          <span className="rq-num">{formatRMultiple(outcome.totalR)}</span>
-        </h1>
-      </div>
+    <section className="review review--read" aria-labelledby="review-h">
+      <p className="review__period">{periodLine}</p>
+      <h1 id="review-h" className="review__outcome">
+        <span className="rq-num">{outcome.tradeCount}</span> {outcome.tradeCount === 1 ? 'trade' : 'trades'} ·{' '}
+        <span className="rq-num">{outcome.daysTradedCount}</span> {outcome.daysTradedCount === 1 ? 'day' : 'days'}
+        {outcome.tradeCount > 0 ? (
+          <>
+            {' '}
+            · <span className="rq-num">{formatRMultiple(outcome.totalR)}</span>
+          </>
+        ) : null}
+      </h1>
 
       <ConsistencyPanel daysTraded={consistency.daysTraded} daysClosed={consistency.daysClosed} streakWeeks={consistency.streakWeeks} />
 
-      <AdherencePanel adherence={adherence} ruleChangeAnnotations={ruleChangeAnnotations} />
+      <AdherencePanel adherence={adherence} coversWeeks={coversWeeks} ruleChangeAnnotations={ruleChangeAnnotations} />
 
       <FindingsPanel findings={findings} />
 
-      <div className="flex flex-col gap-2">
-        {pendingCount > 0 ? (
-          <>
-            {/* Module 06 Slice 6: wired for real — Slice 5 shipped this
-                disabled ("Decisions and closing out this review aren't
-                available yet"). Links to `/review/decisions`, which
-                currently only renders GRADUATION-kind decisions (see that
-                route's own `actions.ts` header) — a pending count that
-                happens to be entirely relaxation/promotion/retirement/
-                detection prompts (no UI yet for any of those) lands on
-                that screen's own honest "Nothing to decide right now"
-                state rather than a broken/empty one. */}
-            <Link href="/review/decisions" className="rq-btn">
-              {pendingCount} {pendingCount === 1 ? 'decision' : 'decisions'}
-            </Link>
-            <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
-          </>
-        ) : (
-          // Module 06 Part 3 "close" — every prompt for this review has
-          // been decided (pending count is zero), so closing is a real
-          // action.
-          <form action={formAction}>
-            {state?.success === false && state.error && (
-              <p className="rq-sub" role="alert">
-                {state.error.user_message}
-              </p>
-            )}
-            {state?.success && state.status === 'pending_prompts' && (
-              <p className="rq-sub" role="alert">
-                New decisions appeared since this loaded — review them before closing.
-              </p>
-            )}
-            <button type="submit" className="rq-btn" disabled={pending}>
-              {pending ? 'Closing…' : 'Week closed'}
-            </button>
-          </form>
-        )}
-      </div>
+      {pendingCount > 0 ? (
+        <div className="flex flex-col gap-2">
+          {/* Module 06 Slice 6: wired for real — Slice 5 shipped this
+              disabled ("Decisions and closing out this review aren't
+              available yet"). Links to `/review/decisions`, which
+              currently only renders GRADUATION-kind decisions (see that
+              route's own `actions.ts` header) — a pending count that
+              happens to be entirely relaxation/promotion/retirement/
+              detection prompts (no UI yet for any of those) lands on
+              that screen's own honest "Nothing to decide right now"
+              state rather than a broken/empty one. */}
+          <Link href="/review/decisions" className="rq-btn rq-btn--block">
+            {pendingCount} {pendingCount === 1 ? 'decision' : 'decisions'}
+          </Link>
+          <p className="rq-sub">Closing out this review isn&apos;t available yet.</p>
+        </div>
+      ) : (
+        // Module 06 Part 3 "close" — every prompt for this review has
+        // been decided (pending count is zero), so closing is a real
+        // action.
+        <form action={formAction} className="flex flex-col gap-2">
+          {state?.success === false && state.error && (
+            <p className="rq-sub" role="alert">
+              {state.error.user_message}
+            </p>
+          )}
+          {state?.success && state.status === 'pending_prompts' && (
+            <p className="rq-sub" role="alert">
+              New decisions appeared since this loaded — review them before closing.
+            </p>
+          )}
+          <button type="submit" className="rq-btn rq-btn--block" disabled={pending}>
+            {pending ? 'Closing…' : 'Week closed'}
+          </button>
+        </form>
+      )}
+
+      {/* §4.9/frame 4.13 — a quiet text link, not an `.rq-btn` (this
+          screen's only button is the CTA above; the monthly trend is a
+          separate read with zero prompts of its own, see `/review/month`'s
+          own header). Read-state only — frame 4.12's own close
+          confirmation above has no such link, only "Back to home". */}
+      <p className="rq-sub">
+        <Link href="/review/month">See the 3-month trend</Link>
+      </p>
     </section>
   );
 }
 
+/**
+ * Frame 4.1/4.3/4.4/4.5's Consistency panel: a `.rq-ring` completeness
+ * ring (real geometry, `format.ts`'s `ringDashOffset`/`ringText` — never
+ * a re-derived percentage) beside the lead/meta copy, laid out as the
+ * frame's own row (its literal `style="flex-direction:row;align-items:
+ * center;gap:14px"` — transcribed as-is rather than a Tailwind
+ * equivalent, since it deliberately overrides `.panel`'s default column
+ * layout for this one instance only).
+ */
 function ConsistencyPanel({ daysTraded, daysClosed, streakWeeks }: { daysTraded: number; daysClosed: number; streakWeeks: number }) {
+  const offset = ringDashOffset(daysClosed, daysTraded);
+  const ringLabel = ringText(daysClosed, daysTraded);
+  const missedDays = daysTraded - daysClosed;
+
   return (
-    <section className="rq-card flex flex-col gap-2" aria-labelledby="p-consistency">
-      <h2 id="p-consistency" className="rq-h2">
-        Consistency
-      </h2>
-      <p className="rq-body">
-        {daysTraded > 0 ? (
-          <>
-            <span className="rq-num">{daysClosed}</span> of <span className="rq-num">{daysTraded}</span> days closed out.
-          </>
-        ) : daysClosed > 0 ? (
-          <>
-            <span className="rq-num">{daysClosed}</span> {daysClosed === 1 ? 'day' : 'days'} closed out — no trading this period.
-          </>
-        ) : (
-          'No trading days this week.'
-        )}
-      </p>
-      <p className="rq-sub">
-        {streakWeeks > 0 ? (
-          <>
-            <span className="rq-num">{streakWeeks}</span>-week streak intact.
-          </>
-        ) : (
-          'Streak not started yet.'
-        )}
-      </p>
+    <section className="panel" style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }} aria-labelledby="p-consistency">
+      <div className="rq-ring">
+        <svg width="52" height="52" aria-hidden="true">
+          <circle cx="26" cy="26" r="22" fill="none" stroke="var(--rq-mark-dim)" strokeWidth="4" />
+          <circle
+            cx="26"
+            cy="26"
+            r="22"
+            fill="none"
+            stroke="var(--rq-mark)"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeDasharray="138"
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <span className="rq-ring__text rq-num">{ringLabel}</span>
+      </div>
+      <div>
+        <h2 id="p-consistency" className="panel__title">
+          Consistency
+        </h2>
+        <p className="panel__lead">
+          {daysTraded > 0 ? (
+            <>
+              <span className="rq-num">{daysClosed}</span> of <span className="rq-num">{daysTraded}</span> days closed out.
+            </>
+          ) : (
+            "You didn't trade this week."
+          )}
+        </p>
+        <p className="panel__meta">
+          {daysTraded === 0
+            ? 'Streak intact — nothing was owed.'
+            : missedDays > 0 && streakWeeks > 0
+              ? (
+                  <>
+                    Streak intact — <span className="rq-num">{missedDays}</span> missed {missedDays === 1 ? 'day' : 'days'} used your
+                    grace.
+                  </>
+                )
+              : streakWeeks > 0
+                ? (
+                    <>
+                      <span className="rq-num">{streakWeeks}</span>-week streak intact.
+                    </>
+                  )
+                : (
+                    'Streak not started yet.'
+                  )}
+        </p>
+      </div>
     </section>
   );
 }
@@ -206,20 +257,30 @@ function RuleChangeAnnotations({ annotations }: { annotations: RuleChangeAnnotat
   );
 }
 
+/**
+ * Non-negotiable (design-decisions §6): hard and soft adherence are NEVER
+ * blended into one figure — always two separate `.panel__lead` lines, and
+ * the `.rq-cmp` comparison bar below is soft-only (frame 4.1/4.4's own
+ * reference markup never plots hard rules on it — hard is a bare "N of
+ * N", it doesn't need a trend bar since a followed hard rule is simply
+ * the entitlement floor, not something to track drifting over time).
+ */
 function AdherencePanel({
   adherence,
+  coversWeeks,
   ruleChangeAnnotations,
 }: {
   adherence: WeeklyReadPayload['adherence'];
+  coversWeeks: number;
   ruleChangeAnnotations: RuleChangeAnnotation[];
 }) {
   if (adherence.status === 'insufficient_history') {
     return (
-      <section className="rq-card flex flex-col gap-2" aria-labelledby="p-adherence">
-        <h2 id="p-adherence" className="rq-h2">
+      <section className="panel" aria-labelledby="p-adherence">
+        <h2 id="p-adherence" className="panel__title">
           Adherence
         </h2>
-        <p className="rq-sub">Not enough data yet.</p>
+        <p className="panel__meta">Nothing to evaluate.</p>
         <RuleChangeAnnotations annotations={ruleChangeAnnotations} />
       </section>
     );
@@ -227,27 +288,66 @@ function AdherencePanel({
 
   const { hard, soft, priorSoft, attribution } = adherence;
   const trend = priorSoft ? fractionTrend(soft, priorSoft) : null;
+  // Frame 4.1 says "This week"/"Last week"; frame 4.4's own multi-week
+  // catch-up review says "These weeks"/"Before" — never "This week" for a
+  // period that covers more than one.
+  const currentLabel = coversWeeks > 1 ? 'These weeks' : 'This week';
+  const priorLabel = coversWeeks > 1 ? 'Before' : 'Last week';
+  const currentPct = soft.total > 0 ? Math.round((soft.followed / soft.total) * 100) : 0;
+  const priorPct = priorSoft && priorSoft.total > 0 ? Math.round((priorSoft.followed / priorSoft.total) * 100) : 0;
 
   return (
-    <section className="rq-card flex flex-col gap-2" aria-labelledby="p-adherence">
-      <h2 id="p-adherence" className="rq-h2">
+    <section className="panel" aria-labelledby="p-adherence">
+      <h2 id="p-adherence" className="panel__title">
         Adherence
       </h2>
-      <p className="rq-body">
+      <p className="panel__lead">
         Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
       </p>
-      <p className="rq-body">
-        Soft: <span className="rq-num">{soft.followed}</span> of <span className="rq-num">{soft.total}</span>
-        {priorSoft && trend !== null ? (
-          <>
-            , {trend} from <span className="rq-num">{priorSoft.followed}</span> of <span className="rq-num">{priorSoft.total}</span>
-          </>
-        ) : null}
-        .
-      </p>
+      {soft.total > 0 ? (
+        <p className="panel__lead">
+          Soft: <span className="rq-num">{soft.followed}</span> of <span className="rq-num">{soft.total}</span>
+          {priorSoft && trend !== null ? (
+            <>
+              , {trend} from <span className="rq-num">{priorSoft.followed}</span> of <span className="rq-num">{priorSoft.total}</span>
+            </>
+          ) : null}
+          .
+        </p>
+      ) : (
+        // Frame 4.3's own week-two copy — a trader with no soft rules
+        // authored yet has nothing to trend, and "0 of 0" would read as a
+        // fabricated fraction rather than an honest absence.
+        <p className="panel__meta">Soft rules appear once you have one.</p>
+      )}
+      {priorSoft && soft.total > 0 ? (
+        <div className="rq-cmp">
+          <div className="rq-cmp__row hot">
+            <span className="rq-cmp__lbl">{currentLabel}</span>
+            <div className="rq-cmp__track">
+              <i className="rq-cmp__fill" style={{ width: `${currentPct}%` }} />
+            </div>
+            <span className="rq-cmp__val rq-num">{soft.followed}</span>
+          </div>
+          <div className="rq-cmp__row">
+            <span className="rq-cmp__lbl">{priorLabel}</span>
+            <div className="rq-cmp__track">
+              <i className="rq-cmp__fill" style={{ width: `${priorPct}%` }} />
+            </div>
+            <span className="rq-cmp__val rq-num">{priorSoft.followed}</span>
+          </div>
+        </div>
+      ) : null}
       {attribution && (
-        <p className="rq-sub">
-          {attribution.rendered ?? 'One rule'} accounts for <span className="rq-num">{attribution.count}</span> of the{' '}
+        <p className="panel__meta">
+          {/* The rendered rule sentence is a complete sentence and ends in
+              a full stop, so gluing the clause on produced "Never risk
+              more than 1% per trade. accounts for 6 of the 14 soft
+              breaks." The frame uses a short noun phrase ("Your risk
+              cap"); we keep the trader's own rule wording — the honest
+              identifier — and just drop its terminal punctuation. */}
+          {(attribution.rendered ?? 'One rule').replace(/[.!?]+$/, '')} accounts for{' '}
+          <span className="rq-num">{attribution.count}</span> of the{' '}
           <span className="rq-num">{attribution.ofBreaks}</span> {attribution.severity} breaks.
         </p>
       )}
@@ -258,8 +358,8 @@ function AdherencePanel({
 
 function FindingsPanel({ findings }: { findings: WeeklyReadPayload['findings'] }) {
   return (
-    <section className="rq-card flex flex-col gap-3" aria-labelledby="p-findings">
-      <h2 id="p-findings" className="rq-h2">
+    <section className="panel" aria-labelledby="p-findings">
+      <h2 id="p-findings" className="panel__title">
         What your trades say
       </h2>
       {findings.length === 0 ? (
@@ -270,7 +370,7 @@ function FindingsPanel({ findings }: { findings: WeeklyReadPayload['findings'] }
           <p className="finding__statement">Not enough data yet.</p>
         </div>
       ) : (
-        <ul className="findings flex flex-col gap-3">
+        <ul className="findings">
           {findings.map((f) => (
             <li key={`${f.strategyId}:${f.fieldId}`}>
               <FindingCard fieldName={f.fieldName} payload={f.payload} />

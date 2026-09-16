@@ -101,16 +101,13 @@ export default async function WeeklyReviewPage() {
     // on screen until the next period is ready to read.
     if (result.lastCloseSummary !== null) {
       return (
-        <section
-          className="review review--close flex flex-col gap-3"
-          aria-labelledby="review-close-h"
-        >
-          <p className="review__step rq-sub">Done</p>
+        <section className="review review--close" aria-labelledby="review-close-h">
+          <p className="review__step">Done</p>
           <h1 id="review-close-h" className="rq-h1">
             Week closed.
           </h1>
-          <p className="review__summary rq-body">{result.lastCloseSummary}</p>
-          <p className="review__next rq-sub">
+          <p className="review__summary">{result.lastCloseSummary}</p>
+          <p className="review__next">
             Next review Sunday. Nothing to do until then.
           </p>
           <Link href="/dashboard" className="rq-btn rq-btn--ghost">
@@ -181,18 +178,15 @@ export default async function WeeklyReviewPage() {
     // `useActionState` result card, rendered immediately after a real
     // submit — not this branch.
     return (
-      <section
-        className="review review--close flex flex-col gap-3"
-        aria-labelledby="review-h"
-      >
-        <p className="review__step rq-sub">Done</p>
+      <section className="review review--close" aria-labelledby="review-h">
+        <p className="review__step">Done</p>
         <h1 id="review-h" className="rq-h1">
           Week closed.
         </h1>
-        <p className="review__summary rq-body">
+        <p className="review__summary">
           {closeSummary ?? "Nothing changed."}
         </p>
-        <p className="review__next rq-sub">
+        <p className="review__next">
           Next review Sunday. Nothing to do until then.
         </p>
         <Link href="/dashboard" className="rq-btn rq-btn--ghost">
@@ -209,24 +203,15 @@ export default async function WeeklyReviewPage() {
   // Server Component — `WeeklyReviewBody` receives already-resolved props,
   // it performs no fetch of its own.
   return (
-    <>
-      <WeeklyReviewBody
-        periodLine={periodLine}
-        outcome={outcome}
-        consistency={consistency}
-        adherence={adherence}
-        ruleChangeAnnotations={ruleChangeAnnotations ?? []}
-        findings={findings}
-        pendingCount={pendingCount}
-      />
-      {/* §4.9/frame 4.13 -- a quiet text link, not an `.rq-btn` (this
-          screen's only button is Part 2's "N decisions" submit, rendered
-          inside `WeeklyReviewBody` above; the monthly trend is a separate
-          read with zero prompts of its own, see `/review/month`'s own
-          header). */}
-      <p className="rq-sub">
-        <Link href="/review/month">See the 3-month trend</Link>
-      </p>
-    </>
+    <WeeklyReviewBody
+      periodLine={periodLine}
+      outcome={outcome}
+      consistency={consistency}
+      adherence={adherence}
+      coversWeeks={coversWeeks}
+      ruleChangeAnnotations={ruleChangeAnnotations ?? []}
+      findings={findings}
+      pendingCount={pendingCount}
+    />
   );
 }

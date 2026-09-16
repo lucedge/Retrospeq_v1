@@ -129,7 +129,10 @@ describe('/review/decisions — Part 2, graduation + relaxation', () => {
     expect(html).toContain('Add the rule');
     expect(html).toContain('Not yet');
     expect(html).not.toContain('rq-btn--equal');
-    expect((html.match(/class="rq-btn"/g) ?? []).length).toBe(1); // exactly one primary
+    // frame 4.6's own literal markup: both buttons are `--block` (full-width,
+    // stacked); still exactly one PRIMARY (no `--ghost`) among them.
+    expect((html.match(/class="rq-btn rq-btn--block"/g) ?? []).length).toBe(1);
+    expect((html.match(/class="rq-btn rq-btn--ghost rq-btn--block"/g) ?? []).length).toBe(1);
     expect(html).toContain('rq-cost'); // §4.6's explore/exploit cost, in the shipped .rq-cost component
     expect(html).toContain('rq-num'); // Decision N of M is tabular-numeral
   });

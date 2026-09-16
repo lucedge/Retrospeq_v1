@@ -78,19 +78,19 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 
 | # | Route | Screen · state | Spec | Mockup | Built |
 |---|---|---|---|---|---|
-| 4.1 | `/review` | Part 1 the read: outcome line, Consistency, Adherence, ≤3 findings, "N decisions" | 06 §5.1 | S10 | ◐ |
+| 4.1 | `/review` | Part 1 the read: outcome line, Consistency, Adherence, ≤3 findings, "N decisions" | 06 §5.1 | S10 | ● (2026-09-17: real `.review`/`.review__outcome`/`.panel`/`.rq-ring`/`.rq-cmp` markup; ring geometry + adherence-trend bars from new `ringDashOffset`/`ringText` in `format.ts`, screenshot-verified light+dark against a seeded 14-trade/2-decision week) |
 | 4.2 | `/review` | Zero-prompt week (normal case): "Week closed" | 06 §5.1 | new | ● close submit works |
-| 4.3 | `/review` | Week two: 3 of 3, 9 of 9, "about 22 more trades" | 06 §4.8 | new | ◐ |
-| 4.4 | `/review` | covers_weeks = 2 after a missed week | 06 §4.8 | new | ◐ |
-| 4.5 | `/review` | No-trade week: "Streak intact — nothing was owed" | 07 §6.1 | new | ◐ |
-| 4.6 | `/review/decisions` | Graduation: evidence, cost, "Add the rule" / "Not yet" | 06 §5.1 | S11 | ◐ |
-| 4.7 | `/review/decisions` | Relaxation: "Which one is true?" equal pair | 06 §5.1 | S12 | ◐ |
+| 4.3 | `/review` | Week two: 3 of 3, 9 of 9, "about 22 more trades" | 06 §4.8 | new | ● (2026-09-17: verified against a seeded 5-trade/3-day week — "Hard rules: 9 of 9." + "Soft rules appear once you have one." real branch, no fabricated "0 of 0"; the "about 22 more trades" line itself is a different, pre-existing `FindingMeta` remaining-count branch not exercised by this fixture) |
+| 4.4 | `/review` | covers_weeks = 2 after a missed week | 06 §4.8 | new | ● (2026-09-17: seeded a real completed-review cursor + 2 weeks of `week_completeness`/`adherence_weekly`; ring 6/7, "Streak intact — 1 missed day used your grace" (new copy, inferred from `daysTraded>daysClosed` + a live streak, disclosed in `WeeklyReviewBody.tsx`), rq-cmp "These weeks"/"Before" labels) |
+| 4.5 | `/review` | No-trade week: "Streak intact — nothing was owed" | 07 §6.1 | new | ● (2026-09-17: verified against a real 0-trade week — outcome line omits the R clause entirely rather than a fabricated "0.0R", ring renders "—" not "0/0") |
+| 4.6 | `/review/decisions` | Graduation: evidence, cost, "Add the rule" / "Not yet" | 06 §5.1 | S11 | ◐ (2026-09-17: `.review review--decision`/`.evidence`/`.rq-cost`/`.hint`/`.push decision-actions` real markup, both buttons `--block` per frame, screenshot-verified against a real seeded finding. **Gap: frame's `.rq-cmp` before/after win-rate bars not built** — `GraduationPromptDetail` has no structured segment-vs-baseline rate pair, only the pre-rendered `statement` sentence (docs/adr/0035 decision #1); parsing a percentage back out of that prose was rejected per AGENTS.md, same call batch 3 made for preview bands) |
+| 4.7 | `/review/decisions` | Relaxation: "Which one is true?" equal pair | 06 §5.1 | S12 | ◐ (2026-09-17: `.review review--decision`/`.evidence`/`.decision-frame` real markup, screenshot-verified against a real seeded rule (21 live `rule_evaluations`, 11 broken, real `percentile_cont` median); `.rq-btn--equal` kept over frame's literal `.choice` (byte-identical CSS, `.rq-btn--equal` is the catalogued primitive + ADR 0041's own deliberate mapping — not relitigated). **Gap: frame's `.rq-hist` weekly distribution + threshold line not built** — `RelaxationPromptDetail`/`fetchLiveRelaxationFacts` has no per-week bucketed observed-value history, only the window's aggregate applicable/broken counts and one median) |
 | 4.8 | `/review/decisions` | Promotion (soft → hard) | 06 §4.3 | new | ● |
 | 4.9 | `/review/decisions` | Retirement: decay / condition | 06 §4.3 | new | ● |
 | 4.10 | `/review/decisions` | Detection → rule proposal (pattern with outcome) | 06 §4.3; 05 §5.1 | new | ◐ built; not offered until cross-trade operands are computable |
 | 4.11 | `/review/decisions` | Defer / deferred backlog | 06 §6.2 | new | ● built; expiry sweep runs at `/review` materialisation time, not a scheduler (infra gap) |
 | 4.12 | `/review` | Part 3 close: "Week closed. One rule added. Next review Sunday." | 06 §5.1 | S13 | ● (streak strip omitted) |
-| 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ◐ built, compute-on-view (no scheduler); "edge stability" reuses Module 05's graduation-vs-current decay tracking, not a real per-month historical snapshot (none exists) |
+| 4.13 | `/review/month` | Monthly: trend only, zero prompts | 06 §4.9 | new | ◐ (2026-09-17: markup already matched the frame pre-batch-4, re-verified light+dark against a real 3-month fixture — sparkline, `.rq-cmp` edge-stability and strategy-weight rows all populated for the first time this batch, no code change needed. Still ◐ for the same pre-existing reason: compute-on-view (no scheduler), "edge stability" reuses Module 05's graduation-vs-current decay tracking, not a real per-month historical snapshot) |
 | 4.14 | notification | The one weekly notification (push + email) | 06 §4.10; 07 §5.6 | email template | ◐ |
 
 ## Batch 5 · performance (Module 08 §7.2; brand S17)

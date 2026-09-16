@@ -30,6 +30,27 @@ export function formatReviewPeriodLine(periodStart: string, periodEnd: string, c
   return `${formatServerDayLong(periodStart)} – ${formatServerDayLong(periodEnd)}`;
 }
 
+/** §5.1 frame 4.1/4.3/4.4/4.5's `.rq-ring` — days-closed-of-days-traded as
+ *  a completeness ring, `dasharray="138"` fixed (the mockup's own r=22
+ *  circle: `2 * PI * 22 ≈ 138.2`, never recomputed here). `daysTraded`
+ *  and `daysClosed` are already-materialised integers from
+ *  `PeriodConsistency` — this is presentation-only arithmetic on numbers
+ *  this screen already has, not a new statistic. A zero-trade week
+ *  (`daysTraded === 0`) renders a full, un-filled ring (`dashoffset ===
+ *  138`), matching frame 4.5's own reference SVG exactly. */
+export function ringDashOffset(daysClosed: number, daysTraded: number): number {
+  const ratio = daysTraded > 0 ? daysClosed / daysTraded : 0;
+  return 138 - Math.round(138 * Math.min(1, Math.max(0, ratio)));
+}
+
+/** The ring's own centred label — "5/5" (frame 4.1/4.3), "—" for a
+ *  zero-trade week (frame 4.5's own literal text) rather than a
+ *  fabricated "0/0". */
+export function ringText(daysClosed: number, daysTraded: number): string {
+  if (daysTraded === 0) return '—';
+  return `${daysClosed}/${daysTraded}`;
+}
+
 /** Which direction a fraction moved between two periods — "up"/"down"/
  *  "unchanged", used for the Adherence panel's "up from X of Y" trend
  *  clause (§5.1). Text-only, per AGENTS.md's "direction is geometry ...
