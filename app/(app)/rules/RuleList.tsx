@@ -287,12 +287,22 @@ function eligibilityLine(
     case 'RULE_INSUFFICIENT_COMPLIANCE':
       return {
         key: code,
-        node: (
-          <>
-            <span className="rq-num">{detail.complianceRatio !== null ? (detail.complianceRatio * 100).toFixed(1) : '0'}%</span>{' '}
-            followed — needs <span className="rq-num">95%</span>
-          </>
-        ),
+        node:
+          // `complianceRatio === null` means nothing has been evaluated
+          // yet — rendering it as `0%` invents a statistic and reads as
+          // "you followed none of them" (qa FAIL, 2026-09-17; the sibling
+          // half of this bug, the ✓, was fixed in `gateMet` above but the
+          // NUMBER kept lying).
+          detail.complianceRatio === null ? (
+            <>
+              Nothing evaluated yet — needs <span className="rq-num">95%</span>
+            </>
+          ) : (
+            <>
+              <span className="rq-num">{(detail.complianceRatio * 100).toFixed(1)}%</span> followed — needs{' '}
+              <span className="rq-num">95%</span>
+            </>
+          ),
       };
     case 'RULE_RECENT_BREAK':
       return {
