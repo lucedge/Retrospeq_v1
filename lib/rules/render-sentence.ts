@@ -1,5 +1,5 @@
 import { Decimal } from 'decimal.js';
-import { getOperand, type OperandType, type RuleOperator } from './operand-catalogue';
+import { getOperand, type OperandCatalogueEntry, type OperandType, type RuleOperator } from './operand-catalogue';
 
 /**
  * Module 04 (Rulebook & Evaluation) §3.1 / §5.1 — sentence rendering.
@@ -125,9 +125,27 @@ function substituteTemplate(template: string, type: OperandType, value: unknown)
  * returning `undefined`/a placeholder on any failure — a sentence that
  * cannot be rendered must never be silently saved as blank text (§3.1:
  * "the sentence, stored for display and audit").
+ *
+ * `resolvedOperand` (custom-field-operand slice, 2026-09-16, ADR 0046):
+ * an already-resolved `OperandCatalogueEntry`, used INSTEAD of the
+ * internal `getOperand(operandId)` static-catalogue lookup when supplied.
+ * A `field:<field_id>` operand id is never in the static catalogue at all
+ * (it is resolved per-user, per-request, by `field-operand-resolver.ts`)
+ * — its caller (`create-rule-internal.ts`, `app/(app)/rules/actions.ts`'s
+ * `editRule`) already has the resolved entry in hand from that same
+ * resolution step, and passes it straight through here rather than this
+ * function trying (and failing) to re-derive it from the static catalogue
+ * a second time. Every EXISTING call site (5, at last count — none of
+ * them touched by this change) omits this argument and is completely
+ * unaffected: `getOperand(operandId)` runs exactly as before.
  */
-export function renderSentence(operandId: string, op: RuleOperator, value: unknown): string {
-  const operand = getOperand(operandId);
+export function renderSentence(
+  operandId: string,
+  op: RuleOperator,
+  value: unknown,
+  resolvedOperand?: OperandCatalogueEntry,
+): string {
+  const operand = resolvedOperand ?? getOperand(operandId);
   if (!operand) {
     throw new RenderSentenceError('UNKNOWN_OPERAND', `renderSentence: unknown operand_id "${operandId}".`);
   }

@@ -7,8 +7,13 @@ import {
   UnknownOperandError,
   InvalidOperatorForOperandError,
   InvalidRuleValueError,
-  validateOperandOpValue,
 } from '@/lib/rules/validate-operand-op-value';
+import {
+  FieldOperandNotFoundError,
+  FieldOperandScopeMismatchError,
+  FieldOperandTypeNotAuthorableError,
+} from '@/lib/rules/field-operand-catalogue';
+import { resolveAndValidateOperand } from '@/lib/rules/resolve-operand';
 import { OperandUnavailableError, checkTierAvailable } from '@/lib/rules/validate-tier';
 import { TightenOnlyViolationError, checkTightenOnly } from '@/lib/rules/validate-tighten-only';
 import { UnsatisfiableRuleError, checkSatisfiability } from '@/lib/rules/validate-satisfiability';
@@ -140,6 +145,17 @@ function structuralValidationErrorState(err: unknown): RuleActionState {
   if (err instanceof RenderSentenceError) {
     return { error: { code: err.code, user_message: "We couldn't build a sentence for that rule. Please try a different value.", retryable: false } };
   }
+  // Custom-field-operand slice (ADR 0046) — the field half of the same
+  // write-time structural-validation boundary this function already owns.
+  if (err instanceof FieldOperandNotFoundError) {
+    return { error: { code: err.code, user_message: "We couldn't find that field, or it's no longer available.", retryable: false } };
+  }
+  if (err instanceof FieldOperandTypeNotAuthorableError) {
+    return { error: { code: err.code, user_message: "That field's type can't be used in a rule.", retryable: false } };
+  }
+  if (err instanceof FieldOperandScopeMismatchError) {
+    return { error: { code: err.code, user_message: "That field isn't available to this strategy.", retryable: false } };
+  }
   throw err;
 }
 
@@ -159,10 +175,15 @@ export async function createRuleInternal(userId: string, input: CreateRuleIntern
 
   // Step 6 — operand_id whitelist, op-for-type, phrasing-renderability,
   // and declared-bounds validation, FIRST — §8.3 ("Unknown operand_id
-  // rejected at write and at evaluate").
+  // rejected at write and at evaluate"). `resolveAndValidateOperand`
+  // (ADR 0046) dispatches to the custom-field-operand pipeline for a
+  // `field:<field_id>` id (which additionally needs to know the
+  // candidate rule's own scope/scopeId to check "usable by that
+  // strategy"), or falls through unchanged to the static catalogue for
+  // every other id.
   let operand: OperandCatalogueEntry;
   try {
-    operand = validateOperandOpValue(operandId, op, value);
+    operand = await resolveAndValidateOperand(userId, operandId, op, value, scope, scopeId);
   } catch (err) {
     return structuralValidationErrorState(err);
   }
@@ -251,7 +272,7 @@ export async function createRuleInternal(userId: string, input: CreateRuleIntern
   // Render, then save — §5.1's final two pipeline steps.
   let rendered: string;
   try {
-    rendered = renderSentence(operandId, op, value);
+    rendered = renderSentence(operandId, op, value, operand);
   } catch (err) {
     return structuralValidationErrorState(err);
   }

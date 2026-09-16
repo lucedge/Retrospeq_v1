@@ -1756,3 +1756,74 @@ export async function fetchDefaultStrategySeedFieldIds(userId: string): Promise<
     return res.rows.map((row) => row.id);
   });
 }
+
+// =======================================================================
+// Custom-field rule operands (design-decisions.md §17 "Custom fields as
+// rule operands", owner 2026-09-15) — the ONE read `lib/rules/field-
+// operand-resolver.ts` needs to resolve a `field:<field_id>` operand id
+// into a real, owned field, at BOTH write time (authoring) and evaluate
+// time (freeze). Deliberately a NEW, narrow read rather than a reuse of
+// `fetchFieldForLifecycleOp` above — that function's own return shape
+// (`FieldLifecycleRow`) omits `data_type`/`config`, which this caller
+// needs to derive the field's authorable ops/bounds (see
+// `field-operand-catalogue.ts`'s `buildFieldOperandCatalogueEntry`), and
+// deliberately does NOT filter `state = 'active'` here in SQL (unlike
+// `fetchFieldsForUser`'s picker read) — the caller must be able to
+// distinguish "no such field" from "field exists but is archived" so it
+// can throw a NAMED, honest error for the archived case (per the decision
+// row: "a rule whose field was archived after authoring must produce an
+// honest anomaly, not a fabricated evaluation") rather than have both
+// cases collapse into one generic "not found."
+// =======================================================================
+
+export interface FieldForRuleOperand {
+  fieldId: string;
+  name: string;
+  kind: AnyFieldKind;
+  dataType: FieldDataType;
+  config: FieldPickerEntry['config'];
+  /** Non-null only for `kind = 'strategy_var'` — the same "usable by that
+   *  strategy" check `field-operand-resolver.ts` needs at both write and
+   *  evaluate time (§17's decision row, second sentence). */
+  ownerStrategyId: string | null;
+  state: 'active' | 'archived';
+}
+
+/**
+ * `null` when no row exists for `(userId, fieldId)` — via
+ * `withUserConnection`'s real RLS (`fields_owner_select`), a genuinely
+ * nonexistent field id and one owned by a DIFFERENT user are structurally
+ * indistinguishable here, matching every other ownership read in this
+ * file (`fetchFieldForLifecycleOp`, `assertStrategyOwnedByUser` in
+ * `strategy-repository.ts`) — never leaks "yes that field exists, but
+ * it's not yours."
+ */
+export async function fetchFieldForRuleOperand(userId: string, fieldId: string): Promise<FieldForRuleOperand | null> {
+  return withUserConnection(userId, async (client) => {
+    const res = await client.query<{
+      id: string;
+      name: string;
+      kind: AnyFieldKind;
+      data_type: FieldDataType;
+      config: FieldPickerEntry['config'] | null;
+      owner_strategy_id: string | null;
+      state: 'active' | 'archived';
+    }>(
+      `select id, name, kind, data_type, config, owner_strategy_id, state
+         from retrospeq.fields
+        where user_id = $1 and id = $2`,
+      [userId, fieldId],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      fieldId: row.id,
+      name: row.name,
+      kind: row.kind,
+      dataType: row.data_type,
+      config: row.config ?? {},
+      ownerStrategyId: row.owner_strategy_id,
+      state: row.state,
+    };
+  });
+}

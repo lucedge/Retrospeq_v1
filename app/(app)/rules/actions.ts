@@ -15,6 +15,13 @@ import {
   InvalidRuleValueError,
   validateOperandOpValue,
 } from '@/lib/rules/validate-operand-op-value';
+import {
+  FieldOperandNotFoundError,
+  FieldOperandScopeMismatchError,
+  FieldOperandTypeNotAuthorableError,
+  isFieldOperandId,
+} from '@/lib/rules/field-operand-catalogue';
+import { resolveAndValidateOperand } from '@/lib/rules/resolve-operand';
 import { OperandUnavailableError, checkTierAvailable } from '@/lib/rules/validate-tier';
 import { TightenOnlyViolationError, checkTightenOnly } from '@/lib/rules/validate-tighten-only';
 import { UnsatisfiableRuleError, checkSatisfiability } from '@/lib/rules/validate-satisfiability';
@@ -231,6 +238,19 @@ function structuralValidationErrorState(err: unknown): RuleActionState {
   if (err instanceof RenderSentenceError) {
     return { error: { code: err.code, user_message: "We couldn't build a sentence for that rule. Please try a different value.", retryable: false } };
   }
+  // Custom-field-operand slice (ADR 0046) — same three classes
+  // `create-rule-internal.ts`'s own copy of this function maps, per this
+  // repo's "each file owns its own copy of small shared plumbing"
+  // convention (this file's own header comment, just above).
+  if (err instanceof FieldOperandNotFoundError) {
+    return { error: { code: err.code, user_message: "We couldn't find that field, or it's no longer available.", retryable: false } };
+  }
+  if (err instanceof FieldOperandTypeNotAuthorableError) {
+    return { error: { code: err.code, user_message: "That field's type can't be used in a rule.", retryable: false } };
+  }
+  if (err instanceof FieldOperandScopeMismatchError) {
+    return { error: { code: err.code, user_message: "That field isn't available to this strategy.", retryable: false } };
+  }
   throw err;
 }
 
@@ -374,9 +394,18 @@ export async function editRule(ruleId: string, expectedVersion: number, newValue
     };
   }
 
+  // `resolveAndValidateOperand` (ADR 0046) dispatches to the custom-
+  // field-operand pipeline for a `field:<field_id>` operand id (re-
+  // checking ownership/state/scope-usability against the field's CURRENT
+  // row, not a stale snapshot from when the rule was authored — an edit
+  // must re-earn the same "usable right now" guarantee creation gets),
+  // or falls through unchanged to the static catalogue otherwise.
+  // `current.scope`/`current.scopeId` are fixed on edit (§2.5 — only
+  // `value` ever changes), reused here exactly as `createRuleInternal`
+  // uses the candidate's own scope/scopeId.
   let operand: OperandCatalogueEntry;
   try {
-    operand = validateOperandOpValue(current.operandId, current.op, newValue);
+    operand = await resolveAndValidateOperand(user.id, current.operandId, current.op, newValue, current.scope, current.scopeId);
   } catch (err) {
     return structuralValidationErrorState(err);
   }
@@ -435,7 +464,7 @@ export async function editRule(ruleId: string, expectedVersion: number, newValue
 
   let rendered: string;
   try {
-    rendered = renderSentence(current.operandId, current.op, newValue);
+    rendered = renderSentence(current.operandId, current.op, newValue, operand);
   } catch (err) {
     return structuralValidationErrorState(err);
   }
@@ -536,6 +565,26 @@ export async function previewRule(input: PreviewRuleInput): Promise<PreviewRuleA
     return { fieldErrors: issuesToFieldErrors(parsed.error.issues) };
   }
   const { operandId, op, value } = parsed.data;
+
+  // Custom-field-operand slice (ADR 0046) — preview runs entirely off
+  // `operand_distributions` (this file's own header: "the ONLY query this
+  // file issues"), which has no rows for a per-user `field:<field_id>`
+  // operand (that table is populated for the STATIC catalogue's own
+  // computable operands only, `distributions-repository.ts`). Rather than
+  // let `validateOperandOpValue` below throw the generic, now-INACCURATE
+  // "That isn't a rule type we recognise" (it IS a rule type as of this
+  // slice, just one preview doesn't support yet), reject explicitly and
+  // honestly — a real, disclosed gap (see the ADR's "Cost" section), not
+  // a silently wrong error message.
+  if (isFieldOperandId(operandId)) {
+    return {
+      error: {
+        code: 'PREVIEW_NOT_SUPPORTED',
+        user_message: "Preview isn't available for custom-field rules yet — you can still save the rule.",
+        retryable: false,
+      },
+    };
+  }
 
   try {
     validateOperandOpValue(operandId, op, value);

@@ -8,6 +8,8 @@ import {
 } from './computable-operand-values';
 import { assembleCrossTradeOperandValuesWithClient } from './cross-trade-operand-values';
 import type { RuleOperator } from './operand-catalogue';
+import { isFieldOperandId } from './field-operand-catalogue';
+import { evaluateFieldOperandRule } from './evaluate-field-operand';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.4/§5.5/§5.6/§7.1 — Slice 5:
@@ -169,6 +171,16 @@ export interface EligibleRuleVersion {
   operandId: string;
   op: RuleOperator;
   value: unknown;
+  /** `rules.scope`/`rules.scope_id`, read alongside everything else this
+   *  query already reads — needed ONLY by a `field:<field_id>` operand's
+   *  evaluate-time resolution (`evaluate-field-operand.ts`'s own
+   *  `resolveFieldOperandForRule` call, custom-field-operand slice, ADR
+   *  0046), which must re-check "usable by that strategy" against the
+   *  field's CURRENT row, not a value inferred from `TradeFacts`. Unused
+   *  by the static-catalogue `evaluate()` path, which has no concept of
+   *  rule scope at all. */
+  scope: 'global' | 'strategy' | 'account';
+  scopeId: string | null;
 }
 
 interface EligibleRuleRow {
@@ -178,6 +190,8 @@ interface EligibleRuleRow {
   operand_id: string;
   op: RuleOperator;
   value: unknown;
+  scope: 'global' | 'strategy' | 'account';
+  scope_id: string | null;
 }
 
 /**
@@ -194,7 +208,7 @@ export async function fetchEligibleRuleVersionsForTrade(
   tradeOpenedAt: string,
 ): Promise<EligibleRuleVersion[]> {
   const res = await client.query<EligibleRuleRow>(
-    `select r.id as rule_id, r.severity, rv.version as rule_version, rv.operand_id, rv.op, rv.value
+    `select r.id as rule_id, r.severity, r.scope, r.scope_id, rv.version as rule_version, rv.operand_id, rv.op, rv.value
        from retrospeq.rules r
        join retrospeq.rule_versions rv
          on rv.rule_id = r.id
@@ -213,6 +227,8 @@ export async function fetchEligibleRuleVersionsForTrade(
     operandId: row.operand_id,
     op: row.op,
     value: row.value,
+    scope: row.scope,
+    scopeId: row.scope_id,
   }));
 }
 
@@ -348,7 +364,19 @@ export async function evaluateAndFreezeTradeRules(
 
     let outcome;
     try {
-      outcome = evaluate(ruleVersionInput, tradeFacts);
+      // Custom-field-operand slice (ADR 0046) — a `field:<field_id>`
+      // operand id is never in the static catalogue `evaluate()` reads,
+      // so it is dispatched to the separate, DB-backed
+      // `evaluateFieldOperandRule` instead, which re-resolves the field
+      // against its CURRENT row (ownership/state/scope-usability) before
+      // comparing — see that file's own header for why a field archived
+      // (or otherwise made unusable) after authoring surfaces here as the
+      // SAME `RuleEvaluationError` this catch block already handles,
+      // never a fabricated evaluation. Every other operand id is
+      // completely unaffected — `evaluate()` itself is untouched.
+      outcome = isFieldOperandId(rule.operandId)
+        ? await evaluateFieldOperandRule(client, trade.user_id, tradeId, rule.scope, rule.scopeId, ruleVersionInput)
+        : evaluate(ruleVersionInput, tradeFacts);
     } catch (err) {
       if (err instanceof RuleEvaluationError) {
         // Loud, never silent -- see this file's own header point 5 and

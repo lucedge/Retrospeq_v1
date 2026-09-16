@@ -109,6 +109,11 @@ const GROUP_LABELS: Record<OperandGroup, string> = {
   exit: 'Exit',
   instrument: 'Instrument',
   process: 'Process',
+  // `field:<field_id>` operands (ADR 0046) are resolved per user, never
+  // listed in the static catalogue this picker renders — the label exists
+  // so the union stays exhaustive, and reads as the trader's own words
+  // if a future screen does group them.
+  field: 'Your own fields',
 };
 
 const PREVIEW_DEBOUNCE_MS = 350;

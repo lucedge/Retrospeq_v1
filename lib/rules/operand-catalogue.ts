@@ -117,11 +117,25 @@ export type OperandGroup =
   | 'position_management'
   | 'exit'
   | 'instrument'
-  | 'process';
+  | 'process'
+  | 'field';
 // 'firm' (v1.1, Module 09) deliberately not a member of this union yet —
 // adding it is a scoped follow-up, not a silent gap: including it now
 // with zero real entries would make the union technically complete but
 // practically misleading about what this slice built.
+//
+// 'field' (custom-field-operand slice, 2026-09-16, design-decisions.md
+// §17 "Custom fields as rule operands") — the group for DYNAMICALLY
+// resolved `field:<field_id>` operand entries built by
+// `field-operand-catalogue.ts`'s `buildFieldOperandCatalogueEntry`. These
+// entries are NEVER added to `OPERAND_CATALOGUE` above (that array stays
+// the static, per-codebase-versioned surface §4's own header describes —
+// a per-USER field is not "versioned with the codebase") — this member
+// only exists so a dynamically-built `OperandCatalogueEntry` object can
+// report a real, typed `group` rather than lying about which static
+// group it belongs to. No switch in this codebase exhaustively matches
+// over every `OperandGroup` member today (grepped before adding this),
+// so this addition is inert for existing code paths.
 
 /** §4.2's own type vocabulary, verbatim — 'rating' has no v1 catalogue entries yet (only Field-Registry-generated templates use it, Module 03, not built) but is kept in the union for that documented future use, not invented speculatively for this file's own entries. */
 export type OperandType = 'number' | 'bool' | 'duration' | 'pick_one' | 'pick_many' | 'clock_time' | 'rating';
