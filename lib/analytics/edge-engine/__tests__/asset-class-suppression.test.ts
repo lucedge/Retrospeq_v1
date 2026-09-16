@@ -29,13 +29,14 @@ function makeResult(fieldId: string, analyticId = 'find.pickone'): SegmentComput
 }
 
 describe('isAssetClassSuppressedField', () => {
-  it('is exactly the two-item literal set from §4.12', () => {
-    expect([...ASSET_CLASS_SUPPRESSED_FIELD_IDS].sort()).toEqual(['drv.day_of_week', 'drv.session']);
+  it('is exactly the three-item set from §4.12 plus its 2026-09-16 drv.day_session extension', () => {
+    expect([...ASSET_CLASS_SUPPRESSED_FIELD_IDS].sort()).toEqual(['drv.day_of_week', 'drv.day_session', 'drv.session']);
   });
 
-  it('flags drv.session and drv.day_of_week', () => {
+  it('flags drv.session, drv.day_of_week, and drv.day_session', () => {
     expect(isAssetClassSuppressedField('drv.session')).toBe(true);
     expect(isAssetClassSuppressedField('drv.day_of_week')).toBe(true);
+    expect(isAssetClassSuppressedField('drv.day_session')).toBe(true);
   });
 
   it('does not flag an unrelated derived field or a custom field', () => {
@@ -47,17 +48,27 @@ describe('isAssetClassSuppressedField', () => {
 
 describe('partitionByAssetClassSuppression', () => {
   it('when isCryptoStrategy is false, every result is rendered regardless of fieldId — including the suppressible fields', () => {
-    const results = [makeResult('drv.session', 'find.session'), makeResult('drv.day_of_week'), makeResult('conviction_flag')];
+    const results = [
+      makeResult('drv.session', 'find.session'),
+      makeResult('drv.day_of_week'),
+      makeResult('drv.day_session', 'find.daysession'),
+      makeResult('conviction_flag'),
+    ];
     const { rendered, suppressed } = partitionByAssetClassSuppression(results, false);
-    expect(rendered).toHaveLength(3);
+    expect(rendered).toHaveLength(4);
     expect(suppressed).toHaveLength(0);
   });
 
-  it('when isCryptoStrategy is true, only the two suppressible fields move to suppressed — unrelated fields still render', () => {
-    const results = [makeResult('drv.session', 'find.session'), makeResult('drv.day_of_week'), makeResult('conviction_flag')];
+  it('when isCryptoStrategy is true, only the three suppressible fields move to suppressed — unrelated fields still render', () => {
+    const results = [
+      makeResult('drv.session', 'find.session'),
+      makeResult('drv.day_of_week'),
+      makeResult('drv.day_session', 'find.daysession'),
+      makeResult('conviction_flag'),
+    ];
     const { rendered, suppressed } = partitionByAssetClassSuppression(results, true);
     expect(rendered.map((r) => r.fieldId)).toEqual(['conviction_flag']);
-    expect(suppressed.map((r) => r.fieldId).sort()).toEqual(['drv.day_of_week', 'drv.session']);
+    expect(suppressed.map((r) => r.fieldId).sort()).toEqual(['drv.day_of_week', 'drv.day_session', 'drv.session']);
   });
 
   it('the fields still exist — a suppressed result carries its full original stats, not a stripped-down record', () => {
@@ -69,7 +80,7 @@ describe('partitionByAssetClassSuppression', () => {
   it('partition is exhaustive and disjoint: every input result appears in exactly one of the two output arrays', () => {
     fc.assert(
       fc.property(
-        fc.array(fc.constantFrom('drv.session', 'drv.day_of_week', 'conviction_flag', 'drv.risk_pct'), { minLength: 0, maxLength: 30 }),
+        fc.array(fc.constantFrom('drv.session', 'drv.day_of_week', 'drv.day_session', 'conviction_flag', 'drv.risk_pct'), { minLength: 0, maxLength: 30 }),
         fc.boolean(),
         (fieldIds, isCrypto) => {
           const results = fieldIds.map((id, i) => makeResult(id, `analytic-${i}`));
@@ -87,7 +98,7 @@ describe('partitionByAssetClassSuppression', () => {
 
   it('a suppressible field is NEVER rendered when isCryptoStrategy is true, for any result set (property)', () => {
     fc.assert(
-      fc.property(fc.array(fc.constantFrom('drv.session', 'drv.day_of_week', 'other_field'), { minLength: 1, maxLength: 20 }), (fieldIds) => {
+      fc.property(fc.array(fc.constantFrom('drv.session', 'drv.day_of_week', 'drv.day_session', 'other_field'), { minLength: 1, maxLength: 20 }), (fieldIds) => {
         const results = fieldIds.map((id, i) => makeResult(id, `analytic-${i}`));
         const { rendered } = partitionByAssetClassSuppression(results, true);
         expect(rendered.some((r) => isAssetClassSuppressedField(r.fieldId))).toBe(false);

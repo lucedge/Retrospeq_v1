@@ -178,6 +178,7 @@ export async function fetchEligibleTradesForStrategy(userId: string, strategyId:
           instrument: row.instrument,
           holdSeconds: row.hold_seconds,
           riskPct: row.risk_pct === null ? null : Number(row.risk_pct),
+          openedAt: row.opened_at,
         },
       }));
   });

@@ -92,6 +92,15 @@ describe('computeEdgeFindingsForStrategy — integration', () => {
     results.forEach((r) => expect(r.analyticId).toBe('find.session'));
   });
 
+  it('resolves drv.day_session to the special find.daysession id, not the generic pick_one id', () => {
+    const { trades, valuesByFieldAndTrade } = generateNoEffectUser(9);
+    valuesByFieldAndTrade.set('drv.day_session', valuesByFieldAndTrade.get('setup')!);
+    const fields: EdgeEngineField[] = [{ fieldId: 'drv.day_session', dataType: 'pick_one' }];
+    const results = computeEdgeFindingsForStrategy(trades, fields, valuesByFieldAndTrade);
+    expect(results.length).toBeGreaterThan(0);
+    results.forEach((r) => expect(r.analyticId).toBe('find.daysession'));
+  });
+
   it('detects a real, engineered large win-rate effect in one segment end-to-end', () => {
     const { trades, valuesByFieldAndTrade } = generateNoEffectUser(5, 200);
     // Overwrite outcomes so option 'a' genuinely wins ~85% vs a baseline

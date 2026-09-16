@@ -70,6 +70,15 @@ export const NUMBER_FIELD_ANALYTIC_ID = 'find.number';
 const SESSION_FIELD_ID = 'drv.session';
 const SESSION_ANALYTIC_ID = 'find.session';
 
+/** `drv.day_session`'s own field-specific override — same reasoning as
+ *  `drv.session` above, added 2026-09-16 per the owner's "Day x session"
+ *  decision (`retrospeq-design-decisions.md` §17): "`find.daysession`
+ *  runs over it" (the one composite field), so it needs its own
+ *  registry-matching analytic id rather than falling through to the
+ *  generic `find.pickone` every other `pick_one` field gets. */
+const DAY_SESSION_FIELD_ID = 'drv.day_session';
+const DAY_SESSION_ANALYTIC_ID = 'find.daysession';
+
 /**
  * Exported (2026-09-11, strategy-detail-screen slice) so a read-only
  * consumer (`lib/analytics/findings-service.ts`, the strategy screen's
@@ -85,6 +94,7 @@ const SESSION_ANALYTIC_ID = 'find.session';
  */
 export function resolveAnalyticId(fieldId: string, dataType: FieldDataType): string | null {
   if (fieldId === SESSION_FIELD_ID) return SESSION_ANALYTIC_ID;
+  if (fieldId === DAY_SESSION_FIELD_ID) return DAY_SESSION_ANALYTIC_ID;
   switch (dataType) {
     case 'pick_one':
       return 'find.pickone';

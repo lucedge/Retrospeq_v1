@@ -32,8 +32,26 @@ import type { SegmentComputationResult } from './gates';
  * might be true), so the conservative default is to keep rendering when
  * the evidence for "this is a crypto-only strategy" is anything less than
  * complete.
+ *
+ * `drv.day_session` ADDED 2026-09-16 (session-boundaries slice) —
+ * §4.12's literal text predates `drv.day_session`'s existence, but this
+ * field's own definition is a composite that EMBEDS the session
+ * classification verbatim (`field-values.ts`'s `extractDaySession`: "{day}
+ * · {session}"), so it inherits exactly the same "meaningful in forex,
+ * approaches noise in crypto" reasoning §4.12 already applies to
+ * `drv.session` — a crypto market has no Tokyo/London/New York open/close
+ * structure, so the session HALF of every `drv.day_session` value would be
+ * just as noisy as `drv.session` itself, for the identical underlying
+ * reason. Flagged here as a narrow, deliberate EXTENSION of the existing
+ * policy to a field that didn't exist when §4.12 was written, not a new
+ * policy decision of its own — the mechanism (fieldId-keyed suppression)
+ * is unchanged, only the set membership grew.
  */
-export const ASSET_CLASS_SUPPRESSED_FIELD_IDS: ReadonlySet<string> = new Set(['drv.session', 'drv.day_of_week']);
+export const ASSET_CLASS_SUPPRESSED_FIELD_IDS: ReadonlySet<string> = new Set([
+  'drv.session',
+  'drv.day_of_week',
+  'drv.day_session',
+]);
 
 export function isAssetClassSuppressedField(fieldId: string): boolean {
   return ASSET_CLASS_SUPPRESSED_FIELD_IDS.has(fieldId);

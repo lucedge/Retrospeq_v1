@@ -878,3 +878,16 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 .sessions li:last-child { border-bottom: 0; }
 .sessions__dev { display: flex; flex-direction: column; gap: 2px; font-size: var(--rq-text-sm); }
 .sessions__dev small { color: var(--rq-ink-faint); font-family: var(--rq-font-mono); font-size: var(--rq-text-2xs); }
+
+/* .push — bottom-pin the last block in a screen column.
+   Used 35 times across `brand/docs/screens/*.html`, where the mockup
+   harness (`docs/screens/frame.css:21`) defines it; the app never links
+   that file, so every `.push` in the real app was inert until now (qa
+   FAIL, 2026-09-16). `margin-top:auto` only consumes free space inside a
+   flex column that actually grows, so the screen roots that use it must
+   stretch inside `app/(app)/layout.tsx`'s `<main class="flex flex-1
+   flex-col">` — hence the `flex:1 1 auto` below. Add a screen root here
+   when its frame uses `.push`. */
+.push { margin-top: auto; }
+.dash,
+.hook { flex: 1 1 auto; }

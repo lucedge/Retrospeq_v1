@@ -455,7 +455,13 @@ export default async function DashboardPage() {
             never a fabricated bar -- see `DashboardTradeSummary`'s own
             header. */}
         <div>
-          {state.trades.map((t) => {
+          {/* Chronological, oldest first, matching frame 1.14's own read
+              ("the day reads as three marks"). The repository orders
+              newest-first for its other callers, so sort a copy here
+              rather than change a shared query (qa FAIL, 2026-09-16). */}
+          {[...state.trades]
+            .sort((a, b) => a.openedAt.localeCompare(b.openedAt))
+            .map((t) => {
             const fill = rTrackFill(t.rMultiple);
             return (
               <div className="rq-row" key={t.id}>

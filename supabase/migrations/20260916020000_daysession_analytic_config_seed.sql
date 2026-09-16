@@ -1,0 +1,46 @@
+-- Module 05 (Analytics & Findings) -- seeds `retrospeq.analytic_config`
+-- for `find.daysession`, the analytic id `drv.day_session`
+-- (`20260916010000_session_fields.sql`) resolves through
+-- (`lib/analytics/edge-engine/edge-engine.ts`'s `resolveAnalyticId`).
+--
+-- SAME REASONING as `20260911010000_findings_analytic_config_seed.sql`
+-- (that migration's own header, reapplied verbatim): a MISSING
+-- `analytic_config` row resolves to `not_found`, which `canRender` treats
+-- fail-closed -- "nothing renders, ever" (§4.8, ADR 0035). The edge
+-- engine computes and writes real `findings` rows for `drv.day_session`
+-- the moment a strategy includes it in its own field list (this same
+-- migration's sibling backfills every existing user's registry row, and
+-- `fetchDefaultStrategySeedFieldIds` picks it up automatically for every
+-- NEW default strategy from this point on) -- without this seed, every
+-- one of those rows would be PERMANENTLY INVISIBLE, with no error
+-- anywhere to reveal the gap.
+--
+-- VALUE -- per `analytics-registry.md` §7's own literal row:
+--
+--   | id              | status (§7) | plan (§7) | -> enabled | cohort_only |
+--   |-----------------|-------------|-----------|------------|-------------|
+--   | find.daysession | beta        | free      | true       | true        |
+--
+-- Matches `find.session`'s own already-seeded row exactly (same status,
+-- same plan) -- both are `beta`, both are the SAME market-clock concept,
+-- `find.daysession` is just the composite day x session view over it.
+--
+-- `cohort_only` stays `true` -- DELIBERATELY NOT flipped to `false`. Per
+-- this slice's own dispatch: flipping either `find.session` or
+-- `find.daysession` to a live, non-cohort rollout is a genuine
+-- beta -> live PROMOTION decision (`analytics-registry.md` §4's own
+-- promotion criteria -- manual inspection, no misleading statements
+-- found), not something this schema/vocabulary slice should make by
+-- migration fiat. Logged as an open owner item in `NEEDS_YOUR_INPUT.md`
+-- with a one-line recommendation, per the dispatch's own instruction.
+--
+-- `min_account_tier = 't0'` -- matches every other edge-engine judgment
+-- id's own seed (field-capture/trades data, not a sync-tier-gated
+-- position-snapshot fact).
+--
+-- Idempotent via `on conflict do nothing`, matching every prior
+-- `analytic_config` seed migration's own established convention.
+insert into retrospeq.analytic_config (analytic_id, enabled, min_plan, cohort_only, min_account_tier)
+values
+  ('find.daysession', true, 'free', true, 't0')
+on conflict (analytic_id) do nothing;

@@ -9,6 +9,7 @@ function makeTrade(overrides: Partial<EdgeEngineTradeColumns> = {}): EdgeEngineT
     instrument: 'EURUSD',
     holdSeconds: 1800,
     riskPct: 1.5,
+    openedAt: '2026-08-10T10:00:00.000Z', // August (BST/EDT both active): 07:00-12:00 UTC -> london
     ...overrides,
   };
 }
@@ -46,6 +47,46 @@ describe('extractFieldValue — derived-from-trade-column fields', () => {
     // drv.direction, the trades column is authoritative.
     expect(extractFieldValue('drv.direction', makeTrade({ direction: 'long' }), 'short')).toBe('long');
   });
+
+  it('drv.session classifies trades.opened_at (the entry FILL instant) via the market-clock rule, ignoring serverDay entirely', () => {
+    // Winter UTC (per the design decision): 00-08 asia / 08-13 london /
+    // 13-17 overlap / 17-22 new_york / 22-00 off_hours.
+    expect(extractFieldValue('drv.session', makeTrade({ openedAt: '2026-01-14T03:00:00.000Z' }), undefined)).toBe('Asia');
+    expect(extractFieldValue('drv.session', makeTrade({ openedAt: '2026-01-14T09:00:00.000Z' }), undefined)).toBe('London');
+    expect(extractFieldValue('drv.session', makeTrade({ openedAt: '2026-01-14T14:00:00.000Z' }), undefined)).toBe(
+      'London–NY overlap',
+    );
+    expect(extractFieldValue('drv.session', makeTrade({ openedAt: '2026-01-14T18:00:00.000Z' }), undefined)).toBe('New York');
+    expect(extractFieldValue('drv.session', makeTrade({ openedAt: '2026-01-14T23:00:00.000Z' }), undefined)).toBe('Off-hours');
+    // serverDay is deliberately left far from openedAt's own date here —
+    // the account's day_rollover has no say in the SESSION at all.
+    expect(
+      extractFieldValue(
+        'drv.session',
+        makeTrade({ serverDay: '2026-03-01', openedAt: '2026-01-14T09:00:00.000Z' }),
+        undefined,
+      ),
+    ).toBe('London');
+  });
+
+  it('drv.day_session composes the TRADING DAY weekday (from serverDay, rollover-scoped) with the SESSION (from openedAt, market-clock-scoped)', () => {
+    // 2026-08-10 is a Monday.
+    expect(
+      extractFieldValue(
+        'drv.day_session',
+        makeTrade({ serverDay: '2026-08-10', openedAt: '2026-01-14T14:00:00.000Z' }),
+        undefined,
+      ),
+    ).toBe('Mon · London–NY overlap');
+    // 2026-08-15 is a Saturday.
+    expect(
+      extractFieldValue(
+        'drv.day_session',
+        makeTrade({ serverDay: '2026-08-15', openedAt: '2026-01-14T03:00:00.000Z' }),
+        undefined,
+      ),
+    ).toBe('Sat · Asia');
+  });
 });
 
 describe('extractFieldValue — trade_captures fallback', () => {
@@ -61,7 +102,8 @@ describe('extractFieldValue — trade_captures fallback', () => {
   });
 
   it('returns null when no capture exists at all (undefined/null)', () => {
-    expect(extractFieldValue('drv.session', makeTrade(), undefined)).toBeNull();
+    // drv.order_type still has no vocabulary/data source at all (unlike
+    // drv.session, which now has a real column-derived extractor above).
     expect(extractFieldValue('drv.order_type', makeTrade(), null)).toBeNull();
   });
 
@@ -73,7 +115,15 @@ describe('extractFieldValue — trade_captures fallback', () => {
 describe('DERIVED_FROM_TRADE_COLUMN_FIELD_IDS', () => {
   it('lists exactly the fields this file computes without trade_captures', () => {
     expect(new Set(DERIVED_FROM_TRADE_COLUMN_FIELD_IDS)).toEqual(
-      new Set(['drv.day_of_week', 'drv.direction', 'drv.instrument', 'drv.hold_seconds', 'drv.risk_pct']),
+      new Set([
+        'drv.day_of_week',
+        'drv.direction',
+        'drv.instrument',
+        'drv.hold_seconds',
+        'drv.risk_pct',
+        'drv.session',
+        'drv.day_session',
+      ]),
     );
   });
 });
