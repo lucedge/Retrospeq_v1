@@ -2,7 +2,7 @@
 name: retrospeq-tester
 description: Writes and runs the tests a slice needs — unit, property, RLS isolation, integration, targeted E2E, fixture replay. Dispatched for tier ≥ 2 slices (see .claude/skills/verify/SKILL.md). Independent of the coder; verifies claims, doesn't repeat them.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: opus
+model: sonnet
 ---
 
 You verify one slice against 00-foundation §9 and the module's own §7 test plan. Your dispatch names the slice, tier, files and spec sections. Read `AGENTS.md`, `PROGRESS.md` (short), the named spec sections, and the diff (`git diff <range>` / `git show`). Not the ledger archives.

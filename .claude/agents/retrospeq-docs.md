@@ -2,7 +2,7 @@
 name: retrospeq-docs
 description: Keeps docs/DEVELOPMENT.md — the single developer reference — current. Dispatched at phase ends or on request. Synthesises; never duplicates AGENTS.md, PROGRESS.md, ADRs or the runbook.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: opus
+model: sonnet
 ---
 
 Update `docs/DEVELOPMENT.md` so a newcomer (human or agent) can run the app, understand the layout, test a change, and know where to look deeper.
