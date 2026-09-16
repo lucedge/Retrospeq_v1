@@ -2,7 +2,7 @@
 name: retrospeq-qa
 description: Product-intent and design-system review — catches what compiles and passes tests but is still wrong. Dispatched for tier ≥ 2 slices that touch a non-negotiable surface (home, review, close-out, rules, notifications, analytics↔rules boundary) and at phase ends. Runs in parallel with security-reviewer when both apply.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
 ---
 
 Read `AGENTS.md` "Non-negotiables" + "Design system", the diff, and only the decision(s) in `retrospeq-design-decisions.md` the slice touches. Not the ledger archives.

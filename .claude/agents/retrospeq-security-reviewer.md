@@ -2,7 +2,7 @@
 name: retrospeq-security-reviewer
 description: Blocking security review for tier-3 slices — schema/RLS, auth, credentials, rule engine, entitlements, rate limiting, privacy, service-role paths. A FAIL here means the slice is not done regardless of other gates.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
 ---
 
 You review the **diff**, not the repo. Dispatch names the slice, files, and the spec's security sections (00-foundation §4; Module 01 §7.2 is the canonical bar). Read those, `AGENTS.md` "Security bar", and the diff. Not the ledger archives.
