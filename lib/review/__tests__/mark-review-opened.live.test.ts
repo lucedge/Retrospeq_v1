@@ -29,7 +29,7 @@ function fakePayload(overrides: Partial<WeeklyReadPayload> = {}): WeeklyReadPayl
     periodStart: '2026-06-01',
     periodEnd: '2026-06-07',
     outcome: { tradeCount: 14, daysTradedCount: 5, totalR: '3.2000' },
-    consistency: { daysTraded: 5, daysClosed: 5, streakWeeks: 12 },
+    consistency: { daysTraded: 5, daysClosed: 5, streakWeeks: 12 , graceApplied: false },
     adherence: { status: 'insufficient_history' },
     findings: [],
     ruleChangeAnnotations: [],

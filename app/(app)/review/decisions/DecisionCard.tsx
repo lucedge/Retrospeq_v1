@@ -136,6 +136,29 @@ export function DecisionCard({
 
       <div className="evidence">
         <p className="evidence__statement">{detail.statement}</p>
+        {detail.comparison && (
+          // Frame 4.6's two bars, drawn from the SAME two rates the
+          // statement above quotes — not a second source, and omitted
+          // entirely for an R-multiple finding that has no two comparable
+          // percentages (qa FAIL, 2026-09-17: the frame's evidence bars
+          // were missing while the data sat unused in the DTO).
+          <div className="rq-cmp">
+            <div className="rq-cmp__row hot">
+              <span className="rq-cmp__lbl">{detail.comparison.segmentLabel}</span>
+              <div className="rq-cmp__track">
+                <i className="rq-cmp__fill" style={{ width: `${Math.round(detail.comparison.segmentRate * 100)}%` }} />
+              </div>
+              <span className="rq-cmp__val rq-num">{Math.round(detail.comparison.segmentRate * 100)}%</span>
+            </div>
+            <div className="rq-cmp__row">
+              <span className="rq-cmp__lbl">The rest</span>
+              <div className="rq-cmp__track">
+                <i className="rq-cmp__fill" style={{ width: `${Math.round(detail.comparison.baselineRate * 100)}%` }} />
+              </div>
+              <span className="rq-cmp__val rq-num">{Math.round(detail.comparison.baselineRate * 100)}%</span>
+            </div>
+          </div>
+        )}
         <p className="evidence__meta">{detail.meta}</p>
       </div>
 

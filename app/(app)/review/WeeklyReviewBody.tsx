@@ -99,7 +99,12 @@ export function WeeklyReviewBody({
         ) : null}
       </h1>
 
-      <ConsistencyPanel daysTraded={consistency.daysTraded} daysClosed={consistency.daysClosed} streakWeeks={consistency.streakWeeks} />
+      <ConsistencyPanel
+        daysTraded={consistency.daysTraded}
+        daysClosed={consistency.daysClosed}
+        streakWeeks={consistency.streakWeeks}
+        graceApplied={consistency.graceApplied}
+      />
 
       <AdherencePanel adherence={adherence} coversWeeks={coversWeeks} ruleChangeAnnotations={ruleChangeAnnotations} />
 
@@ -163,7 +168,17 @@ export function WeeklyReviewBody({
  * equivalent, since it deliberately overrides `.panel`'s default column
  * layout for this one instance only).
  */
-function ConsistencyPanel({ daysTraded, daysClosed, streakWeeks }: { daysTraded: number; daysClosed: number; streakWeeks: number }) {
+function ConsistencyPanel({
+  daysTraded,
+  daysClosed,
+  streakWeeks,
+  graceApplied,
+}: {
+  daysTraded: number;
+  daysClosed: number;
+  streakWeeks: number;
+  graceApplied: boolean;
+}) {
   const offset = ringDashOffset(daysClosed, daysTraded);
   const ringLabel = ringText(daysClosed, daysTraded);
   const missedDays = daysTraded - daysClosed;
@@ -203,11 +218,16 @@ function ConsistencyPanel({ daysTraded, daysClosed, streakWeeks }: { daysTraded:
         <p className="panel__meta">
           {daysTraded === 0
             ? 'Streak intact — nothing was owed.'
-            : missedDays > 0 && streakWeeks > 0
+            : graceApplied && streakWeeks > 0
               ? (
+                  // Only when a week in this period REALLY spent the
+                  // once-a-quarter grace (`week_completeness.grace_applied`).
+                  // This used to be inferred from missed days — wrong unit,
+                  // wrong count, and it fired for anyone with a streak,
+                  // telling them they'd burned a resource they still had
+                  // (qa FAIL, 2026-09-17).
                   <>
-                    Streak intact — <span className="rq-num">{missedDays}</span> missed {missedDays === 1 ? 'day' : 'days'} used your
-                    grace.
+                    Streak intact — this period used your grace week.
                   </>
                 )
               : streakWeeks > 0
@@ -301,13 +321,23 @@ function AdherencePanel({
       <h2 id="p-adherence" className="panel__title">
         Adherence
       </h2>
-      <p className="panel__lead">
-        Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
-      </p>
+      {hard.total > 0 ? (
+        <p className="panel__lead">
+          Hard rules: <span className="rq-num">{hard.followed}</span> of <span className="rq-num">{hard.total}</span>.
+        </p>
+      ) : (
+        // Same reasoning as the soft branch below: "Hard rules: 0 of 0."
+        // is a fraction nobody measured (qa FAIL, 2026-09-17 — the honest
+        // branch existed for soft only).
+        <p className="panel__meta">Hard rules appear once you have one.</p>
+      )}
       {soft.total > 0 ? (
         <p className="panel__lead">
           Soft: <span className="rq-num">{soft.followed}</span> of <span className="rq-num">{soft.total}</span>
-          {priorSoft && trend !== null ? (
+          {priorSoft && priorSoft.total > 0 && trend !== null ? (
+            // A prior period with no soft rules has nothing to compare
+            // against — ", unchanged from 0 of 0" is a comparison to a
+            // measurement that never happened.
             <>
               , {trend} from <span className="rq-num">{priorSoft.followed}</span> of <span className="rq-num">{priorSoft.total}</span>
             </>
@@ -320,7 +350,7 @@ function AdherencePanel({
         // fabricated fraction rather than an honest absence.
         <p className="panel__meta">Soft rules appear once you have one.</p>
       )}
-      {priorSoft && soft.total > 0 ? (
+      {priorSoft && priorSoft.total > 0 && soft.total > 0 ? (
         <div className="rq-cmp">
           <div className="rq-cmp__row hot">
             <span className="rq-cmp__lbl">{currentLabel}</span>
@@ -346,7 +376,7 @@ function AdherencePanel({
               breaks." The frame uses a short noun phrase ("Your risk
               cap"); we keep the trader's own rule wording — the honest
               identifier — and just drop its terminal punctuation. */}
-          {(attribution.rendered ?? 'One rule').replace(/[.!?]+$/, '')} accounts for{' '}
+          {attribution.rendered ? `“${attribution.rendered.replace(/[.!?]+$/, '')}”` : 'One rule'} accounts for{' '}
           <span className="rq-num">{attribution.count}</span> of the{' '}
           <span className="rq-num">{attribution.ofBreaks}</span> {attribution.severity} breaks.
         </p>

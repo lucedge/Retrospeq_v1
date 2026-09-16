@@ -134,7 +134,11 @@ export default async function MonthlyReviewTrendPage() {
         )}
       </section>
 
-      <p className="cap">A read with zero prompts, ever. Nothing to tap.</p>
+      {/* The mockup's own gallery caption ("A read with zero prompts,
+          ever. Nothing to tap.") described the frame to US, in `.cap` —
+          the commentary class every frame in `brand/docs/screens/` carries.
+          It was being rendered to traders as product copy (qa FAIL,
+          2026-09-17). The screen already demonstrates the property. */}
       <p className="rq-sub">
         <Link href="/review">Back to your review</Link>
       </p>

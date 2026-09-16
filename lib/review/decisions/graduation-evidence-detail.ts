@@ -58,6 +58,14 @@ export interface GraduationPromptDetail {
    *  button only when this is `true`; Defer is always available regardless. */
   canAccept: boolean;
   blockedReason: string | null;
+  /** §5.1's `.rq-cmp` pair — the same two rates the `statement` sentence is
+   *  built from, carried as numbers so the card can draw the frame's two
+   *  bars instead of leaving the space empty (qa FAIL, 2026-09-17: the
+   *  data was already in hand, only the DTO didn't pass it on). `null`
+   *  when the finding's effect is an R-multiple one rather than a win-rate
+   *  one, or when either rate is missing — the card then renders the
+   *  statement alone, never a bar built from a guessed number. */
+  comparison: { segmentLabel: string; segmentRate: number; baselineRate: number } | null;
 }
 
 const STATIC_HINT = 'Starts soft. Promotes to hard after sustained compliance.';
@@ -95,6 +103,7 @@ export async function buildGraduationPromptDetail(
       hint: STATIC_HINT,
       canAccept: false,
       blockedReason: 'This finding has changed since your review was prepared. Defer to see an updated one next review.',
+      comparison: null,
     };
   }
 
@@ -117,6 +126,7 @@ export async function buildGraduationPromptDetail(
       hint: STATIC_HINT,
       canAccept: false,
       blockedReason: 'This finding has changed since your review was prepared. Defer to see an updated one next review.',
+      comparison: null,
     };
   }
 
@@ -134,6 +144,7 @@ export async function buildGraduationPromptDetail(
       hint: STATIC_HINT,
       canAccept: false,
       blockedReason: "This kind of finding can't become a rule yet.",
+      comparison: buildComparison(liveRow, valueLabel),
     };
   }
 
@@ -147,5 +158,18 @@ export async function buildGraduationPromptDetail(
     hint: STATIC_HINT,
     canAccept: true,
     blockedReason: null,
+    comparison: buildComparison(liveRow, valueLabel),
   };
+}
+
+/** The two win rates the statement already quotes, as numbers. Returns
+ *  `null` for a finding whose effect is an R-multiple rather than a win
+ *  rate — those have no two comparable percentages, and inventing a bar
+ *  for them would be exactly the fabrication the statement avoids. */
+function buildComparison(
+  row: { winRate: number | null; baselineWinRate: number | null },
+  segmentLabel: string,
+): { segmentLabel: string; segmentRate: number; baselineRate: number } | null {
+  if (row.winRate === null || row.baselineWinRate === null) return null;
+  return { segmentLabel, segmentRate: row.winRate, baselineRate: row.baselineWinRate };
 }

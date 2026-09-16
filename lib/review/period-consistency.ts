@@ -59,6 +59,14 @@ export interface PeriodConsistency {
    *  streak has genuinely broken; both are represented identically, same
    *  as every other materialised-cache read in this repo. */
   streakWeeks: number;
+  /** True when a week this period covers genuinely spent the trader's
+   *  once-a-quarter grace (`week_completeness.grace_applied`, owned by
+   *  `lib/engagement/streak-repository.ts`). Read from the SAME rows this
+   *  function already fetches — the review previously INFERRED "you used
+   *  your grace" from missed days, which is the wrong unit (grace is one
+   *  WEEK per rolling quarter, not per day) and fired whenever any streak
+   *  existed (qa FAIL, 2026-09-17). */
+  graceApplied: boolean;
 }
 
 export async function fetchPeriodConsistency(
@@ -75,14 +83,17 @@ export async function fetchPeriodConsistency(
 
   let daysTraded = 0;
   let daysClosed = 0;
+  let graceApplied = false;
   for (const record of weekRows.values()) {
     daysTraded += record.daysTraded;
     daysClosed += record.daysClosed;
+    if (record.graceApplied) graceApplied = true;
   }
 
   return {
     daysTraded,
     daysClosed,
+    graceApplied,
     streakWeeks: engagement?.streakWeeks ?? 0,
   };
 }
