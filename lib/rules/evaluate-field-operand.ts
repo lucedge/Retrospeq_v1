@@ -8,6 +8,7 @@ import {
   fieldIdFromOperandId,
 } from './field-operand-catalogue';
 import { resolveFieldOperandForRule } from './field-operand-resolver';
+import type { OperandCatalogueEntry, RuleOperator } from './operand-catalogue';
 
 /**
  * Module 04 — the evaluate-time half of custom fields as rule operands
@@ -121,6 +122,51 @@ export async function evaluateFieldOperandRule(
     return { result: 'not_applicable', reason: 'operand_missing', observed: null };
   }
 
-  const followed = compare(operand, ruleVersion.op, row.value, ruleVersion.value);
+  const followed = compareCapturedValue(operand, ruleVersion.op, row.value, ruleVersion.value);
   return { result: followed ? 'followed' : 'broken', observed: row.value };
+}
+
+/**
+ * `compare()` (`evaluate.ts`) assumes a SCALAR observed value for a
+ * `pick_many` operand — its only pre-existing `pick_many` catalogue entry
+ * is `day_of_week`, whose observed fact is one extracted day. A captured
+ * `pick_many` FIELD is different: `trade_captures.value` holds the JSON
+ * ARRAY of everything the trader selected (`captured-value-validation.ts`
+ * enforces a non-empty array), so delegating straight to `compareSet`
+ * compared an array against each option by `===` and silently inverted
+ * both operators — `in` never matched, `not_in` always did (qa FAIL,
+ * 2026-09-16: a fabricated evaluation every time, not the honest anomaly
+ * ADR 0046 promises).
+ *
+ * Set semantics for a multi-select, stated once:
+ *   - `in`     — followed when the trader selected AT LEAST ONE of the
+ *                rule's options (intersection non-empty).
+ *   - `not_in` — followed when they selected NONE of them.
+ * Every other operand type, and `pick_one` (whose captured value really
+ * is a scalar), still goes through the shared `compare()` untouched —
+ * there is exactly one place this diverges, and this is it.
+ */
+function compareCapturedValue(
+  operand: OperandCatalogueEntry,
+  op: RuleOperator,
+  observed: unknown,
+  ruleValue: unknown,
+): boolean {
+  if (operand.type !== 'pick_many' || !Array.isArray(observed)) {
+    return compare(operand, op, observed, ruleValue);
+  }
+  if (op !== 'in' && op !== 'not_in') {
+    throw new RuleEvaluationError(
+      'INVALID_OP_FOR_TYPE',
+      `evaluate (field operand): operator "${op}" is not valid for a captured pick_many field.`,
+    );
+  }
+  if (!Array.isArray(ruleValue)) {
+    throw new RuleEvaluationError(
+      'INVALID_VALUE_SHAPE',
+      `evaluate (field operand): "${op}" requires rule_version.value to be an array, got ${JSON.stringify(ruleValue)}.`,
+    );
+  }
+  const intersects = observed.some((selected) => ruleValue.some((allowed) => allowed === selected));
+  return op === 'in' ? intersects : !intersects;
 }

@@ -85,6 +85,28 @@ field is not versioned with the codebase. A new `OperandGroup` member
 `field` exists so a dynamically built entry can report a real, typed group
 rather than borrowing a static one.
 
+## Multi-select comparison — set semantics, stated once
+
+`evaluate.ts`'s shared `compare()` assumes a **scalar** observed value for
+a `pick_many` operand: its only pre-existing entry, `day_of_week`,
+extracts a single day. A captured `pick_many` **field** is different —
+`trade_captures.value` holds the JSON array of everything the trader
+selected. Delegating straight to `compareSet` therefore compared an array
+against each option with `===` and inverted both operators: `in` never
+matched, `not_in` always did — a fabricated evaluation on every trade
+(found by QA, 2026-09-16, before any UI could reach it).
+
+`evaluate-field-operand.ts` now applies real set semantics for that one
+case, and only that one:
+
+- `in` — followed when the selection and the rule's options intersect.
+- `not_in` — followed when they don't.
+
+`pick_one` (genuinely scalar) and every other type still go through the
+shared `compare()` untouched. `lib/rules/__tests__/evaluate-field-operand.test.ts`
+asserts the comparison itself, which the original slice never did — its
+tests covered parsing, catalogue construction and ownership only.
+
 ## Consequences
 
 - Strategy-scoped rules (stories 1.5–1.7) and conviction graduation are
