@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { listTradingAccounts, type TradingAccountRow } from '@/lib/broker/accounts-repository';
 import { PLATFORM_LABELS } from '@/lib/broker/platform-defaults';
 import { disconnectAccount } from './actions';
-import { attentionReason, formatLastSync } from './format';
+import { attentionReason, formatDayRollover, formatLastSync } from './format';
 
 /**
  * Module 01 §5.1/§5.2 "Account list", built against frame 6.5
@@ -48,7 +48,15 @@ export default async function AccountsPage(props: PageProps<'/accounts'>) {
     );
   }
 
-  const accounts = await listTradingAccounts(user.id);
+  const rawAccounts = await listTradingAccounts(user.id);
+  // Anything needing the trader's attention comes first. The repository
+  // orders by `created_at desc` for its other callers, which buried the
+  // one actionable card under disconnected ones (qa, 2026-09-17); sorting
+  // a copy here leaves that shared order alone.
+  const accounts = [...rawAccounts].sort((a, b) => {
+    const rank = (status: string) => (status === 'attention' ? 0 : status === 'syncing' ? 1 : status === 'connected' ? 2 : 3);
+    return rank(a.status) - rank(b.status);
+  });
 
   return (
     <section className="accounts flex flex-col gap-5" aria-labelledby="accounts-h">
@@ -101,8 +109,17 @@ function AccountCard({ account }: { account: TradingAccountRow }) {
       {needsAttention ? (
         <>
           <p className="account-card__reason">{attentionReason(account.status_detail)}</p>
-          <Link href="/accounts/connect" className="rq-btn">
-            Reconnect
+          {/* NOT a "Reconnect" primary: no reconnect capability exists
+              (qa FAIL, 2026-09-17). Re-submitting the same platform +
+              `provider_ref` hits the unique index and is refused as
+              `CONNECT_DUPLICATE_ACCOUNT`, and on Free the broken account
+              still occupies the one-account cap, so the connect flow
+              refuses before it starts. Offering a button that cannot
+              work is worse than offering the one screen that can act on
+              this account — inventory row 6.5 is ◐ until a real
+              reconnect action exists. */}
+          <Link href={`/accounts/${account.id}/settings`} className="link">
+            Account settings
           </Link>
         </>
       ) : (
@@ -118,7 +135,7 @@ function AccountCard({ account }: { account: TradingAccountRow }) {
             </div>
             <div>
               <dt>Day ends</dt>
-              <dd className="rq-num">{account.day_rollover}</dd>
+              <dd className="rq-num">{formatDayRollover(account.day_rollover)}</dd>
             </div>
             <div>
               <dt>Last sync</dt>
@@ -187,7 +204,10 @@ function StatusChip({ status, statusDetail }: { status: string; statusDetail: st
   const modifier = MODIFIERS[status] ?? 'chip--muted';
 
   return (
-    <span className={`chip ${modifier}`} data-status={status} title={statusDetail ?? undefined}>
+    // `status_detail` is an internal code — surfacing it as a tooltip
+    // leaked vocabulary no trader should read (qa, 2026-09-17). The
+    // human-readable reason is already rendered on the card itself.
+    <span className={`chip ${modifier}`} data-status={status}>
       {label}
     </span>
   );

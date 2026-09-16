@@ -1,4 +1,5 @@
 import { getSubscription } from '@/lib/entitlements/subscription-repository';
+import { fetchDiscoveryForUser } from '@/lib/review/discovery';
 import { canForUser } from '@/lib/entitlements/service';
 import { accountConnectLimitMessage, ruleCreateLimitMessage } from '@/lib/entitlements/messages';
 import { devEntitlementToolsEnabled } from '@/lib/entitlements/dev-tools-guard';
@@ -53,13 +54,18 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
     );
   }
 
-  const [subscription, accountEntitlement, ruleEntitlement, strategyEntitlement, fieldEntitlement] =
+  const [subscription, accountEntitlement, ruleEntitlement, strategyEntitlement, fieldEntitlement, discovery] =
     await Promise.all([
       getSubscription(user.id),
       canForUser(user.id, 'account.connect'),
       canForUser(user.id, 'rules.create'),
       canForUser(user.id, 'strategy.create'),
       canForUser(user.id, 'fields.custom'),
+      // Frame 6.7's "your history suggests four more": the trader's own
+      // ranked detections, the SAME read `/rules/new` already uses — not
+      // a generic pitch (qa, 2026-09-17, which proved this was one call
+      // away rather than missing plumbing).
+      fetchDiscoveryForUser(user.id),
     ]);
   const plan = subscription?.plan === 'pro' ? 'pro' : 'free';
 
@@ -111,7 +117,7 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
 
       {plan === 'free' ? (
         <aside className="upgrade-prompt" data-analytic="upgrade.rulecap">
-          <p>{upgradePrompt(ruleEntitlement, accountEntitlement)}</p>
+          <p>{upgradePrompt(ruleEntitlement, accountEntitlement, discovery.items.length)}</p>
           <p className="hint">
             Pro: unlimited rules, strategies and fields, judgment findings.{' '}
             <span className="price rq-num">$— / month</span>{' '}
@@ -193,7 +199,12 @@ function UsageItem({ row }: { row: UsageRow }) {
  *  generic": the first cap actually reached names itself with its own
  *  real numbers. With nothing at a cap yet there is no such fact, so the
  *  copy states what Pro changes instead of inventing pressure. */
-function upgradePrompt(rules: EntitlementResult, accounts: EntitlementResult): string {
+function upgradePrompt(rules: EntitlementResult, accounts: EntitlementResult, discoveryCount: number): string {
+  // The trader's own behaviour first, when there is any — a real count of
+  // patterns their trades already show, never a number when there are none.
+  if (discoveryCount > 0 && rules.reason === 'quota' && rules.limit !== null && rules.used !== undefined) {
+    return `You're using ${rules.used} of ${rules.limit} rules, and your own history suggests ${discoveryCount} more worth writing.`;
+  }
   if (rules.reason === 'quota' && rules.limit !== null && rules.used !== undefined) {
     return ruleCreateLimitMessage(rules.used, rules.limit);
   }

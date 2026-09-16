@@ -44,3 +44,19 @@ export function attentionReason(statusDetail: string | null): string {
   if (statusDetail && ATTENTION_REASONS[statusDetail]) return ATTENTION_REASONS[statusDetail];
   return "We can’t sync this account right now, and your broker didn’t tell us why. Reconnecting is the fix if your password or API key changed.";
 }
+
+/**
+ * `day_rollover` is stored as a Postgres `time with time zone`, which
+ * reads back as `17:00:00 America/New_York` — an IANA identifier is a
+ * machine key, not something to print at a trader (qa, 2026-09-17; the
+ * raw value also wrapped to two lines at phone width). Frame 6.5 reads
+ * "17:00 New York".
+ */
+export function formatDayRollover(dayRollover: string): string {
+  const match = /^(\d{2}):(\d{2})(?::\d{2})?\s+(.+)$/.exec(dayRollover.trim());
+  if (!match) return dayRollover;
+  const [, hh, mm, zone] = match;
+  // `America/New_York` -> `New York`; `UTC` stays `UTC`.
+  const place = zone.includes('/') ? zone.split('/').pop()! : zone;
+  return `${hh}:${mm} ${place.replace(/_/g, ' ')}`;
+}
