@@ -3,18 +3,20 @@
 import { useActionState } from 'react';
 import { redeemRecoveryCodeAction } from './actions';
 
+/** Frame 6.3's recovery branch. The code is typed, never displayed back:
+ *  this form holds no state of its own, so a redeemed or rejected code
+ *  is never re-rendered into the markup. */
 export function RecoveryRedeemForm() {
   const [state, formAction, pending] = useActionState(redeemRecoveryCodeAction, undefined);
 
   return (
-    <form action={formAction} noValidate className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="code" className="rq-label">
-          Recovery code
-        </label>
+    <form action={formAction} noValidate className="auth">
+      <div className="field">
+        <label htmlFor="code">Recovery code</label>
         <input
           id="code"
           name="code"
+          className="rq-num"
           type="text"
           autoComplete="off"
           spellCheck={false}
@@ -22,19 +24,18 @@ export function RecoveryRedeemForm() {
           autoFocus
           placeholder="XXXX-XXXX-XXXX-XXXX"
           aria-describedby={state?.fieldErrors?.code ? 'code-error' : undefined}
-          className="rq-num rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
         />
         {state?.fieldErrors?.code && (
-          <p id="code-error" className="rq-sub" role="alert">
+          <p id="code-error" className="hint" role="alert">
             {state.fieldErrors.code[0]}
           </p>
         )}
       </div>
 
       {state?.error && (
-        <p className="rq-sub" role="alert">
-          {state.error.user_message}
-        </p>
+        <div className="alert alert--blocking">
+          <p role="alert">{state.error.user_message}</p>
+        </div>
       )}
 
       <button type="submit" className="rq-btn rq-btn--block" disabled={pending}>

@@ -21,15 +21,17 @@ export default async function MfaRecoveryPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
+    <div className="auth">
+      <div>
         <h1 className="rq-h1">Use a recovery code</h1>
-        <p className="rq-sub">
-          Enter one of the recovery codes you saved when you enabled two-factor
-          authentication. This will remove two-factor authentication from your
-          account so you can sign back in — you can turn it back on afterwards.
-        </p>
+        <p className="auth__thesis">Was this a good decision? Not: did this trade make money.</p>
       </div>
+
+      <p className="rq-sub">
+        Enter one of the recovery codes you saved when you enabled two-factor authentication.
+        This will remove two-factor authentication from your account so you can sign back in —
+        you can turn it back on afterwards.
+      </p>
 
       <RecoveryRedeemForm />
     </div>

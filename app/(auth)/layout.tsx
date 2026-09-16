@@ -1,14 +1,15 @@
 /**
- * Shared shell for /signup, /login, /reset-password and
- * /reset-password/confirm. Plain centred card — this is infrastructure,
- * not a designed screen (per this slice's brief), but it still uses the
- * design system's tokens/typography classes rather than inventing new
- * ones (rq-h1, rq-sub, rq-label, rq-btn).
+ * Shared shell for /signup, /login, /reset-password,
+ * /reset-password/confirm and /mfa-challenge. Frames 6.1–6.3
+ * (`brand/docs/screens/account.html`) show the signed-out screens as
+ * the phone-width column itself — ground, not a card on ground — with
+ * the `.auth` stack doing all the layout, so this layout only centres
+ * that column and gets out of the way.
  */
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <main className="flex min-h-full flex-1 items-center justify-center p-6">
-      <div className="rq-card w-full max-w-sm">{children}</div>
+    <main className="mx-auto flex min-h-full w-full max-w-[32rem] flex-1 flex-col justify-center px-5 py-8">
+      {children}
     </main>
   );
 }

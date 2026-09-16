@@ -1,29 +1,40 @@
 import { getSubscription } from '@/lib/entitlements/subscription-repository';
 import { canForUser } from '@/lib/entitlements/service';
-import { accountConnectLimitMessage, formatUsageFraction } from '@/lib/entitlements/messages';
+import { accountConnectLimitMessage, ruleCreateLimitMessage } from '@/lib/entitlements/messages';
 import { devEntitlementToolsEnabled } from '@/lib/entitlements/dev-tools-guard';
 import { createClient } from '@/lib/supabase/server';
+import type { EntitlementResult } from '@/lib/entitlements/types';
 import { requestBillingPortal, devSetPlan } from './actions';
+import { usageDisplay, usageLabel, type UsageDisplay } from './usage';
 
 /**
- * Module 01 §5.1 "Plan screen": "current plan, usage against caps as
- * fractions ('3 of 3 rules'), upgrade with the data-derived prompt,
- * billing portal link." §5.2's reference markup is the template this
- * follows, adapted to this repo's real design-system selectors (the
- * same kind of adaptation `app/(app)/accounts/connect/page.tsx` already
- * made from `.segmented`/`.field` to `.rq-pills`/real form styling).
+ * Module 01 §5.1 "Plan screen", built against frame 6.7
+ * (`brand/docs/screens/account.html#6.7`): "fractions, never a bare
+ * percentage. The upgrade prompt is generated from the trader's own
+ * history, never generic. Price is a placeholder until the owner sets
+ * it."
  *
- * Only `account.connect` is rendered as a real, checkable fraction —
- * the only capability this slice can compute for real (see
- * `lib/entitlements/can.ts`'s own doc comment). Every other capability
- * in Module 01 §4.3's table belongs to a module that doesn't exist yet
- * (Rulebook, Strategy, Analytics, Graduation) — rather than fabricate a
- * fraction for a resource with no backing table, this screen states
- * plainly what Free vs Pro means for those without pretending to know a
- * trader's current usage of them (AGENTS.md "never fake it" / "'Not
- * enough data yet' is a correct, intended state — not an error, not a
- * bug").
+ * Every cap in Module 01 §4.3's table now has a real usage counter
+ * wired into `lib/entitlements/service.ts` (accounts, rules, hard
+ * rules, strategies, custom fields), so these fractions are counted,
+ * not asserted — this page's earlier "usage isn't shown here yet" note
+ * predated those counters and is gone. Where a cap has no fraction to
+ * show (unlimited on Pro, or a cap of exactly 0, which is a plan
+ * exclusion and carries no count) the row says which, never "0 of 0"
+ * (see `usage.ts`).
+ *
+ * The frame's second sentence — "Your history suggests four more" — is
+ * still not built: it needs Module 05's rule-proposal signal, and
+ * `lib/entitlements/messages.ts` deliberately ships the honest half of
+ * that copy only. Inventory row 6.7 records it.
  */
+
+interface UsageRow {
+  key: string;
+  label: string;
+  display: UsageDisplay;
+}
+
 export default async function PlanPage(props: PageProps<'/plan'>) {
   const searchParams = await props.searchParams;
   const errorCode = typeof searchParams.error === 'string' ? searchParams.error : undefined;
@@ -42,9 +53,22 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
     );
   }
 
-  const subscription = await getSubscription(user.id);
+  const [subscription, accountEntitlement, ruleEntitlement, strategyEntitlement, fieldEntitlement] =
+    await Promise.all([
+      getSubscription(user.id),
+      canForUser(user.id, 'account.connect'),
+      canForUser(user.id, 'rules.create'),
+      canForUser(user.id, 'strategy.create'),
+      canForUser(user.id, 'fields.custom'),
+    ]);
   const plan = subscription?.plan === 'pro' ? 'pro' : 'free';
-  const accountEntitlement = await canForUser(user.id, 'account.connect');
+
+  const rows: UsageRow[] = [
+    { key: 'rules', label: 'Rules', display: usageDisplay(ruleEntitlement) },
+    { key: 'accounts', label: 'Connected accounts', display: usageDisplay(accountEntitlement) },
+    { key: 'strategies', label: 'Strategies', display: usageDisplay(strategyEntitlement) },
+    { key: 'fields', label: 'Custom fields', display: usageDisplay(fieldEntitlement) },
+  ];
 
   const errorMessage =
     errorCode === 'BILLING_NOT_CONFIGURED'
@@ -60,110 +84,78 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
               : undefined;
 
   return (
-    <section className="flex flex-col gap-8" aria-labelledby="plan-h">
-      <h1 id="plan-h" className="rq-h1">
-        Your plan
-      </h1>
-      <p className="plan__current rq-body">{plan === 'pro' ? 'Pro' : 'Free'}</p>
+    <section className="plan flex flex-col gap-5" aria-labelledby="plan-h">
+      <div>
+        <h1 id="plan-h" className="rq-h1">
+          Your plan
+        </h1>
+        <p className="plan__current">{plan === 'pro' ? 'Pro' : 'Free'}</p>
+      </div>
 
       {planUpdated && (
-        <p className="rq-sub" role="status">
+        <p className="hint" role="status">
           Plan updated.
         </p>
       )}
       {errorMessage && (
-        <p className="rq-sub" role="alert">
-          {errorMessage}
-        </p>
+        <div className="alert alert--blocking">
+          <p role="alert">{errorMessage}</p>
+        </div>
       )}
 
-      <ul className="usage flex flex-col gap-4">
-        <li
-          className="usage__item rq-well flex flex-col gap-2"
-          data-at-limit={!accountEntitlement.allowed && accountEntitlement.reason === 'quota'}
-        >
-          <div className="flex items-center justify-between">
-            <span className="usage__label rq-label">Connected accounts</span>
-            <span className="usage__value rq-num">
-              {formatUsageFraction(accountEntitlement.used ?? 0, accountEntitlement.limit)}
-            </span>
-          </div>
-          {accountEntitlement.limit !== null && (
-            <progress
-              value={accountEntitlement.used ?? 0}
-              max={accountEntitlement.limit}
-              aria-label="Accounts connected"
-              className="w-full"
-            />
-          )}
-        </li>
+      <ul className="usage">
+        {rows.map((row) => (
+          <UsageItem key={row.key} row={row} />
+        ))}
       </ul>
 
-      <div className="rq-well flex flex-col gap-2">
-        <h2 className="rq-h2">What each plan includes</h2>
-        <dl className="flex flex-col gap-2">
-          <div className="flex justify-between gap-4">
-            <dt className="rq-sub">Connected accounts</dt>
-            <dd className="rq-sub">Free: 1 · Pro: unlimited</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="rq-sub">Rules</dt>
-            <dd className="rq-sub">Free: 3 (soft only) · Pro: unlimited, up to 6 hard</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="rq-sub">Strategies &amp; custom fields</dt>
-            <dd className="rq-sub">Free: none · Pro: unlimited</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="rq-sub">Judgment analytics &amp; graduation</dt>
-            <dd className="rq-sub">Free: not included · Pro: included</dd>
-          </div>
-        </dl>
-        <p className="rq-sub">
-          Rules, strategies, and analytics usage aren&apos;t shown here yet — those features
-          ship in a later slice of this build. This is not enough data to show a fraction for
-          them, which is a correct, intended state, not an error.
-        </p>
-      </div>
-
       {plan === 'free' ? (
-        <aside className="rq-cost flex flex-col gap-3" data-analytic="upgrade.rulecap">
-          <p className="rq-body">
-            {accountEntitlement.reason === 'quota' && accountEntitlement.limit !== null
-              ? accountConnectLimitMessage(accountEntitlement.used ?? accountEntitlement.limit, accountEntitlement.limit)
-              : 'Upgrading removes the account-connection limit and unlocks strategies, rules beyond the free cap, and judgment analytics.'}
+        <aside className="upgrade-prompt" data-analytic="upgrade.rulecap">
+          <p>{upgradePrompt(ruleEntitlement, accountEntitlement)}</p>
+          <p className="hint">
+            Pro: unlimited rules, strategies and fields, judgment findings.{' '}
+            <span className="price rq-num">$— / month</span>{' '}
+            <span className="rq-tag rq-tag--muted">TODO(owner)</span>
           </p>
           <form action={requestBillingPortal}>
             <button type="submit" className="rq-btn">
-              Upgrade to Pro
+              See Pro
             </button>
           </form>
         </aside>
       ) : (
-        <form action={requestBillingPortal}>
-          <button type="submit" className="rq-btn">
-            Manage billing
+        <form action={requestBillingPortal} className="auth__foot">
+          <button type="submit" className="link">
+            Billing portal
           </button>
         </form>
       )}
 
       {devEntitlementToolsEnabled() && (
         <div className="rq-well flex flex-col gap-3" data-testid="dev-plan-tool">
-          <p className="rq-sub">
+          <p className="hint">
             <strong>Dev only.</strong> Flips your own plan directly for testing the entitlement
             engine. This control does not exist outside development and is never a real billing
             action.
           </p>
-          <div className="flex gap-2">
+          <div className="rq-btn-row">
             <form action={devSetPlan}>
               <input type="hidden" name="plan" value="free" />
-              <button type="submit" className="rq-btn rq-btn--ghost" disabled={plan === 'free'}>
+              <button
+                type="submit"
+                className="rq-btn rq-btn--ghost rq-btn--block"
+                disabled={plan === 'free'}
+              >
                 Set my plan to Free
               </button>
             </form>
             <form action={devSetPlan}>
               <input type="hidden" name="plan" value="pro" />
-              <button type="submit" className="rq-btn rq-btn--ghost" disabled={plan === 'pro'}>
+              <button
+                type="submit"
+                className="rq-btn rq-btn--ghost rq-btn--block"
+                disabled={plan === 'pro'}
+              >
                 Set my plan to Pro
               </button>
             </form>
@@ -172,4 +164,41 @@ export default async function PlanPage(props: PageProps<'/plan'>) {
       )}
     </section>
   );
+}
+
+function UsageItem({ row }: { row: UsageRow }) {
+  const { display } = row;
+  return (
+    <li className="usage__item" data-at-limit={display.kind === 'fraction' && display.atLimit}>
+      <span className="usage__label">{row.label}</span>
+      <span className="usage__value rq-num">
+        {display.kind === 'fraction' ? (
+          <>
+            <strong>{display.used}</strong> of {display.limit}
+          </>
+        ) : (
+          usageLabel(display)
+        )}
+      </span>
+      {/* The bar is the same fraction, drawn — never a second, different
+          number, and never rendered at all when there is no fraction. */}
+      {display.kind === 'fraction' && (
+        <progress value={display.used} max={display.limit} aria-label={`${row.label} used`} />
+      )}
+    </li>
+  );
+}
+
+/** Frame 6.7's prompt is "generated from the trader's own history, never
+ *  generic": the first cap actually reached names itself with its own
+ *  real numbers. With nothing at a cap yet there is no such fact, so the
+ *  copy states what Pro changes instead of inventing pressure. */
+function upgradePrompt(rules: EntitlementResult, accounts: EntitlementResult): string {
+  if (rules.reason === 'quota' && rules.limit !== null && rules.used !== undefined) {
+    return ruleCreateLimitMessage(rules.used, rules.limit);
+  }
+  if (accounts.reason === 'quota' && accounts.limit !== null && accounts.used !== undefined) {
+    return accountConnectLimitMessage(accounts.used, accounts.limit);
+  }
+  return 'Upgrading removes the account limit and unlocks strategies, custom fields, rules beyond the free cap, and judgment findings.';
 }

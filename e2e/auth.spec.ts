@@ -29,7 +29,10 @@ test('signup happy path — empty state, then "check your email" (mailer_autocon
   createdEmails.push(email);
 
   await page.goto('/signup');
-  await expect(page.locator('h1')).toHaveText('Create your account');
+  // Frame 6.2's own heading: the screen stays "Sign up" and the
+  // confirmation arrives as a `.finding`, rather than the whole screen
+  // becoming a "Check your email" page (UI batch 6).
+  await expect(page.locator('h1')).toHaveText('Sign up');
   await page.screenshot({ path: 'tmp/dev-screenshots/signup-empty.png' });
 
   // Exactly one *primary* (filled) .rq-btn on this view — the design
@@ -48,7 +51,9 @@ test('signup happy path — empty state, then "check your email" (mailer_autocon
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
 
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
   await expect(page.locator('body')).toContainText('Check your email to confirm your account');
   await page.screenshot({ path: 'tmp/dev-screenshots/signup-success.png' });
 });
@@ -56,6 +61,9 @@ test('signup happy path — empty state, then "check your email" (mailer_autocon
 test('signup with an already-registered email gets the same "check your email" response (no enumeration)', async ({
   page,
 }) => {
+  // Longer than the file default: this one test has to sit out GoTrue's
+  // own 60-second per-address email cooldown (see below).
+  test.setTimeout(150_000);
   const email = uniqueTestEmail('signup-dupe');
   createdEmails.push(email);
 
@@ -64,8 +72,22 @@ test('signup with an already-registered email gets the same "check your email" r
   await page.fill('#email', email);
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
   const firstMessage = await page.locator('main').innerText();
+
+  // GoTrue enforces its own 60-second minimum between confirmation
+  // emails to the SAME address (`over_email_send_rate_limit`, 429 —
+  // reproduced directly against the project's REST endpoint 2026-09-17:
+  // an immediate second signup for one address returns "you can only
+  // request this after 58 seconds"). That is a server-side mailer rule,
+  // not this app's limiter, so `RETROSPEQ_E2E_RATE_LIMIT_BYPASS` does
+  // not touch it and the second submit below would otherwise always
+  // render AUTH_RATE_LIMITED instead of the response under test. Wait it
+  // out rather than weakening the assertion — the no-enumeration
+  // property is exactly what this test exists to prove.
+  await page.waitForTimeout(62_000);
 
   // Second signup with the same email — the actual case under test. With
   // email confirmation on, Supabase returns success (an obfuscated user,
@@ -77,7 +99,9 @@ test('signup with an already-registered email gets the same "check your email" r
   await page.fill('#email', email);
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
   await expect(page.locator('form p[role="alert"]')).toHaveCount(0);
   expect(await page.locator('main').innerText()).toBe(firstMessage);
   await page.screenshot({ path: 'tmp/dev-screenshots/signup-existing-email.png' });
@@ -117,20 +141,26 @@ test('password reset request returns the identical response for an existing vs a
   await page.fill('#email', existingEmail);
   await page.fill('#password', TEST_PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
 
   await page.goto('/reset-password');
   await expect(page.locator('h1')).toHaveText('Reset your password');
   await page.screenshot({ path: 'tmp/dev-screenshots/reset-password-empty.png' });
   await page.fill('#email', existingEmail);
   await page.getByRole('button', { name: 'Send reset link' }).click();
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
   const existingMessage = await page.locator('main').innerText();
 
   await page.goto('/reset-password');
   await page.fill('#email', uniqueTestEmail('reset-nonexistent'));
   await page.getByRole('button', { name: 'Send reset link' }).click();
-  await expect(page.locator('h1')).toHaveText('Check your email', { timeout: 10_000 });
+  await expect(page.locator('.finding__statement')).toHaveText('Check your email.', {
+    timeout: 10_000,
+  });
   const nonexistentMessage = await page.locator('main').innerText();
   await page.screenshot({ path: 'tmp/dev-screenshots/reset-password-success.png' });
 

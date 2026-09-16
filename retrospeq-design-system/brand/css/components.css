@@ -459,6 +459,12 @@
 .finding[data-confidence="provisional"] .finding__statement {
   font-weight: var(--rq-weight-bold);
 }
+/* `--notice`: the same block used for a system statement rather than an
+   analytics finding ("Check your email.", "Your export is ready.") —
+   frames 6.2 and 6.9 both draw it with an amber edge, which they do
+   inline because no modifier existed. It is a pointer, not an alarm:
+   the accent is this system's one accent, never a status colour. */
+.finding--notice { border-left-color: var(--rq-accent); }
 
 /* ============================================================
    Added 2026-09-14 — design program batch 1 (home + onboarding).
@@ -841,7 +847,12 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 /* ---------- Toggle switch ---------- */
 .switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-.switch i { position: absolute; inset: 0; border-radius: var(--rq-radius-pill); background: var(--rq-line-strong); transition: background var(--rq-duration-fast) var(--rq-ease); }
+/* `pointer-events: none` on the track: it paints over the transparent
+   checkbox, so without this every tap lands on the <i>. A click on the
+   wrapping <label> still reaches the input, so the control worked — but
+   only by that indirection, and automation (and anything hit-testing the
+   control directly) saw the track instead. Added 2026-09-17, UI batch 6. */
+.switch i { position: absolute; inset: 0; border-radius: var(--rq-radius-pill); background: var(--rq-line-strong); transition: background var(--rq-duration-fast) var(--rq-ease); pointer-events: none; }
 .switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--rq-surface); transition: transform var(--rq-duration-fast) var(--rq-ease); }
 .switch input:checked + i { background: var(--rq-accent); }
 .switch input:checked + i::after { transform: translateX(18px); }
@@ -906,4 +917,5 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 .strategy,
 .fields,
 .field-new,
-.review { flex: 1 1 auto; }
+.review,
+.settings-index { flex: 1 1 auto; }

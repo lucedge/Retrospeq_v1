@@ -3,19 +3,24 @@ import { createClient } from '@/lib/supabase/server';
 import { listTradingAccounts, type TradingAccountRow } from '@/lib/broker/accounts-repository';
 import { PLATFORM_LABELS } from '@/lib/broker/platform-defaults';
 import { disconnectAccount } from './actions';
+import { attentionReason, formatLastSync } from './format';
 
 /**
- * Module 01 §5.1/§5.2 "Account list" — one card per connected account:
- * label, platform, status chip, last sync, base currency, rollover.
- * Reads via `lib/broker/accounts-repository.ts` (direct Postgres, ADR
- * 0006) rather than `lib/supabase/server.ts`'s `.from()` — see that ADR
- * for why the latter would 404 against the `retrospeq` schema today.
+ * Module 01 §5.1/§5.2 "Account list", built against frame 6.5
+ * (`brand/docs/screens/account.html#6.5`): one `.account-card` per
+ * account carrying label, platform, a text status chip, and the meta
+ * grid; "Needs attention" is an ink ring with a specific reason and its
+ * fix as the card's one primary. Reads via
+ * `lib/broker/accounts-repository.ts` (direct Postgres, ADR 0006)
+ * rather than `lib/supabase/server.ts`'s `.from()` — see that ADR for
+ * why the latter would 404 against the `retrospeq` schema today.
  *
- * This slice only ever produces `connected`/`disconnected` rows (Module
- * 02's sync worker is what would move an account to `syncing`/
- * `attention` — doesn't exist yet). `StatusChip` still handles every
- * status the column can hold, so it never silently mislabels a future
- * status it wasn't specifically written for.
+ * Nothing in the app writes `syncing`/`attention` or a `status_detail`
+ * code yet (Module 02's sync worker is what would — it doesn't exist).
+ * Both states are rendered for real from the column anyway, so the
+ * screen never mislabels a status it wasn't specifically written for,
+ * and the reason copy degrades honestly when no code is present (see
+ * `format.ts`).
  */
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -46,95 +51,114 @@ export default async function AccountsPage(props: PageProps<'/accounts'>) {
   const accounts = await listTradingAccounts(user.id);
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="accounts-h">
-      <div className="flex items-center justify-between">
-        <h1 id="accounts-h" className="rq-h1">
-          Your accounts
-        </h1>
-        <Link href="/accounts/connect" className="rq-btn">
-          Connect an account
-        </Link>
-      </div>
+    <section className="accounts flex flex-col gap-5" aria-labelledby="accounts-h">
+      <h1 id="accounts-h" className="rq-h1">
+        Trading accounts
+      </h1>
 
       {errorCode && (
-        <p className="rq-sub" role="alert">
-          {ERROR_MESSAGES[errorCode] ?? 'Something went wrong. Please try again.'}
-        </p>
+        <div className="alert alert--blocking" role="alert">
+          <p>{ERROR_MESSAGES[errorCode] ?? 'Something went wrong. Please try again.'}</p>
+        </div>
       )}
 
       {accounts.length === 0 ? (
         <p className="rq-sub">
-          No accounts yet. Connect a broker or add a manual account to get started.
+          No accounts yet. Connect a broker, or add a manual account and log your trades
+          yourself.
         </p>
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="account-list">
           {accounts.map((account) => (
             <AccountCard key={account.id} account={account} />
           ))}
         </ul>
       )}
+
+      {/* Ghost, not the primary: on a screen where an account needs
+          attention, the fix on that card is the one thing worth doing
+          (frame 6.5). */}
+      <Link href="/accounts/connect" className="rq-btn rq-btn--ghost rq-btn--block">
+        Add an account
+      </Link>
     </section>
   );
 }
 
 function AccountCard({ account }: { account: TradingAccountRow }) {
+  const needsAttention = account.status === 'attention';
   const disconnected = account.status === 'disconnected';
+  const platformLabel =
+    PLATFORM_LABELS[account.platform as keyof typeof PLATFORM_LABELS] ?? account.platform;
+
   return (
-    <li className="rq-card flex flex-col gap-3" data-status={account.status}>
-      <div className="flex items-center justify-between">
-        <h3 className="rq-h2">{account.label}</h3>
+    <li className="account-card" data-status={account.status}>
+      <div className="account-card__head">
+        <h2 className="account-card__label">{account.label}</h2>
         <StatusChip status={account.status} statusDetail={account.status_detail} />
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
-        <div>
-          <dt className="rq-label">Platform</dt>
-          <dd className="rq-body">{PLATFORM_LABELS[account.platform as keyof typeof PLATFORM_LABELS] ?? account.platform}</dd>
-        </div>
-        <div>
-          <dt className="rq-label">Currency</dt>
-          <dd className="rq-num">{account.base_currency}</dd>
-        </div>
-        <div>
-          <dt className="rq-label">Day ends</dt>
-          <dd className="rq-body">{account.day_rollover}</dd>
-        </div>
-        <div>
-          <dt className="rq-label">Last sync</dt>
-          <dd className="rq-sub">
-            {account.last_sync_at ? account.last_sync_at : 'n/a'}
-          </dd>
-        </div>
-      </dl>
-
-      {disconnected && (
-        <p className="rq-sub">
-          Disconnected. Imported trade history, if any, is retained.
-        </p>
-      )}
-
-      {!disconnected && (
-        <div className="flex justify-end gap-2">
-          <Link href={`/accounts/${account.id}/settings`} className="rq-btn rq-btn--ghost">
-            Settings
+      {needsAttention ? (
+        <>
+          <p className="account-card__reason">{attentionReason(account.status_detail)}</p>
+          <Link href="/accounts/connect" className="rq-btn">
+            Reconnect
           </Link>
-          <form action={disconnectAccount.bind(null, account.id)}>
-            <button type="submit" className="rq-btn rq-btn--ghost">
-              Disconnect
-            </button>
-          </form>
-        </div>
+        </>
+      ) : (
+        <>
+          <dl className="account-card__meta">
+            <div>
+              <dt>Platform</dt>
+              <dd>{platformLabel}</dd>
+            </div>
+            <div>
+              <dt>Currency</dt>
+              <dd className="rq-num">{account.base_currency}</dd>
+            </div>
+            <div>
+              <dt>Day ends</dt>
+              <dd className="rq-num">{account.day_rollover}</dd>
+            </div>
+            <div>
+              <dt>Last sync</dt>
+              <dd className="rq-num">
+                {account.last_sync_at ? (
+                  <time dateTime={account.last_sync_at}>{formatLastSync(account.last_sync_at)}</time>
+                ) : (
+                  formatLastSync(null)
+                )}
+              </dd>
+            </div>
+          </dl>
+
+          {disconnected ? (
+            <p className="account-card__reason">
+              Disconnected. Your imported history and findings are kept.
+            </p>
+          ) : (
+            <div className="account-card__actions">
+              <Link href={`/accounts/${account.id}/settings`} className="link">
+                Settings
+              </Link>
+              <form action={disconnectAccount.bind(null, account.id)}>
+                <button type="submit" className="link">
+                  Disconnect
+                </button>
+              </form>
+            </div>
+          )}
+        </>
       )}
     </li>
   );
 }
 
 /** Module 01 §5.3: "every status chip carries text, never colour alone."
- *  Built on `.rq-tag` (retrospeq-design-system/brand/css/components.css)
- *  — there is no dedicated chip component in the design system, and no
- *  red/green pair to build a status chip out of by design (AGENTS.md). */
+ *  `.chip` + `--ok`/`--attention`/`--syncing`/`--muted` (frame 6.5) —
+ *  weight and edge only, no hue, since no red/green pair exists by
+ *  design (AGENTS.md). */
 function StatusChip({ status, statusDetail }: { status: string; statusDetail: string | null }) {
-  const isConnected = status === 'connected';
   // Flagged by retrospeq-qa (2026-08-21): the fallback previously
   // hardcoded 'Pending' for ANY unrecognised status, including the real
   // 'plan_limited' value story 4.4's downgrade path now writes
@@ -153,14 +177,17 @@ function StatusChip({ status, statusDetail }: { status: string; statusDetail: st
     attention: 'Needs attention',
     disconnected: 'Disconnected',
   };
+  const MODIFIERS: Record<string, string> = {
+    connected: 'chip--ok',
+    syncing: 'chip--syncing',
+    attention: 'chip--attention',
+    disconnected: 'chip--muted',
+  };
   const label = KNOWN_LABELS[status] ?? humanizeStatus(status);
+  const modifier = MODIFIERS[status] ?? 'chip--muted';
 
   return (
-    <span
-      className={isConnected ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}
-      data-status={status}
-      title={statusDetail ?? undefined}
-    >
+    <span className={`chip ${modifier}`} data-status={status} title={statusDetail ?? undefined}>
       {label}
     </span>
   );

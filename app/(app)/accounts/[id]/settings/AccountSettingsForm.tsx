@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useActionState, useState } from 'react';
 import {
+  disconnectAccount,
   updateAccountSettings,
   type AccountSettingsActionState,
 } from '../../actions';
@@ -12,14 +13,27 @@ import {
 // (see platform-defaults.ts's comment on this). `TradingAccountRow` is
 // imported `type`-only below so it's fully erased at compile time and
 // carries no such risk.
-import { ACCOUNT_KINDS, type AccountKind } from '@/lib/broker/platform-defaults';
+import { ACCOUNT_KINDS, PLATFORM_LABELS, type AccountKind } from '@/lib/broker/platform-defaults';
+import type { Platform } from '@/lib/broker/adapter';
 import type { TradingAccountRow } from '@/lib/broker/accounts-repository';
 
 /**
- * Module 01 §5.2's `.rq-pills`/field markup, same adaptation
- * `app/(app)/accounts/connect/page.tsx` already made from the spec's
- * illustrative `.segmented`/`.field` classes to this repo's real
- * design-system selectors.
+ * Module 01 §4.5 account settings, built against frame 6.6
+ * (`brand/docs/screens/account.html#6.6`): the account's own label as
+ * the `<h1>`, platform and account number as the subline, then the
+ * editable `.field`s, then — below an `.rq-hr` — the disconnect row
+ * explained in plain words, as a `.link`, never a red button.
+ *
+ * Two deliberate departures from the frame, both because the capability
+ * genuinely isn't there (AGENTS.md "never fake it"):
+ *  - **Base currency is read-only.** `updateTradingAccountSettingsInputSchema`
+ *    accepts `label`/`dayRollover`/`accountKind` only; it is set from the
+ *    platform's default at connect time. An editable-looking input that
+ *    silently can't save is worse than saying so.
+ *  - **No "Delete this account" row.** There is no delete Server Action —
+ *    only `disconnectAccount`. Account-wide deletion lives on /privacy
+ *    (Module 01 story 5.2). Tracked as a gap on inventory row 6.6 rather
+ *    than shipped as a button that does nothing.
  */
 
 const ACCOUNT_KIND_LABELS: Record<AccountKind, string> = {
@@ -75,13 +89,25 @@ export function AccountSettingsForm({
     setAccountKind(state.account.account_kind as AccountKind);
   }
 
+  const platformLabel =
+    PLATFORM_LABELS[account.platform as Platform] ?? account.platform;
+
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="settings-h">
-      <div className="flex items-center justify-between">
+    <section className="account-settings flex flex-col gap-4" aria-labelledby="settings-h">
+      <div className="flex flex-col gap-1">
         <h1 id="settings-h" className="rq-h1">
-          Account settings
+          {current.label}
         </h1>
-        <Link href="/accounts" className="rq-btn rq-btn--ghost">
+        <p className="rq-sub">
+          {platformLabel}
+          {account.provider_ref ? (
+            <>
+              {' · account '}
+              <span className="rq-num">{account.provider_ref}</span>
+            </>
+          ) : null}
+        </p>
+        <Link href="/accounts" className="link self-start">
           Back to accounts
         </Link>
       </div>
@@ -93,16 +119,14 @@ export function AccountSettingsForm({
       )}
 
       {state?.error && (
-        <p className="rq-sub" role="alert">
-          {state.error.user_message}
-        </p>
+        <div className="alert alert--blocking" role="alert">
+          <p>{state.error.user_message}</p>
+        </div>
       )}
 
-      <form action={formAction} noValidate className="flex flex-col gap-5">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="label" className="rq-label">
-            Label
-          </label>
+      <form action={formAction} noValidate className="flex flex-col gap-4">
+        <div className="field">
+          <label htmlFor="label">Label</label>
           <input
             id="label"
             name="label"
@@ -111,22 +135,19 @@ export function AccountSettingsForm({
             autoComplete="off"
             maxLength={40}
             aria-describedby="label-hint"
-            className="rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
           />
-          <p id="label-hint" className="rq-sub">
-            Up to 40 characters — how you&apos;ll tell this account apart from your others.
+          <p id="label-hint" className="hint">
+            Up to 40 characters — how you’ll tell this account apart from your others.
           </p>
           {state?.fieldErrors?.label && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {state.fieldErrors.label[0]}
             </p>
           )}
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="dayRollover" className="rq-label">
-            Day ends
-          </label>
+        <div className="field">
+          <label htmlFor="dayRollover">Day ends</label>
           <input
             id="dayRollover"
             name="dayRollover"
@@ -134,46 +155,63 @@ export function AccountSettingsForm({
             onChange={(e) => setDayRollover(e.target.value)}
             autoComplete="off"
             aria-describedby="rollover-hint"
-            className="rq-num rounded-md border border-line bg-surface px-3 py-2.5 text-base"
+            className="rq-num"
           />
-          <p id="rollover-hint" className="rq-sub">
-            Story 3.1/3.2: broker rollover for forex, e.g. &lsquo;America/New_York 17:00&rsquo; —
-            or &lsquo;00:00:00 UTC&rsquo; to match a crypto exchange.
+          <p id="rollover-hint" className="hint">
+            Sets which trades belong to which day, e.g. &lsquo;America/New_York 17:00&rsquo; for a
+            forex broker&rsquo;s rollover or &lsquo;00:00:00 UTC&rsquo; for a crypto exchange.
+            Change it only if your broker&rsquo;s rollover differs.
           </p>
           {state?.fieldErrors?.dayRollover && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {state.fieldErrors.dayRollover[0]}
             </p>
           )}
         </div>
 
-        <fieldset className="flex flex-col gap-2">
+        <div className="field">
+          <span className="rq-label" id="base-currency-label">
+            Base currency
+          </span>
+          {/* Read-only on purpose — see this file's header. Rendered as a
+              value, not a disabled-looking input, so it never reads as
+              something that failed to save. */}
+          <p className="rq-num text-base" aria-labelledby="base-currency-label">
+            {account.base_currency}
+          </p>
+          <p className="hint">
+            Set from your platform when you connected this account. Changing it isn’t
+            supported yet.
+          </p>
+        </div>
+
+        <fieldset className="field">
           <legend className="rq-label">Account type</legend>
-          <div className="rq-pills" role="radiogroup" aria-label="Account type">
+          <div className="segmented">
             {ACCOUNT_KINDS.map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                role="radio"
-                aria-checked={accountKind === kind}
-                className={accountKind === kind ? 'rq-pill on' : 'rq-pill'}
-                onClick={() => setAccountKind(kind)}
-              >
-                {ACCOUNT_KIND_LABELS[kind]}
-              </button>
+              <span key={kind}>
+                <input
+                  type="radio"
+                  id={`account-kind-${kind}`}
+                  name="accountKind"
+                  value={kind}
+                  checked={accountKind === kind}
+                  onChange={() => setAccountKind(kind)}
+                />
+                <label htmlFor={`account-kind-${kind}`}>{ACCOUNT_KIND_LABELS[kind]}</label>
+              </span>
             ))}
           </div>
-          <input type="hidden" name="accountKind" value={accountKind} />
           {/* Story 3.4 (v1.1 stub): marking prop stores the label only —
               no firm rulebook exists yet (Module 09, v1.1). Said plainly
               so a trader doesn't expect firm-rule enforcement today. */}
           {accountKind === 'prop' && (
-            <p className="rq-sub">
+            <p className="hint">
               Firm rulebook features are coming soon. This only labels the account for now.
             </p>
           )}
           {state?.fieldErrors?.accountKind && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {state.fieldErrors.accountKind[0]}
             </p>
           )}
@@ -181,6 +219,18 @@ export function AccountSettingsForm({
 
         <button type="submit" className="rq-btn rq-btn--block" disabled={pending}>
           {pending ? 'Saving…' : 'Save'}
+        </button>
+      </form>
+
+      <hr className="rq-hr" />
+
+      <form action={disconnectAccount.bind(null, accountId)} className="settings__row">
+        <span className="settings__label">
+          <b>Disconnect</b>
+          <span>Stops syncing. Keeps your history and findings.</span>
+        </span>
+        <button type="submit" className="link">
+          Disconnect
         </button>
       </form>
     </section>

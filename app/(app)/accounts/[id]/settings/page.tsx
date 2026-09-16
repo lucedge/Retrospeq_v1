@@ -38,14 +38,14 @@ export default async function AccountSettingsPage(props: PageProps<'/accounts/[i
   const account = await getTradingAccount(user.id, id);
   if (!account) {
     return (
-      <section className="flex flex-col gap-4" aria-labelledby="settings-h">
+      <section className="account-settings flex flex-col gap-4" aria-labelledby="settings-h">
         <h1 id="settings-h" className="rq-h1">
           Account settings
         </h1>
-        <p className="rq-sub" role="alert">
-          We couldn&apos;t find that account.
-        </p>
-        <Link href="/accounts" className="rq-btn rq-btn--ghost">
+        <div className="alert alert--blocking" role="alert">
+          <p>We couldn&apos;t find that account.</p>
+        </div>
+        <Link href="/accounts" className="link">
           Back to accounts
         </Link>
       </section>

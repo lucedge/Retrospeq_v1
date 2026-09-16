@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
+import { formatDateTime, formatLongDate } from './format';
+import { PrivacyToggle } from './PrivacyToggle';
 import { getProfilePrivacy } from '@/lib/privacy/profile-repository';
 import { listDataRequestsForUser, type DataRequestRow } from '@/lib/privacy/data-requests-repository';
 import { getPendingErasureRequest } from '@/lib/privacy/erasure';
@@ -23,6 +25,16 @@ import {
  * (stories 1.4/1.5) — this screen owns export/delete/telemetry (stories
  * 5.1/5.2/5.3/5.4) and links to `/security` for the rest, per that
  * screen's own dispatch note ("a future slice extends this same route").
+ *
+ * Built against frame 6.9 (`brand/docs/screens/account.html#6.9`):
+ * "export and erasure with their pending states. Erasure is a
+ * cooling-off with a cancel, not a red button." Each capability is one
+ * `.settings__row` — a `.link` for the ones that start a request, a
+ * `.switch` for the two standing preferences — and the state each
+ * request is in is shown right under its own row, never as a banner at
+ * the top. Restriction (story 5.3) and the weekly-email opt-out are
+ * rows the frame doesn't draw but the product has; they use the same
+ * two shapes rather than a parallel treatment.
  */
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -67,151 +79,121 @@ export default async function PrivacyPage(props: PageProps<'/privacy'>) {
   const weeklyReviewEmailOptedOut = profile?.weekly_review_email_opt_out ?? false;
 
   return (
-    <section className="flex flex-col gap-8" aria-labelledby="privacy-h">
+    <section className="privacy flex flex-col gap-4" aria-labelledby="privacy-h">
       <h1 id="privacy-h" className="rq-h1">
         Privacy
       </h1>
 
       {errorCode && (
-        <p className="rq-sub" role="alert">
-          {ERROR_MESSAGES[errorCode] ?? 'Something went wrong. Please try again.'}
-        </p>
+        <div className="alert alert--blocking">
+          <p role="alert">
+            {ERROR_MESSAGES[errorCode] ?? 'Something went wrong. Please try again.'}
+          </p>
+        </div>
       )}
       {searchParams.telemetryUpdated === '1' && (
-        <p className="rq-sub" role="status">
+        <p className="hint" role="status">
           Telemetry preference updated.
         </p>
       )}
       {searchParams.weeklyReviewEmailUpdated === '1' && (
-        <p className="rq-sub" role="status">
+        <p className="hint" role="status">
           Weekly review email preference updated.
         </p>
       )}
-      {searchParams.exportReady === '1' && (
-        <p className="rq-sub" role="status">
-          Your export is ready below.
-        </p>
-      )}
-      {searchParams.erasureRequested === '1' && (
-        <p className="rq-sub" role="status">
-          Deletion requested — see below for the grace period.
-        </p>
-      )}
       {searchParams.erasureCanceled === '1' && (
-        <p className="rq-sub" role="status">
+        <p className="hint" role="status">
           Deletion canceled. Your account is unaffected.
         </p>
       )}
-      {searchParams.restrictionRequested === '1' && (
-        <p className="rq-sub" role="status">
-          Processing restricted for this account.
-        </p>
-      )}
       {searchParams.restrictionLifted === '1' && (
-        <p className="rq-sub" role="status">
+        <p className="hint" role="status">
           Restriction lifted.
         </p>
       )}
 
-      <div className="rq-well flex flex-col gap-3">
-        <h2 className="rq-h2">Sessions &amp; two-factor authentication</h2>
-        <p className="rq-sub">Manage active sessions and 2FA on the Security screen.</p>
-        <Link href="/security" className="rq-btn rq-btn--ghost">
-          Go to Security
-        </Link>
-      </div>
+      <ExportSection latestExport={latestExport} />
 
-      <TelemetrySection optedOut={telemetryOptedOut} />
+      <PrivacyToggle
+        action={updateTelemetryOptOut}
+        inputId="telemetry-toggle"
+        label="Telemetry"
+        description="Anonymous usage events. Never trade data."
+        on={!telemetryOptedOut}
+      />
 
-      <WeeklyReviewEmailSection optedOut={weeklyReviewEmailOptedOut} />
+      {/* Module 06 §4.10 step 6 / Module 07 §5.6 — the one weekly email's
+          minimal unsubscribe. */}
+      <PrivacyToggle
+        action={updateWeeklyReviewEmailOptOut}
+        inputId="weekly-email-toggle"
+        label="Weekly review email"
+        description="One email a week, when your review is ready. The only one we send on a schedule."
+        on={!weeklyReviewEmailOptedOut}
+      />
 
       <RestrictionSection activeRestriction={activeRestriction} />
 
-      <ExportSection latestExport={latestExport} />
+      <div className="settings__row">
+        <span className="settings__label">
+          <b>Sessions &amp; two-factor</b>
+          <span>Managed on the Security screen.</span>
+        </span>
+        <Link href="/security" className="link">
+          Open
+        </Link>
+      </div>
+
+      <hr className="rq-hr" />
 
       <DeleteAccountSection pendingErasure={pendingErasure} />
     </section>
   );
 }
 
-function TelemetrySection({ optedOut }: { optedOut: boolean }) {
-  return (
-    <div className="rq-well flex flex-col gap-3" aria-labelledby="telemetry-h">
-      <h2 id="telemetry-h" className="rq-h2">
-        Telemetry
-      </h2>
-      <p className="rq-sub">
-        {optedOut
-          ? "You're opted out of product telemetry. We don't record page views or feature usage for this account."
-          : 'Product telemetry (page views, feature usage) helps us improve Retrospeq. You can opt out at any time.'}
-      </p>
-      <form action={updateTelemetryOptOut}>
-        <input type="hidden" name="optOut" value={optedOut ? 'false' : 'true'} />
-        <button type="submit" className="rq-btn rq-btn--ghost">
-          {optedOut ? 'Opt back in' : 'Opt out of telemetry'}
-        </button>
-      </form>
-    </div>
-  );
-}
-
 /**
- * Module 06 §4.10 step 6 / Module 07 §5.6 — the one weekly email's
- * minimal unsubscribe toggle. Same shape as `TelemetrySection` above.
- */
-function WeeklyReviewEmailSection({ optedOut }: { optedOut: boolean }) {
-  return (
-    <div className="rq-well flex flex-col gap-3" aria-labelledby="weekly-review-email-h">
-      <h2 id="weekly-review-email-h" className="rq-h2">
-        Weekly review email
-      </h2>
-      <p className="rq-sub">
-        {optedOut
-          ? "You're opted out of the weekly review email. Your review still appears in the app every week — you just won't be emailed about it."
-          : 'Retrospeq emails you once a week, when your review is ready. It is the only email we send on a schedule.'}
-      </p>
-      <form action={updateWeeklyReviewEmailOptOut}>
-        <input type="hidden" name="optOut" value={optedOut ? 'false' : 'true'} />
-        <button type="submit" className="rq-btn rq-btn--ghost">
-          {optedOut ? 'Opt back in' : 'Opt out of the weekly email'}
-        </button>
-      </form>
-    </div>
-  );
-}
-
-/**
- * Story 5.3, GDPR Article 18. A standing, reversible toggle — not a
+ * Story 5.3, GDPR Article 18. A standing, reversible request — not a
  * grace-period flow like erasure, since restriction never destroys
  * anything. See `lib/privacy/restriction.ts`'s own doc comment for the
  * honest scope boundary on what "restricted" actually suspends today.
  */
 function RestrictionSection({ activeRestriction }: { activeRestriction: DataRequestRow | null }) {
   return (
-    <div className="rq-well flex flex-col gap-3" aria-labelledby="restriction-h">
-      <h2 id="restriction-h" className="rq-h2">
-        Restrict processing
-      </h2>
-      <p className="rq-sub">
-        {activeRestriction
-          ? 'Processing is currently restricted for this account.'
-          : "Ask us to pause processing your data (beyond what's needed to keep your account itself running) without deleting anything."}
-      </p>
-      {activeRestriction ? (
-        <form action={liftRestrictionAction}>
-          <input type="hidden" name="requestId" value={activeRestriction.id} />
-          <button type="submit" className="rq-btn rq-btn--ghost">
-            Lift restriction
-          </button>
-        </form>
-      ) : (
-        <form action={requestRestrictionAction}>
-          <button type="submit" className="rq-btn rq-btn--ghost">
-            Restrict processing
-          </button>
-        </form>
+    <>
+      <div className="settings__row">
+        <span className="settings__label">
+          <b>Restrict processing</b>
+          <span>
+            {activeRestriction
+              ? 'Currently restricted for this account.'
+              : 'Pause processing beyond what keeps your account running. Deletes nothing.'}
+          </span>
+        </span>
+        {activeRestriction ? (
+          <form action={liftRestrictionAction}>
+            <input type="hidden" name="requestId" value={activeRestriction.id} />
+            <button type="submit" className="link">
+              Lift
+            </button>
+          </form>
+        ) : (
+          <form action={requestRestrictionAction}>
+            <button type="submit" className="link">
+              Request
+            </button>
+          </form>
+        )}
+      </div>
+      {activeRestriction && (
+        <p className="hint" role="status">
+          Requested{' '}
+          <time dateTime={activeRestriction.requested_at}>
+            {formatDateTime(activeRestriction.requested_at) ?? activeRestriction.requested_at}
+          </time>
+          .
+        </p>
       )}
-    </div>
+    </>
   );
 }
 
@@ -222,76 +204,92 @@ function ExportSection({ latestExport }: { latestExport: DataRequestRow | null }
       : null;
 
   const inProgress = latestExport?.status === 'pending' || latestExport?.status === 'processing';
+  const requestedAt = formatDateTime(latestExport?.requested_at);
+  const expiresAt = formatDateTime(latestExport?.expires_at);
 
   return (
-    <div className="rq-well flex flex-col gap-3" aria-labelledby="export-h">
-      <h2 id="export-h" className="rq-h2">
-        Export your data
-      </h2>
-      <p className="rq-sub">
-        A JSON and CSV bundle of everything Retrospeq has on this account, delivered by a
-        short-lived link.
-      </p>
-
-      {manifest && (
-        <div className="flex flex-col gap-2">
-          <p className="rq-sub" role="status">
-            Ready
-            {latestExport?.expires_at && (
-              <> — link expires <time dateTime={latestExport.expires_at}>{latestExport.expires_at}</time></>
-            )}
-            .
-          </p>
-          <div className="flex gap-2">
-            <a href={manifest.jsonUrl} className="rq-btn rq-btn--ghost">
-              Download JSON
-            </a>
-            <a href={manifest.csvUrl} className="rq-btn rq-btn--ghost">
-              Download CSV
-            </a>
-          </div>
-        </div>
-      )}
+    <>
+      <div className="settings__row">
+        <span className="settings__label">
+          <b>Export my data</b>
+          <span>Trades, rules, evaluations, strategies — JSON + CSV.</span>
+        </span>
+        {inProgress ? (
+          <span className="chip chip--muted">Preparing</span>
+        ) : (
+          <form action={requestExportAction}>
+            <button type="submit" className="link">
+              Request
+            </button>
+          </form>
+        )}
+      </div>
 
       {inProgress && (
-        <p className="rq-sub" role="status">
-          Your export is being prepared.
+        <p className="hint" role="status">
+          Your export is being prepared
+          {requestedAt ? ` — requested ${requestedAt}` : ''}.
         </p>
       )}
 
-      {!inProgress && (
-        <form action={requestExportAction}>
-          {/* rq-btn--ghost, not the primary rq-btn — this screen has no
-              single "main" action (telemetry/export/delete are peer,
-              independent controls; README.md: "if a screen needs two
-              primary actions, it's doing two jobs"). */}
-          <button type="submit" className="rq-btn rq-btn--ghost">
-            {manifest ? 'Request a new export' : 'Export my data'}
-          </button>
-        </form>
+      {manifest && !inProgress && (
+        <div className="finding finding--notice" data-confidence="confident">
+          <p className="finding__statement" role="status">
+            Your export is ready.
+          </p>
+          {/* No file size: nothing records one (`ExportArtifactManifest`
+              is two URLs), and the frame's "2.1 MB" is not a number this
+              screen may invent. */}
+          <p className="finding__meta">
+            {requestedAt ? `Requested ${requestedAt}. ` : ''}
+            {expiresAt ? `Link valid until ${expiresAt}. ` : ''}
+            <a href={manifest.jsonUrl} className="link">
+              Download JSON
+            </a>
+            {' · '}
+            <a href={manifest.csvUrl} className="link">
+              Download CSV
+            </a>
+          </p>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
 function DeleteAccountSection({ pendingErasure }: { pendingErasure: DataRequestRow | null }) {
+  const scheduledFor = formatLongDate(pendingErasure?.expires_at);
+
   return (
-    <div className="rq-well flex flex-col gap-3" aria-labelledby="delete-h">
-      <h2 id="delete-h" className="rq-h2">
-        Delete your account
-      </h2>
+    <>
+      <div className="settings__row">
+        <span className="settings__label">
+          <b>Delete my account</b>
+          <span>Everything, permanently, after a 7-day cooling-off you can cancel.</span>
+        </span>
+        {pendingErasure ? (
+          <span className="chip chip--attention">Pending</span>
+        ) : (
+          <form action={requestErasureAction}>
+            {/* A `.link`, never a primary and never red: a destructive
+                account-deletion action must not carry more visual weight
+                than a neutral peer control (the `.rq-btn--equal` ethics
+                reasoning points the same way). */}
+            <button type="submit" className="link">
+              Request
+            </button>
+          </form>
+        )}
+      </div>
 
       {pendingErasure ? (
-        <>
-          <p className="rq-sub" role="status">
-            Deletion pending
-            {pendingErasure.expires_at && (
-              <>
-                {' '}— your account and its data will be permanently deleted on{' '}
-                <time dateTime={pendingErasure.expires_at}>{pendingErasure.expires_at}</time>
-              </>
-            )}
-            . Until then, you can cancel.
+        <div className="alert alert--blocking" role="status">
+          <h2>
+            {scheduledFor ? `Deletion scheduled for ${scheduledFor}` : 'Deletion scheduled'}
+          </h2>
+          <p>
+            Cancel any time before then and nothing is removed. Once it runs, everything —
+            starting with your stored credentials — is destroyed, and it can’t be undone.
           </p>
           <form action={cancelErasureAction}>
             <input type="hidden" name="requestId" value={pendingErasure.id} />
@@ -306,41 +304,26 @@ function DeleteAccountSection({ pendingErasure }: { pendingErasure: DataRequestR
           </form>
 
           {devPrivacyToolsEnabled() && (
-            <div className="rq-well flex flex-col gap-2" data-testid="dev-erasure-tool">
-              <p className="rq-sub">
+            <div className="flex flex-col gap-2" data-testid="dev-erasure-tool">
+              <p className="hint">
                 <strong>Dev only.</strong> Executes this deletion immediately, bypassing the
                 7-day grace period. Never available outside development.
               </p>
               <form action={devExecuteErasureNowAction}>
                 <input type="hidden" name="requestId" value={pendingErasure.id} />
-                <button type="submit" className="rq-btn rq-btn--ghost">
+                <button type="submit" className="link">
                   Execute deletion now (dev only)
                 </button>
               </form>
             </div>
           )}
-        </>
+        </div>
       ) : (
-        <>
-          <p className="rq-sub">
-            Deleting your account permanently removes your connected accounts (credentials
-            included), subscription, and recovery-code data. You have <strong>7 days</strong> to
-            change your mind — cancel any time before then and nothing is removed. Once the 7 days
-            pass, everything (starting with your stored credentials) is destroyed and this cannot
-            be undone.
-          </p>
-          <form action={requestErasureAction}>
-            {/* Deliberately rq-btn--ghost, never the primary — a
-                destructive account-deletion action must never carry more
-                visual weight than a neutral peer control (README.md's
-                "one .rq-btn per view" + the rq-btn--equal ethics
-                reasoning both point the same direction here). */}
-            <button type="submit" className="rq-btn rq-btn--ghost">
-              Delete my account
-            </button>
-          </form>
-        </>
+        <p className="hint">
+          Deleting your account permanently removes your connected accounts (credentials
+          included), subscription, and recovery-code data. You have 7 days to change your mind.
+        </p>
       )}
-    </div>
+    </>
   );
 }
