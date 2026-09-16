@@ -58,6 +58,13 @@ export default async function ManualEntryPage() {
 
   const accounts = await listTradingAccounts(user.id);
   const manualAccounts = accounts.filter((a) => a.platform === 'manual');
+  // Frame 1.6's "No broker connected" eyebrow is only honest for a
+  // trader with literally no broker-connected account anywhere — a
+  // trader who already has a credentialed account AND uses this screen
+  // for a second, manual-only account does have a broker connected, so
+  // showing that eyebrow unconditionally (as the mockup's own single-path
+  // "first trade" framing does) would misstate their real account state.
+  const hasNonManualAccount = accounts.some((a) => a.platform !== 'manual');
 
   if (manualAccounts.length === 0) {
     return (
@@ -95,10 +102,14 @@ export default async function ManualEntryPage() {
   }
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="manual-entry-h">
-      <h1 id="manual-entry-h" className="rq-h1">
-        Log a trade by hand
-      </h1>
+    <section className="entry flex flex-1 flex-col gap-6" aria-labelledby="manual-entry-h">
+      <div className="flex flex-col gap-1">
+        {!hasNonManualAccount && <p className="rq-label">No broker connected</p>}
+        <h1 id="manual-entry-h" className="rq-h1">
+          Log a trade by hand
+        </h1>
+        <p className="rq-sub">Under thirty seconds. Everything else is derived.</p>
+      </div>
       <ManualEntryScreen
         accounts={manualAccounts.map((a) => ({ id: a.id, label: a.label }))}
         initialAccountId={defaultAccountId}

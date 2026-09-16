@@ -9,11 +9,11 @@ Legend for states: `empty` = honest "not enough data yet" / nothing-here state �
 | # | Route | Screen · state | Spec | Mockup | Built |
 |---|---|---|---|---|---|
 | 1.1 | `/` | Landing (signed out) | brief-marketing | landing.html (batch 7) | ◐ scaffold |
-| 1.2 | `/accounts/connect` | Connect: platform picker, server/login/investor-password, read-only explainer | 01 §5.2 | S01 | ◐ |
-| 1.3 | `/accounts/connect` | Verification live steps (auth → read-only → caps → import) | 01 §5.2 | new | ◐ |
-| 1.4 | `/accounts/connect` | Rejection: credential too permissive (`role=alert`) | 01 §5.2 | new | ◐ |
-| 1.5 | `/accounts/connect` | Connected: capability statement incl. unavailable caps | 01 §5.2 | new | ◐ |
-| 1.6 | `/accounts/connect` | Manual path: first trade in 30s (instrument, direction, size, entry, exit, stop) | 08 §5.6, 02 §4.8 | new | ◐ (manual-entry) |
+| 1.2 | `/accounts/connect` | Connect: platform picker, server/login/investor-password, read-only explainer | 01 §5.2 | S01 | ● |
+| 1.3 | `/accounts/connect` | Verification live steps (auth → read-only → caps → import) | 01 §5.2 | new | ◐ (honest single-phase pending state, not the frame's multi-step checklist — no real adapter yet to report incremental progress from; a fabricated advancing list would violate AGENTS.md "never fake it") |
+| 1.4 | `/accounts/connect` | Rejection: credential too permissive (`role=alert`) | 01 §5.2 | new | ● |
+| 1.5 | `/accounts/connect` | Connected: capability statement incl. unavailable caps | 01 §5.2 | new | ● (only the manual-account path is reachable today — every credentialed connect fails at the missing-KMS step before reaching this screen, `docs/infra-gaps.md`) |
+| 1.6 | `/accounts/connect` | Manual path: first trade in 30s (instrument, direction, size, entry, exit, stop) | 08 §5.6, 02 §4.8 | new | ● (manual-entry) |
 | 1.7 | import | Import progress | 08 §5.1 step 3 | new | ○ |
 | 1.8 | `/onboarding/hook` | The hook: real derived finding | 08 §5.2, §8 | S02 | ○ (fallback only — no strategy/fields exist yet at this onboarding stage for Module 05's own finding-fetch path, and the one analytic this frame's own example needs, `find.daysession`, has no session vocabulary built yet either; see `app/(app)/onboarding/hook/page.tsx`'s header, updated 2026-09-16) |
 | 1.9 | `/onboarding/hook` | Honest fallback: "We've imported 214 trades. Nothing conclusive yet." | 08 §8 | new | ● (restyled 2026-09-16: `.push`/`.rq-btn--block`, matches frame; the frame's own `.finding[data-confidence=insufficient]` "About 30 more trades" block omitted — same reachability gap as 1.8, no real remaining-count source exists pre-calibration) |

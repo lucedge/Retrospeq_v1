@@ -890,4 +890,6 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
    when its frame uses `.push`. */
 .push { margin-top: auto; }
 .dash,
-.hook { flex: 1 1 auto; }
+.hook,
+.connect,
+.entry { flex: 1 1 auto; }

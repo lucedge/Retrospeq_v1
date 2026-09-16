@@ -134,7 +134,7 @@ export function ManualEntryScreen({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-6">
       <AmbientStrip state={ambient} loading={ambientLoading} />
       {ambientError && (
         <p className="rq-sub" role="alert">
