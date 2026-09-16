@@ -11,13 +11,7 @@ import {
   type TradeMemberRow,
 } from '@/lib/ingestion/trades-repository';
 import { rTrackFill, formatDirectionLetter } from '../dashboard/format';
-import {
-  dayKey,
-  formatClockTime,
-  formatDayLabel,
-  formatFillCount,
-  formatRMultiple,
-} from './format';
+import { dayKey, formatClockTime, formatDayLabel, formatFillCount, formatFillPrice, formatFillVolume, formatRMultiple } from './format';
 import { NotADecisionToggle } from './NotADecisionToggle';
 import { GroupingChip } from './GroupingChip';
 import { SplitControl } from './SplitControl';
@@ -134,6 +128,13 @@ export default async function TradesPage(props: PageProps<'/trades'>) {
   // while the underlying filter matches the real status this app tracks.
   const visibleTrades =
     filter === 'open' ? openTrades : filter === 'unconfirmed' ? closedTrades : [...openTrades, ...closedTrades, ...confirmedTrades];
+  // Join questions are scoped to what the active pill shows — see the
+  // alert's own comment below.
+  const visibleTradeIds = new Set(visibleTrades.map((t) => t.id));
+  const visibleJoinableGroups = joinableGroups
+    .map((group) => ({ ...group, trades: group.trades.filter((t) => visibleTradeIds.has(t.id)) }))
+    .filter((group) => group.trades.length > 1);
+
   const sortedTrades = [...visibleTrades].sort((a, b) => (a.opened_at < b.opened_at ? 1 : a.opened_at > b.opened_at ? -1 : 0));
 
   const dayGroups: { key: string; label: string; trades: TradeRow[] }[] = [];
@@ -172,6 +173,7 @@ export default async function TradesPage(props: PageProps<'/trades'>) {
         )}
       </div>
 
+      {hasAnyTrades && (
       <div className="rq-pills" role="group" aria-label="Filter trades">
         <FilterPill href="/trades?filter=all" active={filter === 'all'}>
           All
@@ -183,6 +185,7 @@ export default async function TradesPage(props: PageProps<'/trades'>) {
           Unconfirmed
         </FilterPill>
       </div>
+      )}
 
       {/* Frame 2.5 (mockup id 2.4) — AGENTS.md's own non-negotiable:
           "'Not enough data yet' is a correct, intended state — not an
@@ -197,12 +200,26 @@ export default async function TradesPage(props: PageProps<'/trades'>) {
               ? 'Connect an account to start syncing, or log one now.'
               : 'Connected accounts sync at least daily. Or log one now.'}
           </p>
+          {accounts.length === 0 && (
+            // The copy told a trader with no account to connect one and
+            // then offered no way there (qa FAIL, 2026-09-16).
+            <p className="finding__meta">
+              <Link href="/accounts/connect" className="link">
+                Connect an account
+              </Link>
+            </p>
+          )}
         </div>
       )}
 
-      {joinableGroups.length > 0 && (
+      {/* Only ask about trades the trader can actually SEE: under the Open
+          or Unconfirmed pill, an alert naming two trades absent from the
+          list below reads as a non sequitur (qa FAIL, 2026-09-16). The
+          question itself is unchanged — it is just asked where it makes
+          sense. */}
+      {visibleJoinableGroups.length > 0 && (
         <div className="flex flex-col gap-3">
-          {joinableGroups.flatMap((group) =>
+          {visibleJoinableGroups.flatMap((group) =>
             group.trades.slice(1).map((trade, i) => {
               const previous = group.trades[i];
               return (
@@ -342,8 +359,8 @@ function TradeFillsSection({ trade, members }: { trade: TradeRow; members: Trade
                     <time dateTime={member.filledAt}>{formatClockTime(member.filledAt)}</time>
                   </td>
                   <td className="capitalize">{member.role}</td>
-                  <td>{member.volume}</td>
-                  <td>{member.price}</td>
+                  <td className="rq-num">{formatFillVolume(member.volume)}</td>
+                  <td className="rq-num">{formatFillPrice(member.price)}</td>
                   {canSplit && <td>{offerSplit && <SplitControl tradeId={trade.id} fillId={member.fillId} />}</td>}
                 </tr>
               );

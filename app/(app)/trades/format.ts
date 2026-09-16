@@ -118,12 +118,42 @@ export function formatWeekdayName(day: string): string {
  * addend is omitted, not assumed to be 0), not a silently narrowed claim
  * — there is no copy anywhere that says "every trade counted".
  */
-export function sumRMultiples(values: (string | null)[]): number {
+export function sumRMultiples(values: (string | null)[]): number | null {
+  // `null` means "no trade on this day has a known R", which is NOT zero:
+  // a day of unknown outcomes rendered as `0.0R on the day` is exactly the
+  // fabricated figure AGENTS.md forbids (qa FAIL, 2026-09-16). A partial
+  // day still sums what it knows — the honest reading of "the R we have" —
+  // and the caller decides how to say so.
   let total = 0;
+  let known = false;
   for (const value of values) {
     if (value === null) continue;
     const num = Number(value);
-    if (Number.isFinite(num)) total += num;
+    if (!Number.isFinite(num)) continue;
+    total += num;
+    known = true;
   }
-  return total;
+  return known ? total : null;
+}
+
+/**
+ * Fills come back as raw Postgres numerics — `1.00000000`, `1.08412000`.
+ * Frame 2.2 shows `0.50` and `1.08412`: trailing zeros trimmed, because a
+ * trader reads a price, not a column width (qa FAIL, 2026-09-16). Volume
+ * keeps at least two decimals (lots are conventionally written that way);
+ * price keeps whatever precision it genuinely has, up to 8.
+ */
+export function formatFillVolume(value: string): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  const trimmed = num.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  const decimals = trimmed.includes('.') ? trimmed.split('.')[1].length : 0;
+  return num.toFixed(Math.max(2, decimals));
+}
+
+export function formatFillPrice(value: string): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  const trimmed = num.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  return trimmed.includes('.') ? trimmed : num.toFixed(2);
 }

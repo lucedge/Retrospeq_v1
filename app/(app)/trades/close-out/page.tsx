@@ -5,6 +5,7 @@ import {
   listTradesForAccountDay,
   listTradeCaptures,
   listUnresolvedCoverageGapsForAccountDay,
+  listTradeMembers,
 } from '@/lib/ingestion/trades-repository';
 import { TRIM_REASON_FIELD_ID, TRIM_REASONS, type TrimReason } from '@/lib/ingestion/trim-reason';
 import { fetchStrategyVersionFields } from '@/lib/fields/strategy-repository';
@@ -12,7 +13,7 @@ import { fetchFieldsForUser } from '@/lib/fields/fields-repository';
 import { rTrackFill } from '../../dashboard/format';
 import { formatRMultiple, formatWeekdayName, sumRMultiples } from '../format';
 import { TrimReasonChips } from './TrimReasonChips';
-import { ConfirmDayForm } from './ConfirmDayForm';
+import { ConfirmDayForm, COVERAGE_GAP_ALERT_ID } from './ConfirmDayForm';
 import { LateCaptureField, type LateCaptureDataType } from './LateCaptureField';
 import { AmbiguousGroupingResolver } from './AmbiguousGroupingResolver';
 
@@ -150,7 +151,7 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
     listTradingAccounts(user.id),
   ]);
   const account = accounts.find((a) => a.id === accountId);
-  const [captures, coverageGaps] = await Promise.all([
+  const [captures, coverageGaps, members] = await Promise.all([
     listTradeCaptures(
       user.id,
       trades.map((t) => t.id),
@@ -165,7 +166,16 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
     // catches it either way, so this is strictly additive, never the only
     // safety net.
     account ? listUnresolvedCoverageGapsForAccountDay(user.id, accountId, day, account.day_rollover) : Promise.resolve([]),
+    // One batched read for the whole day — the trim question below is only
+    // asked of trades that actually HAVE a trim fill (qa FAIL, 2026-09-16:
+    // it was asked under every trade, three times on a 30-second screen,
+    // about an event that may never have happened).
+    listTradeMembers(
+      user.id,
+      trades.map((t) => t.id),
+    ),
   ]);
+  const tradeIdsWithTrim = new Set(members.filter((m) => m.role === 'trim').map((m) => m.tradeId));
 
   const preEntryTradeIds = new Set(captures.filter((c) => c.moment === 'pre_entry').map((c) => c.tradeId));
   const trimReasonByTrade = new Map<string, TrimReason>();
@@ -254,7 +264,15 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
       {account && trades.length > 0 && (
         <p className="rq-sub">
           <span className="rq-num">{trades.length}</span> trade{trades.length === 1 ? '' : 's'} ·{' '}
-          <span className="rq-num">{formatRMultiple(dayTotalR.toFixed(4))}</span> on the day · {account.label}
+          {dayTotalR === null ? (
+            // Every trade's R is unknown — say so, never "0.0R".
+            <>R not known yet</>
+          ) : (
+            <>
+              <span className="rq-num">{formatRMultiple(dayTotalR.toFixed(4))}</span> on the day
+            </>
+          )}{' '}
+          · {account.label}
         </p>
       )}
 
@@ -269,10 +287,15 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
           refusal state (a gap appearing between this render and submit)
           stays a second, independent layer near the button below. */}
       {coverageGapBlocked && (
-        <div className="alert alert--blocking" role="alert">
+        <div className="alert alert--blocking" role="alert" id={COVERAGE_GAP_ALERT_ID} tabIndex={-1}>
+          {/* Frame 2.9/2.10's own copy, verbatim — the previous wording
+              ("N unresolved coverage gaps overlap this day") leaked
+              internal vocabulary and misagreed on number (qa FAIL,
+              2026-09-16). The count is not the trader's problem; what is
+              missing, and what unblocks it, is. */}
           <p>
-            {coverageGaps.length} unresolved coverage gap{coverageGaps.length === 1 ? '' : 's'} overlap this
-            day — confirming is blocked until sync catches up.
+            We&rsquo;re missing part of this day&rsquo;s activity from your broker. You can close out
+            once it&rsquo;s complete.
           </p>
           <Link href={`/trades/close-out?account=${accountId}&day=${day}`} className="rq-btn rq-btn--ghost">
             Try again
@@ -324,7 +347,9 @@ export default async function CloseOutPage(props: PageProps<'/trades/close-out'>
                     </a>
                   )}
                 </div>
-                <TrimReasonChips tradeId={trade.id} initialReason={trimReasonByTrade.get(trade.id) ?? null} />
+                {tradeIdsWithTrim.has(trade.id) && (
+                  <TrimReasonChips tradeId={trade.id} initialReason={trimReasonByTrade.get(trade.id) ?? null} />
+                )}
                 {missingFieldIds.length > 0 && (
                   <div id={`latecap-${trade.id}`} className="rq-well flex flex-col gap-3">
                     <p className="rq-sub">Missed pre-entry notes — fill them in now, marked as filled late.</p>

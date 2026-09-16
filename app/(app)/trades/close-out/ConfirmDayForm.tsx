@@ -52,6 +52,10 @@ import { confirmDayAction, type ConfirmDayActionState } from '../actions';
  * hidden field Slice 7b already wired (`confirmDay`'s own `day_closeouts`
  * write, Module 02 §4.6) — this is a copy-only change, no new write path.
  */
+/** Shared with `close-out/page.tsx`'s own blocking alert so the submit
+ *  control can point at it via `aria-describedby`. */
+export const COVERAGE_GAP_ALERT_ID = 'closeout-coverage-gap';
+
 export function ConfirmDayForm({
   accountId,
   serverDay,
@@ -143,7 +147,28 @@ export function ConfirmDayForm({
         </p>
       )}
 
-      <button type="submit" className="rq-btn rq-btn--block" disabled={pending || coverageGapBlocked}>
+      {/* Coverage-gap blocking uses `aria-disabled`, not the `disabled`
+          ATTRIBUTE: a truly disabled button is skipped by Tab, so a
+          keyboard user could never reach the control and never hear WHY
+          the day won't close (qa FAIL, 2026-09-16). This stays focusable
+          and announced as unavailable, described by the alert above it,
+          and the submit is refused here as well as server-side — the
+          state is genuinely blocked, it is just no longer silent.
+          `pending` still uses the real attribute: that one is momentary
+          and re-entry would double-submit. */}
+      <button
+        type="submit"
+        className="rq-btn rq-btn--block"
+        disabled={pending}
+        aria-disabled={coverageGapBlocked || undefined}
+        aria-describedby={coverageGapBlocked ? COVERAGE_GAP_ALERT_ID : undefined}
+        onClick={(event) => {
+          if (coverageGapBlocked) {
+            event.preventDefault();
+            document.getElementById(COVERAGE_GAP_ALERT_ID)?.focus();
+          }
+        }}
+      >
         {pending ? 'Closing out…' : hasAnyTrades ? 'Day done' : "I didn't trade today"}
       </button>
       <p className="rq-label text-center mt-2">

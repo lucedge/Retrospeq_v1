@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  dayKey,
-  formatAge,
-  formatClockTime,
-  formatDayLabel,
-  formatDirection,
-  formatFillCount,
-  formatRMultiple,
-  formatRiskPct,
-  formatWeekdayName,
-  sumRMultiples,
-} from '../format';
+import { dayKey, formatAge, formatClockTime, formatDayLabel, formatDirection, formatFillCount, formatFillPrice, formatFillVolume, formatRMultiple, formatRiskPct, formatWeekdayName, sumRMultiples } from '../format';
 
 describe('formatRMultiple', () => {
   it('null never becomes a fake 0 — renders a plain dash', () => {
@@ -111,7 +100,36 @@ describe('sumRMultiples', () => {
     expect(sumRMultiples(['1.8000', null, '-0.9000'])).toBeCloseTo(0.9);
   });
 
-  it('an all-null day sums to a real, honest 0', () => {
-    expect(sumRMultiples([null, null])).toBe(0);
+  it('a day where NO trade has a known R is null, not 0 — "0.0R on the day" would be a figure nobody measured', () => {
+    expect(sumRMultiples([null, null])).toBeNull();
+    expect(sumRMultiples([])).toBeNull();
+  });
+
+  it('a genuine zero is still 0, and distinguishable from unknown', () => {
+    expect(sumRMultiples(['0.0000'])).toBe(0);
+    expect(sumRMultiples(['1.0000', '-1.0000'])).toBe(0);
+  });
+
+  it('ignores unparseable values rather than poisoning the sum with NaN', () => {
+    expect(sumRMultiples(['1.5000', 'not-a-number'])).toBeCloseTo(1.5);
+    expect(sumRMultiples(['nonsense'])).toBeNull();
+  });
+});
+
+describe('formatFillVolume / formatFillPrice', () => {
+  it('trims the trailing zeros Postgres numerics carry (frame 2.2 reads 0.50 and 1.08412)', () => {
+    expect(formatFillVolume('0.50000000')).toBe('0.50');
+    expect(formatFillVolume('1.00000000')).toBe('1.00');
+    expect(formatFillPrice('1.08412000')).toBe('1.08412');
+  });
+
+  it('keeps real precision and never invents digits', () => {
+    expect(formatFillVolume('1.23456789')).toBe('1.23456789');
+    expect(formatFillPrice('1234.00000000')).toBe('1234.00');
+  });
+
+  it('passes a non-numeric string through untouched rather than rendering NaN', () => {
+    expect(formatFillPrice('—')).toBe('—');
+    expect(formatFillVolume('—')).toBe('—');
   });
 });
