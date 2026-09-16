@@ -51,8 +51,13 @@ const env = readRlsTestEnv();
 
 const ALL_TABLES = ['fields', 'strategies', 'strategy_versions', 'field_usages', 'trigger_conditions'] as const;
 
+// 10 since 2026-09-16: `drv.day_session` (the composite day × session
+// field the owner's session decision added, `20260916010000_session_fields.sql`)
+// joined the per-user derived catalogue. This list and the `<> 9` count
+// below are the two places that number is asserted.
 const DERIVED_FIELD_IDS = [
   'drv.session',
+  'drv.day_session',
   'drv.day_of_week',
   'drv.direction',
   'drv.order_type',
@@ -148,15 +153,15 @@ describe.skipIf(!env)('retrospeq field-registry schema — RLS shape audit (live
            where kind = 'derived'
            group by user_id
         ) f on f.user_id = p.id
-       where coalesce(f.c, 0) <> 9
+       where coalesce(f.c, 0) <> 10
     `);
     expect(Number(res.rows[0]!.bad_count)).toBe(0);
 
     // Subset, not equality: on a fresh project with zero profiles there are
     // no derived rows at all, and equality only ever passed on the old shared
-    // dev project because it already had users. "Exactly 9 per profile" above
+    // dev project because it already had users. "Exactly 10 per profile" above
     // plus "every id is in the catalogue" here still pins each profile to the
-    // exact 9-entry set; seeding itself is proven with a real signup in
+    // exact 10-entry set; seeding itself is proven with a real signup in
     // 'handle_new_user — derived-field seeding at signup' below.
     const distinctIds = await db.query<{ id: string }>(
       `select distinct id from retrospeq.fields where kind = 'derived' order by id`,

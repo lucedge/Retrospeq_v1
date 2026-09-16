@@ -214,7 +214,29 @@ export async function requestPasswordReset(
   });
 
   if (error) {
-    return { error: mapAuthError(error) };
+    const mapped = mapAuthError(error);
+    // ENUMERATION ORACLE, closed (security review, 2026-09-17). GoTrue's
+    // per-address email cooldown only fires when it actually SENT
+    // something — i.e. only for a registered address. Surfacing
+    // `over_email_send_rate_limit` therefore tells an attacker "this
+    // email exists", which is exactly what this action's own header
+    // promises it never does. Probed against the live project: an
+    // unregistered address returns 200 twice in a row, a registered one
+    // returns the cooldown on the second submit.
+    //
+    // Swallowed into the SAME neutral message the success path returns —
+    // and it is not a lie: a link really is on its way, from the first
+    // submit, which is why the second one was throttled. The app's own
+    // per-email/per-IP limit (`resetRequest`, checked above) still
+    // reports honestly, because it is applied identically whether or not
+    // the address exists.
+    if (mapped.code === 'AUTH_RATE_LIMITED') {
+      return {
+        success: true,
+        message: 'If an account exists for that email, a reset link is on its way.',
+      };
+    }
+    return { error: mapped };
   }
 
   return {

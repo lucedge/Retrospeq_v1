@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthApiError } from '@supabase/supabase-js';
 
 /**
  * Module 01 story 1.3: "all sessions invalidated on reset." Flagged by
@@ -19,6 +20,7 @@ const {
   enforceRateLimitMock,
   signInWithPasswordMock,
   getAuthenticatorAssuranceLevelMock,
+  resetPasswordForEmailMock,
 } = vi.hoisted(() => ({
   updateUserMock: vi.fn(),
   signOutMock: vi.fn(),
@@ -30,6 +32,7 @@ const {
   enforceRateLimitMock: vi.fn().mockResolvedValue(undefined),
   signInWithPasswordMock: vi.fn(),
   getAuthenticatorAssuranceLevelMock: vi.fn(),
+  resetPasswordForEmailMock: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -212,5 +215,58 @@ describe('signInWithEmail — MFA step-up redirect (Module 01 story 1.5)', () =>
     expect(result.error).toBeDefined();
     expect(getAuthenticatorAssuranceLevelMock).not.toHaveBeenCalled();
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestPasswordReset — no enumeration oracle (security review, 2026-09-17)', () => {
+  beforeEach(() => {
+    resetPasswordForEmailMock.mockReset();
+    enforceRateLimitMock.mockReset().mockResolvedValue(undefined);
+    headersMock.mockReset().mockResolvedValue(new Headers({ 'x-forwarded-for': '203.0.113.9', origin: 'https://app.retrospeq.com' }));
+    createClientMock.mockReset().mockResolvedValue({
+      auth: { resetPasswordForEmail: resetPasswordForEmailMock },
+    });
+  });
+
+  const NEUTRAL = 'If an account exists for that email, a reset link is on its way.';
+
+  function form(email: string) {
+    const fd = new FormData();
+    fd.set('email', email);
+    return fd;
+  }
+
+  it('returns the neutral message for an address GoTrue accepted', async () => {
+    resetPasswordForEmailMock.mockResolvedValue({ error: null });
+    const { requestPasswordReset } = await import('../actions');
+    const result = await requestPasswordReset(undefined, form('someone@example.com'));
+    expect(result).toEqual({ success: true, message: NEUTRAL });
+  });
+
+  it('returns the SAME neutral message when GoTrue reports its per-address email cooldown', async () => {
+    // That cooldown only fires for an address GoTrue actually mailed —
+    // i.e. a registered one. Surfacing it would answer "does this email
+    // exist?" for an attacker.
+    // A REAL `AuthApiError` — `mapAuthError`'s `isAuthApiError` guard
+    // checks `name === 'AuthApiError'`, so a plain object silently falls
+    // through to the generic branch and the test would pass against a
+    // fix that doesn't actually work.
+    resetPasswordForEmailMock.mockResolvedValue({
+      error: new AuthApiError('For security purposes, you can only request this after 58 seconds', 429, 'over_email_send_rate_limit'),
+    });
+    const { requestPasswordReset } = await import('../actions');
+    const result = await requestPasswordReset(undefined, form('registered@example.com'));
+    expect(result).toEqual({ success: true, message: NEUTRAL });
+    expect(result.error).toBeUndefined();
+  });
+
+  it('still surfaces a genuine non-rate-limit failure rather than claiming a link was sent', async () => {
+    resetPasswordForEmailMock.mockResolvedValue({
+      error: new AuthApiError('mailer is down', 500, 'unexpected_failure'),
+    });
+    const { requestPasswordReset } = await import('../actions');
+    const result = await requestPasswordReset(undefined, form('someone@example.com'));
+    expect(result.success).toBeUndefined();
+    expect(result.error).toBeDefined();
   });
 });
