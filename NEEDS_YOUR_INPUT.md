@@ -11,21 +11,25 @@ Check this file (not `PROGRESS.md`'s prose) when you want a fast, glanceable
 answer to "does anything need me right now."
 
 ---
-## Create the Vercel project so the weekly review can run on a schedule
+## Set `CRON_SECRET` on Vercel so the weekly notification actually fires
 
-**Decided (owner, 2026-09-15):** Vercel project + Vercel Cron. See
-`retrospeq-design-decisions.md` §17.
+**Decided and built (2026-09-16):** the scheduler exists —
+`app/api/cron/weekly-review/route.ts`, scheduled by `vercel.json` for
+Mondays 06:00 UTC, per design-decisions §17 ("Vercel project + Vercel
+Cron").
 
-**What's needed from you:** create a Vercel project for this repo (Hobby
-plan is enough), link it to the GitHub repo, and add the environment
-variables from `.env.local` that the server needs. Say when it's done.
-Agents will then add the cron route and the `vercel.json` schedule.
+**What's needed from you:** on the Vercel project (Settings →
+Environment Variables → Production), add `CRON_SECRET` with any long
+random value, then redeploy. Vercel Cron sends it as
+`Authorization: Bearer <CRON_SECRET>`; the route refuses to run without
+it (503, logged) rather than accepting unauthenticated calls. Add the
+same value to `.env.local` if you want to trigger it locally.
 
-**What's stalled until then:** weekly reviews are computed only when a
-trader opens `/review` (ADR 0039, working and honest). A trader who never
-opens the app gets no review, and the one weekly notification (§4.10
-step 6) can't fire ahead of the trader opening the review. Runbook entry:
-"Weekly review materialisation has no deployed scheduler yet".
+**What's stalled until then:** nothing regresses — weekly reviews are
+still computed when a trader opens `/review` (ADR 0039) — but the one
+weekly email never sends itself, so a trader who doesn't open the app
+hears nothing. Re-running after a missed week is safe: the exactly-once
+claim means only users who never got that week's email receive it.
 
 ---
 

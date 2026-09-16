@@ -2379,3 +2379,26 @@ page on: the worst case is a mildly-too-frequent nudge on Home, never a
 data-loss or security issue, and the offer's own eligibility gate
 (`docs/infra-gaps.md`'s "silent default strategy never gets a derived
 finding" entry) means it is not reachable for most traders yet regardless.
+
+## Weekly review cron returns 503 (`Scheduler not configured.`)
+
+**Condition:** `GET /api/cron/weekly-review` logs
+`[cron/weekly-review] CRON_SECRET is not set — refusing to run.`
+
+**Meaning:** the `CRON_SECRET` environment variable is missing or blank on
+the environment Vercel Cron invoked. The weekly notification job did not
+run for anyone that week. It is deliberately fail-closed: an open endpoint
+that emails every trader is worse than one that loudly does nothing.
+
+**Fix:** set `CRON_SECRET` on the Vercel project (Settings → Environment
+Variables, Production) and redeploy; Vercel sends it as
+`Authorization: Bearer <CRON_SECRET>`. Keep the same value in `.env.local`
+for local invocation.
+
+**No double-send risk when re-running:** `review_notifications`' unique
+`(user_id, period_start)` claim is taken before any send, so a manual
+re-trigger after a missed week mails only the users who never got that
+week's email.
+
+**Related:** repeated `send_failed` entries in the same run point at the
+email provider, not the scheduler — see the Resend entry above.
