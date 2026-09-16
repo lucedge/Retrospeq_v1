@@ -5,6 +5,7 @@ import { fetchAccountSyncTiers } from '@/lib/rules/rules-repository';
 import { getEditableOperands } from '@/lib/rules/editable-operands';
 import { fetchDiscoveryForUser } from '@/lib/review/discovery';
 import { RuleEditor } from './RuleEditor';
+import { RulebookSubnav } from '../../AppShellNav';
 
 /**
  * Module 04 (Rulebook & Evaluation) §6.1's `.rule-editor` reference markup
@@ -91,16 +92,17 @@ export default async function NewRulePage() {
   const operandIds = getEditableOperands(accountSyncTiers).map((o) => o.id);
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="rule-editor-h">
-      <div className="flex flex-col gap-2">
-        <h1 id="rule-editor-h" className="rq-h1">
-          Write a rule
-        </h1>
-        <p className="rq-body">
-          Pick what you want to hold yourself to. Every new rule starts soft and applies to your
-          whole rulebook.
-        </p>
-      </div>
+    <section className="rule-new flex flex-col gap-5" aria-labelledby="rule-editor-h">
+      <h1 id="rule-editor-h" className="rq-h1">
+        Write a rule
+      </h1>
+      {/* Frames 3.7/3.10 keep the Rulebook pills on this screen — it is
+          still one of the tab's destinations, not a detail view. */}
+      <RulebookSubnav />
+      <p className="rq-sub">
+        Pick what you want to hold yourself to. Every new rule starts soft and applies to your whole
+        rulebook.
+      </p>
 
       <RuleEditor
         operandIds={operandIds}

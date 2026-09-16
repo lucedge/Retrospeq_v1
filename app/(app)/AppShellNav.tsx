@@ -29,11 +29,18 @@ const SECTION_PREFIXES: Array<[Section, string[]]> = [
   ['settings', ['/settings', '/accounts', '/plan', '/security', '/privacy']],
 ];
 
-function matches(pathname: string, prefix: string): boolean {
+function matches(pathname: string | null, prefix: string): boolean {
+  if (!pathname) return false;
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
 
-export function sectionFor(pathname: string): Section | null {
+/** `usePathname()` is typed `string` but genuinely returns `null` outside
+ *  a router context — which every one of these components now hits, since
+ *  `RulebookSubnav` moved out of the layout and into four pages that are
+ *  rendered directly by unit tests (`app/(app)/rules/new/__tests__/
+ *  page.test.ts` crashed on exactly this). `null` means "no section",
+ *  never a throw. */
+export function sectionFor(pathname: string | null): Section | null {
   for (const [section, prefixes] of SECTION_PREFIXES) {
     if (prefixes.some((p) => matches(pathname, p))) return section;
   }
@@ -110,12 +117,22 @@ const RULEBOOK_LINKS = [
   { href: '/fields', label: 'Fields' },
 ];
 
-/** "Strategy lives inside Rulebook" — the three Rulebook views as pills, shown only inside that tab. */
+/**
+ * "Strategy lives inside Rulebook" — the three Rulebook views as pills.
+ *
+ * Rendered by each screen that shows it (`/rules`, `/rules/new`,
+ * `/strategies`, `/fields`), directly under that screen's own `<h1>`,
+ * per every frame in `brand/docs/screens/rulebook.html` that has pills at
+ * all — NOT by `app/(app)/layout.tsx`, which can only put chrome above
+ * the heading. The section guard below stays as a defensive no-op so a
+ * future caller outside the tab can't accidentally render a nav whose
+ * pills would all read inactive.
+ */
 export function RulebookSubnav() {
   const pathname = usePathname();
   if (sectionFor(pathname) !== 'rulebook') return null;
   return (
-    <nav aria-label="Rulebook" className="rq-pills mb-5">
+    <nav aria-label="Rulebook" className="rq-pills">
       {RULEBOOK_LINKS.map((link) => {
         const active = matches(pathname, link.href);
         return (

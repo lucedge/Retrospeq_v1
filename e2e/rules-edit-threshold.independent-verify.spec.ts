@@ -128,7 +128,7 @@ test.describe('Independent verification: edit-threshold UI, fresh fixtures (Modu
 
     const row = page.locator('li', { hasText: 'Always set a target before entering.' });
     await expect(row).toBeVisible();
-    await expect(row.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: 'Edit threshold' })).toHaveCount(0);
     // Other controls still present -- exclusion is scoped to Edit only.
     await expect(row.getByRole('button', { name: 'Promote to hard' })).toBeVisible();
   });
@@ -147,7 +147,7 @@ test.describe('Independent verification: edit-threshold UI, fresh fixtures (Modu
     await page.getByText('Retired rules (1)').click();
     const row = page.locator('li', { hasText: "Never let this week's loss exceed 4% of your account." });
     await expect(row).toBeVisible();
-    await expect(row.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: 'Edit threshold' })).toHaveCount(0);
   });
 
   test('a successful edit on a DIFFERENT operand (total_open_risk) updates the row live, and Postgres carries exactly the new value/text', async ({
@@ -170,9 +170,9 @@ test.describe('Independent verification: edit-threshold UI, fresh fixtures (Modu
 
     const row = page.getByTestId(`rule-row-${ruleId}`);
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Edit' }).click();
+    await row.getByRole('button', { name: 'Edit threshold' }).click();
 
-    const stepperValue = row.locator('.rq-step__val');
+    const stepperValue = row.locator('.rule-value');
     await expect(stepperValue).toHaveText('4.0%', { timeout: 10_000 });
 
     await page.screenshot({
@@ -254,8 +254,8 @@ test.describe('Independent verification: edit-threshold UI, fresh fixtures (Modu
 
     const row = page.getByTestId(`rule-row-${ruleId}`);
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Edit' }).click();
-    await expect(row.locator('.rq-step__val')).toHaveText('2', { timeout: 10_000 });
+    await row.getByRole('button', { name: 'Edit threshold' }).click();
+    await expect(row.locator('.rule-value')).toHaveText('2', { timeout: 10_000 });
 
     // The account genuinely disconnects WHILE the edit control is open --
     // a fresh scenario from the coder's own "always zero accounts" fixture.

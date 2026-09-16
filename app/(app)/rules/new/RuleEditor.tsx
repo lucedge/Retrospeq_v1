@@ -9,6 +9,7 @@ import { renderSentence } from '@/lib/rules/render-sentence';
 import { formatUsageFraction } from '@/lib/entitlements/messages';
 import type { DiscoveryItem, DiscoveryResult } from '@/lib/review/discovery';
 import { createRule, previewRule, type PreviewRuleActionState } from '../actions';
+import { PreviewPanel, RuleValueControl } from '../RuleValueControl';
 
 /**
  * Module 04 §6.1's `.rule-editor` reference markup, general form — Slice
@@ -55,10 +56,14 @@ import { createRule, previewRule, type PreviewRuleActionState } from '../actions
  *   the SAME `operandsByGroup` map, not a second data source — this is a
  *   FORM screen, so a keyboard here is allowed (unlike a fast-capture
  *   entry screen).
- * - Numeric/duration value: the SAME `.rq-step` stepper Slice 10a
- *   established (no native range slider — that primitive does not exist
- *   in the shipped design system, see `GuidedFrontDoor.tsx`'s own header
- *   for the confirmation this slice re-verified still holds). No text
+ * - Numeric/duration value: frames 3.7/3.8's own `.rq-range` — the value
+ *   is the one blank IN the sentence (`.rule-value`), with a −/slider/+
+ *   control underneath (`../RuleValueControl.tsx`, shared with the
+ *   inline threshold edit on `/rules`). This replaces the standalone
+ *   `.rq-step` stepper this file used to render above a static sentence;
+ *   the old header claimed "no native range slider — that primitive does
+ *   not exist in the shipped design system", which stopped being true
+ *   when `.rq-range` shipped in the 2026-09-14 design program. No text
  *   input, no keyboard, for the value itself.
  * - Bool operand: no stepper and no toggle at all. Every v1 bool operand
  *   has exactly one authorable operator (`is_true` or `is_false`) with NO
@@ -274,7 +279,7 @@ export function RuleEditor({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-5">
       {entitlement.limit !== null && (
         <p className="rq-sub">
           Rule slots: <span className="rq-num">{entitlement.usageFraction}</span> used.
@@ -527,58 +532,50 @@ function RuleSentenceEditor({
   const displayValue = value.toFixed(decimals);
 
   return (
-    <section className="rule-editor rq-card flex flex-col gap-3" aria-labelledby="re-h">
+    /* Not a `.rq-card` any more: frame 3.7 lays the editor out flat on the
+       screen — the sentence IS the page — and the card border was fencing
+       it off from the discovery list above it. `flex-1` so the `.push`
+       CTA at the bottom has free space to consume. */
+    <section className="rule-editor flex flex-1 flex-col gap-4" aria-labelledby="re-h">
       <h2 id="re-h" className="sr-only">
         {operand.label}
       </h2>
 
-      <p className="rule-sentence rq-body">{sentence}</p>
-
-      {isNumeric && bounds && (
-        <div className="rq-step" role="group" aria-label={`${operand.label} threshold`}>
-          <button type="button" className="rq-step__btn" aria-label="Decrease" disabled={disabled} onClick={() => step(-1)}>
-            &minus;
-          </button>
-          <span className="rq-step__val rq-num" aria-live="polite">
-            {displayValue}
-            {operand.unit === 'percent' ? '%' : ''}
-          </span>
-          <button type="button" className="rq-step__btn" aria-label="Increase" disabled={disabled} onClick={() => step(1)}>
-            +
-          </button>
-        </div>
+      {/* Frames 3.7/3.8: a sentence with one blank, then the range.
+          Shared with the inline threshold edit on `/rules` — see
+          `../RuleValueControl.tsx`. A `bool` operand has no blank and no
+          bounds; that component falls back to the plain sentence. */}
+      {isNumeric && bounds ? (
+        <RuleValueControl
+          operand={operand}
+          op={op}
+          value={value}
+          displayValue={displayValue}
+          fallbackSentence={sentence}
+          disabled={disabled}
+          onStep={step}
+          onSet={onValueChange}
+          sentenceClassName="rule-sentence--lg"
+        />
+      ) : (
+        <p className="rule-sentence rule-sentence--lg">{sentence}</p>
       )}
 
-      <aside className="preview rq-well flex flex-col gap-1" role="status" aria-live="polite">
-        {previewLoading ? (
-          <p className="rq-sub" aria-busy="true">
-            Checking against your history…
-          </p>
-        ) : previewError ? (
-          <p className="rq-sub" role="alert">
-            {previewError}
-          </p>
-        ) : preview?.state === 'flagged' ? (
-          <>
-            <p className="preview__lede rq-sub">Against your recent trades, this would have flagged</p>
-            <p className="preview__count rq-num">{preview.flagged}</p>
-            <p className="preview__guidance rq-sub">{preview.guidance}</p>
-            {preview.calibration && <p className="preview__calibration rq-sub">{preview.calibration}</p>}
-          </>
-        ) : (
-          <p className="rq-sub">{preview?.guidance ?? 'Not enough data yet.'}</p>
-        )}
-        <p className="preview__disclaimer rq-sub">Preview only. Past trades are never scored against this rule.</p>
-      </aside>
+      <PreviewPanel preview={preview} loading={previewLoading} error={previewError} />
 
-      <div className="rule-meta flex flex-wrap items-center gap-2">
+      {/* Frame 3.7's `.rule-meta`: the severity a new rule starts at is a
+          tag; its coverage is quiet supporting text, not a second tag
+          competing with it. */}
+      <div className="rule-meta">
         <span className="rq-tag rq-tag--muted">Starts soft</span>
-        <span className="rq-tag rq-tag--muted">Applies to all strategies</span>
+        <span className="rule-coverage">Applies to all strategies</span>
       </div>
 
-      <button type="button" className="rq-btn rq-btn--block" disabled={disabled || !canSubmit} onClick={onSubmit}>
-        {disabled ? 'Adding…' : 'Add rule'}
-      </button>
+      <div className="push">
+        <button type="button" className="rq-btn rq-btn--block" disabled={disabled || !canSubmit} onClick={onSubmit}>
+          {disabled ? 'Adding…' : 'Add rule'}
+        </button>
+      </div>
     </section>
   );
 }

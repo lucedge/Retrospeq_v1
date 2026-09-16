@@ -48,13 +48,14 @@ export default async function NewFieldPage() {
   const strategiesResult = await fetchStrategyOptionsForFieldCreate();
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="field-create-h">
-      <div className="flex flex-col gap-2">
-        <h1 id="field-create-h" className="rq-h1">
-          Add a field
-        </h1>
-        <p className="rq-body">Only ask for what your broker can&apos;t already tell you.</p>
-      </div>
+    /* Inventory row 3.19, frame `brand/docs/screens/rulebook.html#3.19`.
+       No Rulebook pills: this is a detail screen, and the frame has
+       none. */
+    <section className="field-new flex flex-col gap-5" aria-labelledby="field-create-h">
+      <h1 id="field-create-h" className="rq-h1">
+        New field
+      </h1>
+      <p className="rq-sub">Only ask for what your broker can&apos;t already tell you.</p>
 
       {strategiesResult.success ? (
         <FieldCreateForm strategies={strategiesResult.strategies ?? []} />

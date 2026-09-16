@@ -188,7 +188,11 @@ test.describe('Rule list, severity lifecycle, and the hard-cap swap (Module 04 s
     await loginAs(page, user.email);
     await page.goto('/rules');
 
-    await expect(page.getByRole('heading', { name: 'Your rules' })).toBeVisible();
+    // UI batch 3 (2026-09-16): frame 3.1 has no "Your rules" sub-heading
+    // — the page's own <h1> is "Rulebook" and the list is introduced by a
+    // real count line instead.
+    await expect(page.getByRole('heading', { name: 'Rulebook' })).toBeVisible();
+    await expect(page.getByText(/\d+ rules/)).toBeVisible();
 
     const softRow = page.locator('li', { hasText: 'Never risk more than 1% per trade.' });
     await expect(softRow).toBeVisible();
@@ -255,10 +259,18 @@ test.describe('Rule list, severity lifecycle, and the hard-cap swap (Module 04 s
 
     const status = row.locator('[role="status"]');
     await expect(status).toBeVisible();
-    await expect(status).toContainText('Not yet eligible to promote');
-    // The two gates a brand-new, zero-evaluation rule genuinely fails.
+    // UI batch 3 (2026-09-16), frame 3.3: the breakdown now lists EVERY
+    // §5.7 gate with a `data-met` marker, not just the failing ones, under
+    // the frame's own eyebrow copy.
+    await expect(status).toContainText('Not yet eligible for hard');
+    // The two gates a brand-new, zero-evaluation rule genuinely fails —
+    // both carry `data-met="false"`.
     await expect(status).toContainText('42');
-    await expect(status).toContainText('20 applicable evaluations needed');
+    await expect(status).toContainText('20 evaluations');
+    await expect(status.locator('li[data-met="false"]')).toHaveCount(2);
+    // A gate with nothing behind it yet is neither met nor failed: zero
+    // evaluations means the compliance gate carries NO `data-met` at all.
+    await expect(status.locator('li:not([data-met])')).toHaveCount(1);
     // Still soft — no promotion happened.
     await expect(row.getByText('Soft', { exact: true })).toBeVisible();
     await expect(row.getByText('Hard', { exact: true })).toHaveCount(0);

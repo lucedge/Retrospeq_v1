@@ -226,8 +226,12 @@ test.describe('Strategy-detail screen (Module 03 §5.1, /strategies/[id]) — in
 
     await loginAs(page, user.email);
     await page.goto(`/strategies/${strategyId}`);
-    await expect(page.getByText('Not enough data yet.')).toBeVisible();
-    await expect(page.getByText(/More trades needed|more trade[s]? on this setup/)).toBeVisible();
+    // UI batch 3 (2026-09-16), frame 3.16: an insufficient field is a
+    // first-class `.field-state` ROW ("Not enough data" + "N more
+    // trades"), not a `.finding` card — only a gate-cleared result gets
+    // its statement read in full. Same facts, the frame's shape.
+    await expect(page.getByText('Not enough data', { exact: false })).toBeVisible();
+    await expect(page.getByText(/More trades needed|\d+ more trades?/)).toBeVisible();
     // The real computed numbers/statement must never leak once gated.
     await expect(page.getByText(/Win rate rises/)).toHaveCount(0);
     await expect(page.getByText('68%')).toHaveCount(0);

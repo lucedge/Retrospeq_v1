@@ -125,7 +125,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     // / 2 rounded to the 0.1 step is 2.6%, the SAME honest fallback
     // guided-front-door.ts documents (independently re-derived here, not
     // assumed).
-    await expect(page.locator('.rq-step__val')).toHaveText('2.6%');
+    await expect(page.locator('.rule-value')).toHaveText('2.6%');
     await expect(page.getByText('Never risk more than 2.6% per trade.')).toBeVisible();
 
     // Zero primary `.rq-btn` UNTIL an operand is chosen would be wrong --
@@ -135,7 +135,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
 
     await page.getByRole('button', { name: 'Increase' }).click();
     await page.getByRole('button', { name: 'Increase' }).click();
-    await expect(page.locator('.rq-step__val')).toHaveText('2.8%');
+    await expect(page.locator('.rule-value')).toHaveText('2.8%');
     await expect(page.getByText('Never risk more than 2.8% per trade.')).toBeVisible();
 
     // Live preview genuinely re-runs off the new value -- a real round
@@ -187,7 +187,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new)', () => {
     await expect(page.getByText('Always set a stop before entering.')).toBeVisible();
     // No stepper for a bool operand -- there is no `{value}` in its
     // sentence template to adjust.
-    await expect(page.locator('.rq-step')).toHaveCount(0);
+    await expect(page.locator('.rq-range')).toHaveCount(0);
 
     await page.screenshot({ path: 'tmp/dev-screenshots/rule-editor-e2e-bool.png', fullPage: true });
 

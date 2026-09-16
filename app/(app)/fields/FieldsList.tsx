@@ -217,17 +217,25 @@ export function FieldsList({
   const activeRows = rows.filter((r) => r.field.state === 'active');
   const archivedRows = rows.filter((r) => r.field.state === 'archived');
 
+  // One `.rq-btn` per view: the pinned "Add a field" stands down while a
+  // row has its own rename or archive-confirm open, each of which brings
+  // its own decisive control. Same enforcement `/rules` uses.
+  const anyRowExpanded = rows.some((r) => r.renaming || r.confirmingArchive);
+
   return (
-    <div className="flex flex-col gap-6">
+    // Frame 3.18 (`brand/docs/screens/rulebook.html#3.18`): derived
+    // fields as static chips first, the trader's own beneath, the CTA
+    // pinned. `.field-group`/`.chips--static`/`.field-list` all shipped
+    // in the 2026-09-14 design program and are wired here for the first
+    // time.
+    <div className="flex flex-1 flex-col gap-5">
       {derivedFields.length > 0 && (
-        <section className="flex flex-col gap-2" aria-labelledby="derived-h">
-          <h2 id="derived-h" className="rq-h2">
-            Recorded automatically
-          </h2>
+        <section className="field-group" aria-labelledby="derived-h">
+          <h3 id="derived-h">Recorded automatically</h3>
           <p className="rq-sub">You never fill these in. They still appear in your results.</p>
-          <ul className="flex flex-wrap gap-2">
+          <ul className="chips chips--static">
             {derivedFields.map((f) => (
-              <li key={f.fieldId} className="rq-tag rq-tag--muted">
+              <li key={f.fieldId} className="chip chip--muted">
                 {f.name}
               </li>
             ))}
@@ -235,20 +243,8 @@ export function FieldsList({
         </section>
       )}
 
-      <section className="flex flex-col gap-3" aria-labelledby="custom-h">
-        <div className="flex items-center justify-between gap-3">
-          <h2 id="custom-h" className="rq-h2">
-            Fields you&apos;ve added
-          </h2>
-          {/* Only ONE of this link and page.tsx's own Pro-upsell `.rq-btn`
-              ever renders for a given trader — see this component's own
-              `entitled` prop doc comment. */}
-          {entitled && (
-            <Link href="/fields/new" className="rq-btn">
-              Add a field
-            </Link>
-          )}
-        </div>
+      <section className="field-group" aria-labelledby="custom-h">
+        <h3 id="custom-h">Your fields</h3>
 
         {activeRows.length === 0 && (
           <p className="rq-sub">
@@ -279,24 +275,44 @@ export function FieldsList({
         )}
       </section>
 
+      {/* Frame 3.18 renders an archived field in place, greyed, with an
+          "archived" chip. Kept behind the same `<details class="retired">`
+          disclosure `/rules` uses for retired rules — a trader with a long
+          history should not have to scroll past their own dead fields to
+          reach the live ones, and the disclosure is the device this design
+          system already has for "not your current concern, not hidden". */}
       {archivedRows.length > 0 && (
-        <details className="rq-well">
-          <summary className="rq-sub">
+        <details className="retired">
+          <summary>
             Archived fields (<span className="rq-num">{archivedRows.length}</span>)
           </summary>
-          <ul className="flex flex-col gap-2 pt-2">
+          <ul className="field-list pt-1">
             {archivedRows.map((row) => (
-              <li key={row.field.fieldId} className="rq-row">
-                <span className="rq-body flex-1">{row.field.name}</span>
-                <span className="rq-tag rq-tag--muted">{dataTypeLabel(row.field.dataType)}</span>
-                {row.field.kind === 'strategy_var' && strategyName(row.field.ownerStrategyId) && (
-                  <span className="rq-tag rq-tag--muted">Only in {strategyName(row.field.ownerStrategyId)}</span>
-                )}
-                <span className="rq-tag rq-tag--muted">Archived</span>
+              <li key={row.field.fieldId} className="field-list__item">
+                <span className="field-list__name text-ink-faint">
+                  {row.field.name} <span className="chip chip--small">archived</span>
+                </span>
+                <span className="field-list__usage">
+                  {dataTypeLabel(row.field.dataType)}
+                  {row.field.kind === 'strategy_var' && strategyName(row.field.ownerStrategyId)
+                    ? ` · ${strategyName(row.field.ownerStrategyId)}`
+                    : ''}
+                </span>
               </li>
             ))}
           </ul>
         </details>
+      )}
+
+      {/* Frame 3.18's bottom-pinned CTA. Only ONE of this and page.tsx's
+          own `.gate` "See Pro" ever renders — see this component's own
+          `entitled` prop doc comment. */}
+      {entitled && !anyRowExpanded && (
+        <div className="push pt-2">
+          <Link href="/fields/new" className="rq-btn rq-btn--block">
+            Add a field
+          </Link>
+        </div>
       )}
     </div>
   );
@@ -330,7 +346,15 @@ function FieldRow({
   return (
     <li data-testid={`field-row-${field.fieldId}`}>
       <section className="rq-card flex flex-col gap-3" aria-label={field.name}>
-        <div className="flex items-start justify-between gap-3">
+        {/* Frame 3.18's `.field-list__item` lane: the name (with its type
+            as a small chip) on the left, what depends on it on the right.
+            The right-hand lane shows SCOPE, not the frame's "2 rules · 3
+            strategies" usage count — no list read computes a usage tally
+            (`ManagedFieldEntry` has no such field, and `field_usages` is
+            only queried on an archive attempt), so a count here would be
+            invented. See this batch's ledger entry; inventory row 3.18
+            names the gap. */}
+        <div className="field-list__item !border-0 !py-0">
           {row.renaming ? (
             <input
               value={row.renameValue}
@@ -341,15 +365,19 @@ function FieldRow({
               onChange={(e) => onRenameChange(e.target.value)}
             />
           ) : (
-            <p className="rq-body flex-1">{field.name}</p>
+            <span className="field-list__name">
+              {field.name} <span className="chip chip--small">{dataTypeLabel(field.dataType)}</span>
+            </span>
           )}
-          <span className="rq-tag rq-tag--muted">{dataTypeLabel(field.dataType)}</span>
-          <span className={field.kind === 'account' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-            {field.kind === 'account' ? 'Shared' : 'This strategy only'}
+          {/* One lane, one fact. This used to say "This strategy only"
+              here AND "Only in Breakout." on its own line below — the
+              same thing twice, the second time more usefully. Named
+              strategy wins; "Shared" is the honest label for an
+              account-wide field. */}
+          <span className="field-list__usage">
+            {field.kind === 'account' ? 'Shared' : (strategyName ?? 'This strategy only')}
           </span>
         </div>
-
-        {field.kind === 'strategy_var' && strategyName && <p className="rq-sub">Only in {strategyName}.</p>}
 
         {row.error && (
           <p className="rq-sub" role="alert">
@@ -357,14 +385,15 @@ function FieldRow({
           </p>
         )}
 
+        {/* Frame 3.20's blocked-deletion shape (`.alert--blocking` +
+            `.dependents`), reused here because it is the same fact: this
+            field cannot go away while something depends on it. */}
         {row.dependents && row.dependents.length > 0 && (
-          <div className="rq-well flex flex-col gap-1" role="alertdialog" aria-label={`${field.name} is used elsewhere`}>
-            <p className="rq-sub">Used by:</p>
-            <ul className="flex flex-col gap-1">
+          <div className="alert alert--blocking" role="alertdialog" aria-label={`${field.name} is used elsewhere`}>
+            <p>Used by:</p>
+            <ul className="dependents">
               {row.dependents.map((d) => (
-                <li key={`${d.usedBy}-${d.usedById}`} className="rq-sub">
-                  {d.label}
-                </li>
+                <li key={`${d.usedBy}-${d.usedById}`}>{d.label}</li>
               ))}
             </ul>
           </div>
@@ -400,16 +429,19 @@ function FieldRow({
             </button>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onRenameStart}>
+          /* `.link`s, not ghost buttons — the same call `/rules` makes for
+             per-row lifecycle controls in a list that can show many rows
+             (frame 3.3's `.rule__actions`). */
+          <div className="rule__actions">
+            <button type="button" className="link" disabled={row.busy} onClick={onRenameStart}>
               Rename
             </button>
             {field.kind === 'strategy_var' && (
-              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onPromote}>
+              <button type="button" className="link" disabled={row.busy} onClick={onPromote}>
                 {row.busy ? 'Sharing…' : 'Share across strategies'}
               </button>
             )}
-            <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onArchiveClick}>
+            <button type="button" className="link" disabled={row.busy} onClick={onArchiveClick}>
               Archive
             </button>
           </div>

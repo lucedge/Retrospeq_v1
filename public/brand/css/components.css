@@ -571,6 +571,10 @@
    Module 04 §6.1 / 08 §5.3. One blank in a sentence; the value is
    a button that opens the stepper; the range is the fine control. */
 .rule-sentence { font-size: var(--rq-text-lg); font-weight: var(--rq-weight-semi); letter-spacing: var(--rq-track-snug); line-height: 1.35; margin: 0; text-wrap: balance; }
+/* The rule editor's own sentence is the page (`docs/screens/rulebook.html`
+   frames 3.7/3.8 set it inline at 23px); inline in a rule card (3.11) it
+   stays at the base `.rule-sentence` size. */
+.rule-sentence--lg { font-size: var(--rq-text-xl); }
 .rule-value { font-family: var(--rq-font-mono); font-variant-numeric: tabular-nums; font-weight: var(--rq-weight-medium); color: var(--rq-accent-ink); border-bottom: 2px solid var(--rq-accent); padding: 0 2px; background: none; font-size: inherit; }
 .rq-range { display: flex; align-items: center; gap: 10px; }
 .rq-range input[type="range"] { flex: 1; accent-color: var(--rq-accent); height: 32px; }
@@ -895,4 +899,10 @@ legend { font-family: var(--rq-font-mono); font-size: var(--rq-text-xs); letter-
 .connect,
 .entry,
 .trades,
-.closeout { flex: 1 1 auto; }
+.closeout,
+.rules,
+.rule-new,
+.strategies,
+.strategy,
+.fields,
+.field-new { flex: 1 1 auto; }

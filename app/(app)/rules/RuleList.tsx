@@ -221,11 +221,45 @@ function initialRowState(rule: RuleListItem): RowState {
   };
 }
 
-/** One line per failing gate, built from `detail` (not the server's own
- *  prose) so every number gets a real `.rq-num` span — see this file's own
- *  header for why. Only ever called for a code present in `reasons`, so
- *  every branch below corresponds to a gate the trader is ACTUALLY failing
- *  right now, never a fabricated one. */
+/** Every §5.7 promotion gate, in the order frame 3.3 lists them. Rendered
+ *  in full (met and unmet alike) so a trader sees the whole runway, not
+ *  just the part they're failing — `data-met` on each `<li>` carries the
+ *  difference in weight, never colour. */
+const ELIGIBILITY_GATES: PromotionIneligibilityReason['code'][] = [
+  'RULE_INSUFFICIENT_EVALUATIONS',
+  'RULE_NOT_OLD_ENOUGH',
+  'RULE_INSUFFICIENT_COMPLIANCE',
+  'RULE_RECENT_BREAK',
+];
+
+/**
+ * `'true'` (the frame's ✓), `'false'` (failing, carried in the server's
+ * own `reasons`), or `undefined` — a gate that is not yet ASSESSABLE,
+ * which `.eligibility`'s CSS renders as the same neutral "·" an
+ * unevaluated gate gets.
+ *
+ * The third state is a real correction found by looking at this screen:
+ * `promotion-eligibility.ts` only reports a COMPLIANCE failure once there
+ * is something to compute a ratio from, so a brand-new rule with zero
+ * evaluations came back "not failing" and rendered "0% followed — needs
+ * 95% ✓". That is a fabricated pass. A gate with no evaluations behind it
+ * is neither met nor failed, and now says so.
+ */
+function gateMet(
+  code: PromotionIneligibilityReason['code'],
+  eligibility: { reasons: PromotionIneligibilityReason[]; detail: PromotionEligibilityDetail },
+): 'true' | 'false' | undefined {
+  if (eligibility.reasons.some((r) => r.code === code)) return 'false';
+  if (code === 'RULE_INSUFFICIENT_COMPLIANCE' && eligibility.detail.applicableEvaluations === 0) return undefined;
+  return 'true';
+}
+
+/** One line per gate, built from `detail` (not the server's own prose) so
+ *  every number gets a real `.rq-num` span — see this file's own header
+ *  for why. The wording is identical whether the gate is met or not: the
+ *  numbers already say which it is, and a second, congratulatory phrasing
+ *  for a met gate would be the product performing something it hasn't
+ *  earned. */
 function eligibilityLine(
   code: PromotionIneligibilityReason['code'],
   detail: PromotionEligibilityDetail,
@@ -236,8 +270,8 @@ function eligibilityLine(
         key: code,
         node: (
           <>
-            Active for <span className="rq-num">{Math.max(0, Math.floor(detail.ageDays))}</span> of the{' '}
-            <span className="rq-num">42</span> days (6 weeks) needed.
+            Active <span className="rq-num">{Math.max(0, Math.floor(detail.ageDays))}</span> of the{' '}
+            <span className="rq-num">42</span> days needed
           </>
         ),
       };
@@ -246,8 +280,7 @@ function eligibilityLine(
         key: code,
         node: (
           <>
-            <span className="rq-num">{detail.applicableEvaluations}</span> of{' '}
-            <span className="rq-num">20</span> applicable evaluations needed so far.
+            <span className="rq-num">{detail.applicableEvaluations}</span> of <span className="rq-num">20</span> evaluations
           </>
         ),
       };
@@ -257,7 +290,7 @@ function eligibilityLine(
         node: (
           <>
             <span className="rq-num">{detail.complianceRatio !== null ? (detail.complianceRatio * 100).toFixed(1) : '0'}%</span>{' '}
-            followed so far — needs at least <span className="rq-num">95%</span>.
+            followed — needs <span className="rq-num">95%</span>
           </>
         ),
       };
@@ -266,8 +299,8 @@ function eligibilityLine(
         key: code,
         node: (
           <>
-            Broken <span className="rq-num">{detail.breaksInLastThreeWeeks}</span> time
-            {detail.breaksInLastThreeWeeks === 1 ? '' : 's'} in the last 3 weeks — needs zero.
+            <span className="rq-num">{detail.breaksInLastThreeWeeks}</span> break
+            {detail.breaksInLastThreeWeeks === 1 ? '' : 's'} in the last 3 weeks — needs none
           </>
         ),
       };
@@ -550,11 +583,11 @@ export function RuleList({
   const activeHardCount = activeRows.filter((r) => r.rule.severity === 'hard').length;
 
   if (activeRows.length === 0 && inactiveRows.length === 0) {
+    // Frame 3.5 (`brand/docs/screens/rulebook.html#3.5`): the sub line,
+    // then an equal pair with no implied recommendation. No `.rq-btn`
+    // singleton here at all — an equal pair IS the one action.
     return (
-      <section className="flex flex-col gap-4" aria-labelledby="rule-list-h">
-        <h2 id="rule-list-h" className="rq-h2">
-          Your rules
-        </h2>
+      <section className="flex flex-col gap-4" aria-label="Your rules">
         <p className="rq-sub">You haven&apos;t written any rules yet.</p>
         <div className="rq-btn-row">
           <Link href="/rules/start" className="rq-btn rq-btn--equal">
@@ -568,28 +601,32 @@ export function RuleList({
     );
   }
 
-  return (
-    <section className="flex flex-col gap-4" aria-labelledby="rule-list-h">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="rule-list-h" className="rq-h2">
-          Your rules
-        </h2>
-        <Link href="/rules/new" className="rq-btn rq-btn--ghost">
-          Write a rule
-        </Link>
-      </div>
+  // One `.rq-btn` per view: the bottom-pinned "Write a rule" is this
+  // screen's single primary, and it stands down whenever a row opens one
+  // of its own three expansions (edit / retire-confirm / hard-cap swap),
+  // each of which brings its own decisive control per frames 3.4 and
+  // 3.11. That is a real enforcement of the rule, not the "only one row
+  // is ever open in practice" hand-wave this file used to carry.
+  const anyRowExpanded = rows.some((r) => r.editing || r.confirmingRetire || r.hardCapChooser !== null);
 
-      {/* `limit === 0` is Free's structural exclusion (`rules.hard: {free:
-          0}`, `reason: 'plan'`), not a real quota to report a fraction
-          against — showing "0 of 0 used" there would be a confusing,
-          meaningless readout, so this line only renders for a real,
-          nonzero cap (Pro's 6). */}
-      {hardEntitlement.limit !== null && hardEntitlement.limit > 0 && (
-        <p className="rq-sub">
-          Hard rules: <span className="rq-num">{activeHardCount}</span> of{' '}
-          <span className="rq-num">{hardEntitlement.limit}</span> used.
-        </p>
-      )}
+  return (
+    <section className="flex flex-1 flex-col gap-4" aria-label="Your rules">
+      {/* Frame 3.1's own sub line. "One earned this week" is NOT rendered:
+          a rule's provenance (authored by hand vs graduated out of the
+          weekly review) is not in `fetchRulesForUser`'s read, and "earned"
+          would be a guess. The hard-rule fraction is real and countable.
+          `limit === 0` is Free's structural exclusion (`rules.hard:
+          {free: 0}`, `reason: 'plan'`), not a quota to report a fraction
+          against — "0 of 0" would be a meaningless readout. */}
+      <p className="rq-sub">
+        <span className="rq-num">{activeRows.length}</span> {activeRows.length === 1 ? 'rule' : 'rules'}
+        {hardEntitlement.limit !== null && hardEntitlement.limit > 0 && (
+          <>
+            {' · '}
+            <span className="rq-num">{activeHardCount}</span> of <span className="rq-num">{hardEntitlement.limit}</span> hard
+          </>
+        )}
+      </p>
 
       <ul className="flex flex-col gap-3">
         {activeRows.map((row) => (
@@ -611,28 +648,59 @@ export function RuleList({
         ))}
       </ul>
 
+      {/* Frame 3.3's `<details class="retired">` — collapsed by default,
+          each retired rule still a full `.rule` card (a dead end, not a
+          hidden one), with no lifecycle control anywhere inside. */}
       {inactiveRows.length > 0 && (
-        <details className="rq-well">
-          <summary className="rq-sub">
+        <details className="retired">
+          <summary>
             Retired rules (<span className="rq-num">{inactiveRows.length}</span>)
           </summary>
-          <ul className="flex flex-col gap-2 pt-2">
+          <ul className="flex flex-col gap-3 pt-2">
             {inactiveRows.map((row) => (
-              <li key={row.rule.ruleId} className="rq-row">
-                <span className="rq-body flex-1">{row.rule.rendered}</span>
-                <span className={row.rule.severity === 'hard' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-                  {row.rule.severity === 'hard' ? 'Hard' : 'Soft'}
-                </span>
-                <span className="rq-tag rq-tag--muted">
-                  {row.rule.state === 'retired' ? 'Retired' : 'Paused by your plan'}
-                </span>
+              <li key={row.rule.ruleId} data-testid={`rule-row-${row.rule.ruleId}`}>
+                <section className="rule rq-card" data-state="retired" aria-label={row.rule.rendered}>
+                  <div className="rule__head">
+                    <p className="rule__sentence rule-sentence">{row.rule.rendered}</p>
+                    <span className="rq-tag rq-tag--muted">
+                      {row.rule.state === 'retired' ? 'Retired' : 'Paused by your plan'}
+                    </span>
+                  </div>
+                  <p className="rule__held">
+                    {row.rule.state === 'retired' && row.rule.retiredAt
+                      ? `retired ${formatDay(row.rule.retiredAt)}`
+                      : row.rule.severity === 'hard'
+                        ? 'was hard'
+                        : 'was soft'}
+                  </p>
+                </section>
               </li>
             ))}
           </ul>
         </details>
       )}
+
+      {/* Bottom-pinned single primary — frames 3.12/3.18 pin the same CTA
+          on the two sibling list screens; 3.1 shows no CTA at all, which
+          would leave a trader with rules no way to add another. See
+          `anyRowExpanded` above for why it stands down. */}
+      {!anyRowExpanded && (
+        <div className="push pt-2">
+          <Link href="/rules/new" className="rq-btn rq-btn--block">
+            Write a rule
+          </Link>
+        </div>
+      )}
     </section>
   );
+}
+
+/** "21 July" — the frame's own `.rule__held` date form. Locale-fixed to
+ *  `en-GB` so a server render and a client re-render can't disagree. */
+function formatDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
 }
 
 function RuleRow({
@@ -666,13 +734,30 @@ function RuleRow({
 
   return (
     <li data-testid={`rule-row-${rule.ruleId}`}>
-      <section className="rq-card flex flex-col gap-3" aria-label={rule.rendered}>
-        <div className="flex items-start justify-between gap-3">
-          <p className="rule-sentence rq-body flex-1">{rule.rendered}</p>
-          <span className={rule.severity === 'hard' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-            {rule.severity === 'hard' ? 'Hard' : 'Soft'}
-          </span>
-        </div>
+      <section className="rule rq-card" data-state="active" aria-label={rule.rendered}>
+        {/* Frame 3.11's editing card is JUST the editable sentence — the
+            static one would be the same words twice, which is exactly how
+            the first screenshot of this state read. */}
+        {!row.editing && (
+          <div className="rule__head">
+            <p className="rule__sentence rule-sentence">{rule.rendered}</p>
+            <span className={rule.severity === 'hard' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
+              {rule.severity === 'hard' ? 'Hard' : 'Soft'}
+            </span>
+          </div>
+        )}
+
+        {/* Frame 3.1's `.rule__held` line reads "23 of 61 held · earned 21
+            July". The held FRACTION (and the `.rq-dots` matrix above it)
+            needs a per-rule evaluation tally that `fetchRulesForUser` does
+            not read and no other list query computes — see this batch's
+            ledger entry; it is left out rather than faked, and inventory
+            row 3.1 stays ◐ for exactly that. What IS real is when a soft
+            rule became hard, so that is what this line says when there is
+            something to say. */}
+        {rule.severity === 'hard' && rule.promotedAt && (
+          <p className="rule__held">hard since {formatDay(rule.promotedAt)}</p>
+        )}
 
         {row.error && (
           <p className="rq-sub" role="alert">
@@ -680,18 +765,22 @@ function RuleRow({
           </p>
         )}
 
+        {/* Frame 3.3's own breakdown: the eyebrow, then EVERY §5.7 gate
+            with `data-met`, not only the failing ones — "25 evaluations ✓,
+            6 weeks old ✓, 4 breaks in the last 3 weeks ✗" tells a trader
+            how close they are; a list of failures alone does not. `met`
+            is read off the server's own `reasons` array (a code absent
+            from it is a gate the server just passed), never re-derived
+            here from `detail`. */}
         {row.eligibility && (
-          <div className="rq-well flex flex-col gap-1" role="status">
-            <p className="rq-sub">Not yet eligible to promote:</p>
-            <ul className="flex flex-col gap-1">
-              {row.eligibility.reasons.map((reason) => {
-                const line = eligibilityLine(reason.code, row.eligibility!.detail);
-                return (
-                  <li key={line.key} className="rq-sub">
-                    {line.node}
-                  </li>
-                );
-              })}
+          <div className="flex flex-col gap-1.5" role="status">
+            <p className="rq-label">Not yet eligible for hard</p>
+            <ul className="eligibility">
+              {ELIGIBILITY_GATES.map((code) => (
+                <li key={code} data-met={gateMet(code, row.eligibility!)}>
+                  {eligibilityLine(code, row.eligibility!.detail).node}
+                </li>
+              ))}
             </ul>
             {/* Bug fix (independent tester verification, 2026-08-31): a
                 free-tier trader must ALWAYS see this alongside the gates
@@ -700,7 +789,7 @@ function RuleRow({
                 showing only the eligibility breakdown falsely implies
                 waiting out the gates would eventually be enough. */}
             {row.eligibility.proRequired && (
-              <p className="rq-sub">Hard rules are also a Pro feature. Upgrade to promote a rule.</p>
+              <p className="hint">Hard rules are also a Pro feature. Upgrade to promote a rule.</p>
             )}
           </div>
         )}
@@ -736,14 +825,26 @@ function RuleRow({
                 {row.swapError}
               </p>
             )}
-            <div className="rq-btn-row">
-              <button type="button" className="rq-btn" disabled={!row.swapSelectedRuleId || row.swapBusy} onClick={onSwap}>
-                {row.swapBusy ? 'Swapping…' : 'Swap'}
-              </button>
-              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.swapBusy} onClick={onKeepSoft}>
-                Keep it soft
-              </button>
-            </div>
+            {/* Frame 3.4 stacks these full-width rather than pairing them:
+                this is not an unweighted either-way choice (the trader
+                already chose to promote), so it is a primary + a ghost,
+                not an `.rq-btn--equal` pair. */}
+            <button
+              type="button"
+              className="rq-btn rq-btn--block"
+              disabled={!row.swapSelectedRuleId || row.swapBusy}
+              onClick={onSwap}
+            >
+              {row.swapBusy ? 'Swapping…' : 'Swap'}
+            </button>
+            <button
+              type="button"
+              className="rq-btn rq-btn--ghost rq-btn--block"
+              disabled={row.swapBusy}
+              onClick={onKeepSoft}
+            >
+              Keep it soft
+            </button>
           </div>
         )}
 
@@ -765,25 +866,29 @@ function RuleRow({
             </div>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-2">
+          /* Frame 3.3: lifecycle controls are `.link`s ON the card, not
+             buttons — a rulebook can show many rows at once, and three
+             `.rq-btn--ghost` per row turned the list into a wall of
+             chrome. Same order as the frame. */
+          <div className="rule__actions">
+            {rule.severity === 'soft' ? (
+              <button type="button" className="link" disabled={row.busy} onClick={onPromote}>
+                {row.busy ? 'Promoting…' : 'Promote to hard'}
+              </button>
+            ) : (
+              <button type="button" className="link" disabled={row.busy} onClick={onDemote}>
+                {row.busy ? 'Demoting…' : 'Demote to soft'}
+              </button>
+            )}
             {/* Story 2.5, Slice 10f — only offered when the operand has a
                 real numeric threshold to change; see `isThresholdEditable`'s
                 own header for why a bool operand never gets this button. */}
             {isThresholdEditable(rule.operandId) && (
-              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onEditClick}>
-                Edit
+              <button type="button" className="link" disabled={row.busy} onClick={onEditClick}>
+                Edit threshold
               </button>
             )}
-            {rule.severity === 'soft' ? (
-              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onPromote}>
-                {row.busy ? 'Promoting…' : 'Promote to hard'}
-              </button>
-            ) : (
-              <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onDemote}>
-                {row.busy ? 'Demoting…' : 'Demote to soft'}
-              </button>
-            )}
-            <button type="button" className="rq-btn rq-btn--ghost" disabled={row.busy} onClick={onRetireClick}>
+            <button type="button" className="link" disabled={row.busy} onClick={onRetireClick}>
               Retire
             </button>
           </div>

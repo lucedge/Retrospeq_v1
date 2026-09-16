@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { RulebookSubnav, SettingsLink, TabBar } from './AppShellNav';
+import { SettingsLink, TabBar } from './AppShellNav';
 
 /**
  * Authenticated app shell (as opposed to app/(auth)/layout.tsx's
@@ -78,10 +78,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </Link>
         <SettingsLink />
       </header>
-      <main className="mx-auto flex w-full max-w-[32rem] flex-1 flex-col px-5 pt-4 pb-28">
-        <RulebookSubnav />
-        {children}
-      </main>
+      {/* `RulebookSubnav` used to render HERE, above every page in the
+          group. Moved into the four screens that actually show it
+          (`/rules`, `/rules/new`, `/strategies`, `/fields`) on 2026-09-16
+          for two reasons the mockup makes explicit: every one of those
+          frames puts the pills UNDER that screen's own `<h1>`, which a
+          layout-level slot structurally cannot do; and the detail screens
+          in the same tab (`/rules/start`, `/strategies/new`,
+          `/strategies/[id]`, `/fields/new`) have no pills at all in their
+          frames — a sub-screen is not a fourth destination. */}
+      <main className="mx-auto flex w-full max-w-[32rem] flex-1 flex-col px-5 pt-4 pb-28">{children}</main>
       <TabBar />
     </div>
   );

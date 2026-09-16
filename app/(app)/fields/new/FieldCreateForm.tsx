@@ -40,18 +40,18 @@ import { createFieldAction, type CreateFieldActionState, type FieldStrategyOptio
  * - This is an AUTHORING screen (matching `StrategyBuilder.tsx`'s own
  *   reasoning), not a fast-capture pre-entry screen — a plain text input
  *   for the field name and each option is the honest control.
- * - Data type: a native `role="radiogroup"` segmented control, matching
- *   §5.2's own reference markup (`<div class="segmented" role="radiogroup">`)
- *   almost literally, translated to this repo's own `.rq-tag`-as-toggle
- *   convention (`StrategyBuilder.tsx`'s own step indicator) since
- *   `components.css` ships no `.segmented` primitive.
- * - Scope ("All strategies" vs "Just one strategy") is likewise a two-way
- *   toggle over the SAME device, directly implementing §6.1's own flow:
- *   "scope: this strategy only -> kind = strategy_var / scope: all
- *   strategies -> kind = account."
- * - Exactly one primary `.rq-btn` in this view ("Create field"); the
- *   per-option remove buttons and "Add option" are `.rq-btn--ghost`,
- *   matching `StrategyBuilder.tsx`'s own trigger-condition row precedent.
+ * - Data type: the real `.segmented` radiogroup from frame 3.19 (native
+ *   `<input type=radio>` + `<label>` pairs). The previous version of this
+ *   note said `components.css` "ships no `.segmented` primitive" —
+ *   untrue since the 2026-09-14 design program; corrected 2026-09-16
+ *   along with the same stale claim in three other files.
+ * - Scope ("All strategies" vs "Just one strategy") is frame 3.19's
+ *   `.radio-stack` — each choice with its consequence underneath —
+ *   directly implementing §6.1's own flow: "scope: this strategy only ->
+ *   kind = strategy_var / scope: all strategies -> kind = account."
+ * - Exactly one primary `.rq-btn` in this view ("Create field", bottom-
+ *   pinned per the frame); Cancel and "Add option" are `.link`s, and the
+ *   per-option remove control is a plain `.icon`.
  */
 
 const DATA_TYPES: { value: FieldDataType; label: string }[] = [
@@ -151,199 +151,190 @@ export function FieldCreateForm({ strategies }: { strategies: FieldStrategyOptio
 
   return (
     <form
-      className="flex flex-col gap-5"
+      className="flex flex-1 flex-col gap-5"
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
         handleSubmit();
       }}
     >
+      {/* Frame 3.20's blocking alert — an error belongs above the fields
+          it is about, not after them (the same qa finding fixed on
+          `/accounts/connect` earlier today). */}
       {result?.error && (
-        <p className="rq-sub" role="alert">
-          {result.error.user_message}
-        </p>
+        <div className="alert alert--blocking" role="alert">
+          <p>{result.error.user_message}</p>
+        </div>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="field-name" className="rq-label">
-          Field name
-        </label>
+      <div className="field">
+        <label htmlFor="field-name">Field name</label>
         <input
           id="field-name"
           value={name}
           maxLength={FIELD_NAME_MAX_LENGTH}
           autoComplete="off"
-          className="rounded-md border border-line bg-surface px-3 py-2.5 text-base text-ink"
           onChange={(e) => setName(e.target.value)}
         />
         {result?.fieldErrors?.name && (
-          <p className="rq-sub" role="alert">
+          <p className="hint" role="alert">
             {result.fieldErrors.name[0]}
           </p>
         )}
       </div>
 
-      <fieldset className="flex flex-col gap-2">
-        <legend className="rq-label">Type</legend>
-        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Field type">
+      {/* Frame 3.19's real `.segmented` radiogroup — native radios, one
+          label each. The class exists in `components.css` (design program
+          batch 6); this file's header used to say it didn't, which was
+          true when the header was written and has not been since. */}
+      <fieldset>
+        <legend>Type</legend>
+        <div className="segmented" role="radiogroup" aria-label="Field type">
+          {/* Each pair wrapped in a `<span>`, exactly as
+              `ManualEntryForm.tsx` already does: `.segmented input` is
+              `position:absolute` with no offsets, so without a per-pair
+              containing block every hidden input collapses onto the SAME
+              static position and the last one in the DOM swallows every
+              click. Found for real here — Playwright's click on "Rating"
+              was intercepted by "Note"'s input, which is exactly what a
+              trader tapping the pill would have hit too. */}
           {DATA_TYPES.map((t) => (
-            <button
-              key={t.value}
-              type="button"
-              role="radio"
-              aria-checked={dataType === t.value}
-              className={dataType === t.value ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}
-              onClick={() => setDataType(t.value)}
-            >
-              {t.label}
-            </button>
+            <span key={t.value}>
+              <input
+                type="radio"
+                id={`field-type-${t.value}`}
+                name="field-type"
+                checked={dataType === t.value}
+                onChange={() => setDataType(t.value)}
+              />
+              <label htmlFor={`field-type-${t.value}`}>{t.label}</label>
+            </span>
           ))}
         </div>
       </fieldset>
 
       {(dataType === 'pick_one' || dataType === 'pick_many') && (
-        <div className="flex flex-col gap-2">
-          <p className="rq-label">Options</p>
-          <ul className="flex flex-col gap-2">
+        <fieldset>
+          <legend>Options</legend>
+          <ul className="conditions">
             {options.map((opt, i) => (
-              <li key={i} className="flex items-center gap-2">
+              <li key={i} className="condition">
                 <input
                   value={opt}
                   maxLength={60}
                   autoComplete="off"
                   aria-label={`Option ${i + 1}`}
-                  className="flex-1 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
                   onChange={(e) => updateOption(i, e.target.value)}
                 />
                 {options.length > 1 && (
-                  <button
-                    type="button"
-                    className="rq-btn rq-btn--ghost"
-                    aria-label={`Remove option ${i + 1}`}
-                    onClick={() => removeOption(i)}
-                  >
+                  <button type="button" className="icon" aria-label={`Remove option ${i + 1}`} onClick={() => removeOption(i)}>
                     &times;
                   </button>
                 )}
               </li>
             ))}
           </ul>
-          <button type="button" className="rq-btn rq-btn--ghost" onClick={addOption}>
+          <button type="button" className="link self-start" onClick={addOption}>
             Add option
           </button>
           {result?.fieldErrors?.config && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {result.fieldErrors.config[0]}
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
       {dataType === 'number' && (
-        <div className="flex flex-col gap-3">
-          <p className="rq-label">Range</p>
-          <div className="flex flex-wrap gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="rq-label">Min</span>
-              <input
-                type="number"
-                value={numberMin}
-                className="w-28 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                onChange={(e) => setNumberMin(e.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="rq-label">Max</span>
-              <input
-                type="number"
-                value={numberMax}
-                className="w-28 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                onChange={(e) => setNumberMax(e.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="rq-label">Step</span>
-              <input
-                type="number"
-                value={numberStep}
-                className="w-28 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                onChange={(e) => setNumberStep(e.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="rq-label">Unit (optional)</span>
-              <input
-                value={numberUnit}
-                maxLength={20}
-                className="w-28 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                onChange={(e) => setNumberUnit(e.target.value)}
-              />
-            </label>
+        <fieldset>
+          <legend>Range</legend>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="field">
+              <label htmlFor="num-min">Min</label>
+              <input id="num-min" type="number" value={numberMin} onChange={(e) => setNumberMin(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="num-max">Max</label>
+              <input id="num-max" type="number" value={numberMax} onChange={(e) => setNumberMax(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="num-step">Step</label>
+              <input id="num-step" type="number" value={numberStep} onChange={(e) => setNumberStep(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="num-unit">Unit (optional)</label>
+              <input id="num-unit" value={numberUnit} maxLength={20} onChange={(e) => setNumberUnit(e.target.value)} />
+            </div>
           </div>
           {result?.fieldErrors?.config && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {result.fieldErrors.config[0]}
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
       {dataType === 'rating' && (
-        <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={customRatingScale} onChange={(e) => setCustomRatingScale(e.target.checked)} />
-            <span className="rq-body">Use a custom scale (default 1–5)</span>
+        <fieldset>
+          <legend>Scale</legend>
+          <label className="flex items-center gap-2.5 text-base">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-accent"
+              checked={customRatingScale}
+              onChange={(e) => setCustomRatingScale(e.target.checked)}
+            />
+            Use a custom scale (default 1&ndash;5)
           </label>
           {customRatingScale && (
-            <div className="flex flex-wrap gap-3">
-              <label className="flex flex-col gap-1">
-                <span className="rq-label">Min</span>
-                <input
-                  type="number"
-                  value={ratingMin}
-                  className="w-24 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                  onChange={(e) => setRatingMin(e.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="rq-label">Max</span>
-                <input
-                  type="number"
-                  value={ratingMax}
-                  className="w-24 rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                  onChange={(e) => setRatingMax(e.target.value)}
-                />
-              </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="field">
+                <label htmlFor="rating-min">Min</label>
+                <input id="rating-min" type="number" value={ratingMin} onChange={(e) => setRatingMin(e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="rating-max">Max</label>
+                <input id="rating-max" type="number" value={ratingMax} onChange={(e) => setRatingMax(e.target.value)} />
+              </div>
             </div>
           )}
           {result?.fieldErrors?.config && (
-            <p className="rq-sub" role="alert">
+            <p className="hint" role="alert">
               {result.fieldErrors.config[0]}
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
+      {/* §4.2's "note | Never segmented", said plainly the moment a trader
+          picks it — frame 3.20's own note/before-entry incompatibility is
+          the strategy builder's to raise (that is where a capture moment
+          is chosen); this is the part this screen can honestly say. */}
       {dataType === 'note' && (
-        <p className="rq-sub">Notes aren&apos;t analysed and don&apos;t count toward your field total — a place to write what doesn&apos;t fit a field.</p>
+        <p className="hint">
+          Notes aren&apos;t analysed and don&apos;t count toward your field total — a place to write what doesn&apos;t fit
+          a field.
+        </p>
       )}
 
-      <fieldset className="flex flex-col gap-2">
-        <legend className="rq-label">Where does this apply?</legend>
-        <div className="flex flex-col gap-2">
-          <label className="flex items-start gap-2">
-            <input
-              type="radio"
-              name="scope"
-              checked={scope === 'account'}
-              onChange={() => setScope('account')}
-            />
-            <span>
-              <span className="rq-body block">All strategies</span>
-              <span className="rq-sub block">Reusable everywhere, so your stats stay comparable across setups.</span>
-            </span>
+      {/* Frame 3.19's `.radio-stack` — a stack of real radios, each with
+          its own consequence spelled out underneath. The frame asks "When
+          do you record it?"; this screen asks "Where does this apply?"
+          because the capture moment has no write path from here at all
+          (see this file's own SCOPE header: a moment is a property of a
+          field's USAGE inside a strategy, collected by the strategy
+          builder). Rendering a moment picker that goes nowhere would be
+          inventing UI for a write that does not exist — inventory row
+          3.19 records that gap rather than papering over it. */}
+      <fieldset>
+        <legend>Where does this apply?</legend>
+        <div className="radio-stack">
+          <label>
+            <input type="radio" name="scope" checked={scope === 'account'} onChange={() => setScope('account')} />
+            <span>All strategies</span>
+            <small>Reusable everywhere, so your stats stay comparable across setups.</small>
           </label>
-          <label className="flex items-start gap-2">
+          <label>
             <input
               type="radio"
               name="scope"
@@ -351,28 +342,19 @@ export function FieldCreateForm({ strategies }: { strategies: FieldStrategyOptio
               disabled={!hasStrategies}
               onChange={() => setScope('strategy_var')}
             />
-            <span>
-              <span className="rq-body block">Just one strategy</span>
-              <span className="rq-sub block">
-                {hasStrategies
-                  ? "Private to that setup — won't clutter your other strategies."
-                  : 'Build a strategy first to scope a field to it.'}
-              </span>
-            </span>
+            <span>Just one strategy</span>
+            <small>
+              {hasStrategies
+                ? "Private to that setup — won't clutter your other strategies."
+                : 'Build a strategy first to scope a field to it.'}
+            </small>
           </label>
         </div>
 
         {scope === 'strategy_var' && hasStrategies && (
-          <div className="flex flex-col gap-1.5 pl-6">
-            <label htmlFor="owner-strategy" className="rq-label">
-              Strategy
-            </label>
-            <select
-              id="owner-strategy"
-              value={ownerStrategyId}
-              className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-              onChange={(e) => setOwnerStrategyId(e.target.value)}
-            >
+          <div className="field pl-[30px]">
+            <label htmlFor="owner-strategy">Strategy</label>
+            <select id="owner-strategy" value={ownerStrategyId} onChange={(e) => setOwnerStrategyId(e.target.value)}>
               <option value="">Choose a strategy…</option>
               {strategies.map((s) => (
                 <option key={s.strategyId} value={s.strategyId}>
@@ -381,7 +363,7 @@ export function FieldCreateForm({ strategies }: { strategies: FieldStrategyOptio
               ))}
             </select>
             {result?.fieldErrors?.ownerStrategyId && (
-              <p className="rq-sub" role="alert">
+              <p className="hint" role="alert">
                 {result.fieldErrors.ownerStrategyId[0]}
               </p>
             )}
@@ -389,13 +371,16 @@ export function FieldCreateForm({ strategies }: { strategies: FieldStrategyOptio
         )}
       </fieldset>
 
-      <div className="flex gap-2">
-        <Link href="/fields" className="rq-btn rq-btn--ghost flex-1">
-          Cancel
-        </Link>
-        <button type="submit" className="rq-btn flex-1" disabled={submitting}>
+      {/* Frame 3.19 pins one full-width action. Cancel is a `.link`, not a
+          second button competing with it — going back is not a decision
+          the screen should weigh equally against saving. */}
+      <div className="push flex flex-col items-center gap-3 pt-2">
+        <button type="submit" className="rq-btn rq-btn--block" disabled={submitting}>
           {submitting ? 'Creating…' : 'Create field'}
         </button>
+        <Link href="/fields" className="link">
+          Cancel
+        </Link>
       </div>
     </form>
   );

@@ -68,7 +68,17 @@ export function AdherenceSection({ display, annotations }: { display: AdherenceD
     return (
       <section className="adherence" aria-labelledby="adh-h">
         <h2 id="adh-h">Adherence</h2>
-        <p className="rq-sub">Not enough data yet — this fills in once you&apos;ve confirmed a trade this week.</p>
+        {/* Frame 3.5 states WHEN this will fill in, as a calm
+            `.finding[data-confidence="insufficient"]` block — the design
+            system's own "not enough data yet" surface — rather than a
+            loose grey sentence. Same copy as before: it names the real
+            condition (a confirmed trade THIS WEEK), not the frame's
+            looser "your first confirmed trade". */}
+        <div className="finding" data-confidence="insufficient">
+          <p className="finding__statement">
+            Not enough data yet — this fills in once you&apos;ve confirmed a trade this week.
+          </p>
+        </div>
         <RuleChangeAnnotations annotations={annotations} />
       </section>
     );

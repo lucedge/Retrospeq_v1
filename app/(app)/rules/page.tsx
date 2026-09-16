@@ -3,6 +3,7 @@ import { canForUser } from '@/lib/entitlements/service';
 import { fetchAdherenceDisplay, fetchRulesList } from './actions';
 import { AdherenceSection } from './Adherence';
 import { RuleList } from './RuleList';
+import { RulebookSubnav } from '../AppShellNav';
 
 /**
  * Module 04 (Rulebook & Evaluation) §5.6 UI / story 3.3 — Slice 10d part 2.
@@ -85,19 +86,35 @@ export default async function RulesPage() {
     canForUser(user.id, 'rules.hard'),
   ]);
 
-  return (
-    <section className="flex flex-col gap-6" aria-labelledby="rules-h">
-      <h1 id="rules-h" className="rq-h1">
-        Your rulebook
-      </h1>
+  // UI phase batch 3 (2026-09-16), inventory rows 3.1/3.2/3.5 — frames
+  // `brand/docs/screens/rulebook.html#3.1`, `#3.2`, `#3.5`.
+  //
+  // ORDER: frame 3.2 puts adherence directly under the pills, above the
+  // rule cards; frame 3.5 (no rules yet) puts the "Adherence appears
+  // after your first confirmed trade" line BELOW the two entry points,
+  // because with nothing authored the entry points are the whole screen.
+  // Both frames are honoured literally rather than picking one order and
+  // letting the other read wrong — `adherenceFirst` below is that single
+  // decision, made from real data (does this trader have any rule at
+  // all), not a guess.
+  const hasAnyRule = rulesResult.success && (rulesResult.rules?.length ?? 0) > 0;
+  const adherence =
+    adherenceResult.success && adherenceResult.display ? (
+      <AdherenceSection display={adherenceResult.display} annotations={adherenceResult.annotations ?? []} />
+    ) : (
+      <p className="rq-sub" role="alert">
+        {adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.'}
+      </p>
+    );
 
-      {adherenceResult.success && adherenceResult.display ? (
-        <AdherenceSection display={adherenceResult.display} annotations={adherenceResult.annotations ?? []} />
-      ) : (
-        <p className="rq-sub" role="alert">
-          {adherenceResult.error?.user_message ?? 'Adherence is unavailable right now.'}
-        </p>
-      )}
+  return (
+    <section className="rules flex flex-col gap-5" aria-labelledby="rules-h">
+      <h1 id="rules-h" className="rq-h1">
+        Rulebook
+      </h1>
+      <RulebookSubnav />
+
+      {hasAnyRule && adherence}
 
       {/* Story 1.1 / §6.1's rule list — Slice 10e, built exactly where this
           comment used to mark it as future work (Slice 10d part 2's own
@@ -118,6 +135,8 @@ export default async function RulesPage() {
           {rulesResult.error?.user_message ?? 'Your rulebook is unavailable right now.'}
         </p>
       )}
+
+      {!hasAnyRule && adherence}
     </section>
   );
 }

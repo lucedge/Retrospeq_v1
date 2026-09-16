@@ -34,6 +34,11 @@ import { DISTRIBUTION_OPERAND_IDS, type DistributionBucket } from './distributio
 
 export type PreviewOutcomeState = 'flagged' | 'insufficient_history' | 'operand_not_computable';
 
+/** §5.8's guidance table as a machine-readable band, for the frame's own
+ *  `.preview__guidance[data-band]` (weight, never colour). Derived from
+ *  the same `ratio` the guidance sentence is — see `bandForRatio`. */
+export type PreviewBand = 'healthy' | 'tight' | 'loose';
+
 export interface PreviewResult {
   operandId: string;
   state: PreviewOutcomeState;
@@ -45,6 +50,10 @@ export interface PreviewResult {
    *  a blank result (§5.8's "not enough data yet" state is itself a
    *  guidance message, not an empty/undefined field). */
   guidance: string;
+  /** Present only when `state === 'flagged'` — the band `guidance` came
+   *  from, for `.preview__guidance[data-band]`. Never a separate judgment:
+   *  both come out of `bandForRatio` together. */
+  band?: PreviewBand;
   /** Present only when `state === 'flagged'` AND a median was computable
    *  for this operand's type — see `calibrationCoaching`'s own header for
    *  the judgment call on when this fires and how it's worded. */
@@ -62,18 +71,34 @@ export const MIN_TRADES_FOR_PREVIEW = 20;
  *  behaviour, tightening would work harder), else (the "healthy" band).
  *  `ratio === 0` is checked before `< 0.06` deliberately -- the spec
  *  lists them as two DISTINCT rows with different copy, not one "<=0.06"
- *  band. */
-function guidanceForRatio(ratio: number): string {
+ *  band.
+ *
+ *  Returned as `{band, guidance}` so the UI can
+ *  carry the frame's own `.preview__guidance[data-band]` attribute
+ *  (`brand/docs/screens/rulebook.html#3.8`, inventory row 3.8 "preview
+ *  bands") without a second copy of these boundaries living in a
+ *  component. `data-band` changes WEIGHT only — there is no colour band
+ *  in this design system (AGENTS.md: no red/green, ever). `ratio === 0`
+ *  and `< 0.06` are two distinct rows with different copy but the same
+ *  "this is too loose to teach you anything" direction, so they share the
+ *  `loose` band. */
+export function bandForRatio(ratio: number): { band: PreviewBand; guidance: string } {
   if (ratio === 0) {
-    return "This never flags anything. It's already how you trade — it won't teach you much.";
+    return {
+      band: 'loose',
+      guidance: "This never flags anything. It's already how you trade — it won't teach you much.",
+    };
   }
   if (ratio > 0.35) {
-    return 'You would break this on more than a third of your trades.';
+    return { band: 'tight', guidance: 'You would break this on more than a third of your trades.' };
   }
   if (ratio < 0.06) {
-    return 'Only just outside your normal behaviour. Tightening it would make it work harder.';
+    return {
+      band: 'loose',
+      guidance: 'Only just outside your normal behaviour. Tightening it would make it work harder.',
+    };
   }
-  return 'Tight enough to matter, loose enough to keep.';
+  return { band: 'healthy', guidance: 'Tight enough to matter, loose enough to keep.' };
 }
 
 /**
@@ -280,10 +305,10 @@ export async function preview(userId: string, operandId: string, op: RuleOperato
   }
 
   const ratio = new Decimal(flagged).dividedBy(row.n).toNumber();
-  const guidance = guidanceForRatio(ratio);
+  const { band, guidance } = bandForRatio(ratio);
   const calibration = calibrationCoaching(operand, value, row.buckets, flagged, row.n);
 
-  const result: PreviewResult = { operandId, state: 'flagged', flagged, n: row.n, ratio, guidance };
+  const result: PreviewResult = { operandId, state: 'flagged', flagged, n: row.n, ratio, guidance, band };
   if (calibration) result.calibration = calibration;
   return result;
 }

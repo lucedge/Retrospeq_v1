@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { canForUser } from '@/lib/entitlements/service';
 import { fieldCapWarningMessage } from '@/lib/fields/strategy-validation';
 import { fetchStrategyList } from './actions';
+import { RulebookSubnav } from '../AppShellNav';
 
 /**
  * Module 03 (Field Registry & Strategy) §5.1's strategy list — the FIRST
@@ -70,21 +71,17 @@ export default async function StrategiesPage() {
 
   const strategies = listResult.success ? (listResult.strategies ?? []) : [];
 
+  // UI phase batch 3 (2026-09-16), inventory row 3.12 — frames
+  // `brand/docs/screens/rulebook.html#3.12` (list) and `#3.13` (free
+  // gate). The gate is a `.gate` block ABOVE the list, never instead of
+  // it: "a quantity cap, not a capability cap" (frame 3.13's own caption)
+  // — a free trader still sees their default strategy and what it records.
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="strategies-h">
-      <div className="flex items-center justify-between gap-3">
-        <h1 id="strategies-h" className="rq-h1">
-          Your strategies
-        </h1>
-        {/* Exactly one .rq-btn per view — this only renders when the
-            bottom-of-page upgrade prompt below does NOT (both are gated on
-            the same `entitlement.allowed` flip). */}
-        {entitlement.allowed && (
-          <Link href="/strategies/new" className="rq-btn">
-            New strategy
-          </Link>
-        )}
-      </div>
+    <section className="strategies flex flex-col gap-5" aria-labelledby="strategies-h">
+      <h1 id="strategies-h" className="rq-h1">
+        Strategies
+      </h1>
+      <RulebookSubnav />
 
       {!listResult.success && (
         <p className="rq-sub" role="alert">
@@ -92,19 +89,24 @@ export default async function StrategiesPage() {
         </p>
       )}
 
-      {listResult.success && strategies.length === 0 && (
-        <div className="rq-well flex flex-col gap-3">
-          <p className="rq-body">
-            {entitlement.allowed
-              ? "You haven't built a strategy yet. A strategy is the setup you're trading — name it, list what has to be true before you take it, and choose what you want to record."
-              : 'Strategies are a Pro feature. Define your setups, write trigger conditions, and see per-field findings once you upgrade.'}
+      {listResult.success && !entitlement.allowed && (
+        <div className="gate">
+          <p>Strategies are a Pro feature.</p>
+          <p className="hint">
+            A strategy is the setup you&apos;re trading — its trigger conditions and the fields you record against it.
+            Findings come from those fields.
           </p>
-          {!entitlement.allowed && (
-            <Link href="/plan" className="rq-btn">
-              Upgrade to Pro
-            </Link>
-          )}
+          <Link href="/plan" className="rq-btn">
+            See Pro
+          </Link>
         </div>
+      )}
+
+      {listResult.success && strategies.length === 0 && entitlement.allowed && (
+        <p className="rq-sub">
+          You haven&apos;t built a strategy yet. A strategy is the setup you&apos;re trading — name it, list what has to
+          be true before you take it, and choose what you want to record.
+        </p>
       )}
 
       {listResult.success && strategies.length > 0 && (
@@ -115,38 +117,54 @@ export default async function StrategiesPage() {
             // in place of them.
             const capWarning = fieldCapWarningMessage(s.capturedFieldCount);
             return (
-              <li key={s.strategyId} className="rq-card flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="rq-h2">
-                    <Link href={`/strategies/${s.strategyId}`}>{s.name}</Link>
-                  </h2>
-                  <span className={s.state === 'active' ? 'rq-tag rq-tag--on' : 'rq-tag rq-tag--muted'}>
-                    {s.state === 'active' ? 'Active' : 'Archived'}
-                  </span>
-                </div>
-                <p className="rq-sub">
-                  <span className="rq-num">{s.triggerCount}</span> {s.triggerCount === 1 ? 'trigger condition' : 'trigger conditions'} ·{' '}
-                  <span className="rq-num">{s.fieldCount}</span> {s.fieldCount === 1 ? 'field' : 'fields'}
-                </p>
-                {s.isDefault && <p className="rq-sub">Your default strategy.</p>}
-                {capWarning && (
-                  <aside className="rq-well" role="note">
-                    <p className="rq-sub">{capWarning}</p>
-                  </aside>
-                )}
+              <li key={s.strategyId}>
+                <article className="rq-card flex flex-col gap-1.5">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <Link href={`/strategies/${s.strategyId}`} className="rq-body font-bold tracking-tight">
+                      {s.name}
+                    </Link>
+                    {/* Frame 3.12 puts the CURRENT VERSION here for a
+                        built strategy and "default" for the silent one —
+                        the version is the fact that tells a trader
+                        whether they've revised this setup. `Archived` is
+                        still surfaced (it outranks both) because a list
+                        that hides it would be lying about the state. */}
+                    {s.state === 'archived' ? (
+                      <span className="rq-tag rq-tag--muted">Archived</span>
+                    ) : s.isDefault ? (
+                      <span className="rq-tag rq-tag--muted">default</span>
+                    ) : (
+                      <span className="rq-tag rq-tag--on rq-num">v{s.currentVersion}</span>
+                    )}
+                  </div>
+                  <p className="rq-sub">
+                    <span className="rq-num">{s.triggerCount}</span>{' '}
+                    {s.triggerCount === 1 ? 'condition' : 'conditions'} ·{' '}
+                    {s.fieldCount === 0 ? (
+                      'no fields · derived only'
+                    ) : (
+                      <>
+                        <span className="rq-num">{s.fieldCount}</span> {s.fieldCount === 1 ? 'field' : 'fields'}
+                      </>
+                    )}
+                  </p>
+                  {capWarning && <p className="hint">{capWarning}</p>}
+                </article>
               </li>
             );
           })}
         </ul>
       )}
 
-      {listResult.success && strategies.length > 0 && !entitlement.allowed && (
-        <aside className="rq-cost flex flex-col gap-3">
-          <p className="rq-body">Upgrade to Pro to build another strategy or edit these.</p>
-          <Link href="/plan" className="rq-btn">
-            Upgrade to Pro
+      {/* Frame 3.12's bottom-pinned CTA. Only for a trader who can
+          actually create one — the `.gate` above already carries the
+          single `.rq-btn` for everyone else. */}
+      {entitlement.allowed && (
+        <div className="push pt-2">
+          <Link href="/strategies/new" className="rq-btn rq-btn--block">
+            New strategy
           </Link>
-        </aside>
+        </div>
       )}
     </section>
   );

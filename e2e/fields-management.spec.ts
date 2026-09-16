@@ -108,7 +108,7 @@ test.describe('Fields management screen (Module 03 §4.5/§6.1, /fields) — ind
     await expect(page.getByRole('heading', { name: 'Recorded automatically' })).toBeVisible();
     await expect(page.getByText("You don't have any custom fields")).toBeVisible();
     await expect(page.getByRole('link', { name: 'Add a field' })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'Upgrade to Pro' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'See Pro' })).toBeVisible();
 
     // Design-system check: exactly one primary .rq-btn on this view (the
     // upgrade link) — excludes the persistent nav-chrome "Sign out" ghost
@@ -137,7 +137,7 @@ test.describe('Fields management screen (Module 03 §4.5/§6.1, /fields) — ind
 
     await expect(page.getByText("You haven't added any fields of your own yet.")).toBeVisible();
     await expect(page.getByRole('link', { name: 'Add a field' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Upgrade to Pro' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'See Pro' })).toHaveCount(0);
 
     const primaryButtons = await page.locator('.rq-btn:not(.rq-btn--ghost)').count();
     expect(primaryButtons).toBe(1); // "Add a field" only — never both it and an upsell
@@ -275,8 +275,11 @@ test.describe('Fields management screen (Module 03 §4.5/§6.1, /fields) — ind
     await page.goto('/fields');
 
     const row = page.locator(`[data-testid="field-row-${fieldId}"]`);
-    await expect(row.getByText('This strategy only')).toBeVisible();
-    await expect(row.getByText('Only in E2E promote strategy.')).toBeVisible();
+    // UI batch 3 (2026-09-16): the row's right-hand `.field-list__usage`
+    // lane now names the owning strategy directly instead of saying
+    // "This strategy only" AND repeating "Only in <name>." on a second
+    // line — one lane, one fact.
+    await expect(row.getByText('E2E promote strategy')).toBeVisible();
 
     await row.getByRole('button', { name: 'Share across strategies' }).click();
     await expect(row.getByText('Shared')).toBeVisible();

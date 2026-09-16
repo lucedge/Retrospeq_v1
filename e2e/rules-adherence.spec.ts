@@ -195,7 +195,7 @@ test.describe('Adherence display (Module 04 §5.6, /rules)', () => {
     await loginAs(page, user.email);
     await page.goto('/rules');
 
-    await expect(page.getByRole('heading', { name: 'Your rulebook' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Rulebook' })).toBeVisible();
     const section = page.locator('.adherence');
     await expect(section).toBeVisible();
 
@@ -237,7 +237,7 @@ test.describe('Adherence display (Module 04 §5.6, /rules)', () => {
     await loginAs(page, user.email);
     await page.goto('/rules');
 
-    await expect(page.getByRole('heading', { name: 'Your rulebook' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Rulebook' })).toBeVisible();
     const section = page.locator('.adherence');
     await expect(section).toBeVisible();
     await expect(section.getByRole('heading', { name: 'Adherence' })).toBeVisible();

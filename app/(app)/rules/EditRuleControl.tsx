@@ -12,6 +12,7 @@ import {
   type FetchRuleForEditActionResult,
   type PreviewRuleActionState,
 } from './actions';
+import { PreviewPanel, RuleValueControl } from './RuleValueControl';
 import { withTimeout, ActionTimeoutError } from './with-timeout';
 
 /**
@@ -382,49 +383,30 @@ function EditableSentence({
   const displayValue = value.toFixed(decimals);
 
   return (
-    <section className="rule-editor rq-well flex flex-col gap-3" aria-labelledby={`edit-h-${operand.id}`}>
+    <section className="rule-editor flex flex-col gap-3" aria-labelledby={`edit-h-${operand.id}`}>
       <h3 id={`edit-h-${operand.id}`} className="sr-only">
         Edit {operand.label}
       </h3>
 
-      <p className="rule-sentence rq-body">{sentence}</p>
+      {/* Frame 3.11 (`brand/docs/screens/rulebook.html#3.11`): the sentence
+          with its one blank, then the range. Shared with `/rules/new` —
+          see `RuleValueControl.tsx`. */}
+      <RuleValueControl
+        operand={operand}
+        op={op}
+        value={value}
+        displayValue={displayValue}
+        fallbackSentence={sentence}
+        disabled={submitting}
+        onStep={step}
+        onSet={onValueChange}
+      />
 
-      {bounds && (
-        <div className="rq-step" role="group" aria-label={`${operand.label} threshold`}>
-          <button type="button" className="rq-step__btn" aria-label="Decrease" disabled={submitting} onClick={() => step(-1)}>
-            &minus;
-          </button>
-          <span className="rq-step__val rq-num" aria-live="polite">
-            {displayValue}
-            {operand.unit === 'percent' ? '%' : ''}
-          </span>
-          <button type="button" className="rq-step__btn" aria-label="Increase" disabled={submitting} onClick={() => step(1)}>
-            +
-          </button>
-        </div>
-      )}
+      <PreviewPanel preview={preview} loading={previewLoading} error={previewError} />
 
-      <aside className="preview rq-well flex flex-col gap-1" role="status" aria-live="polite">
-        {previewLoading ? (
-          <p className="rq-sub" aria-busy="true">
-            Checking against your history…
-          </p>
-        ) : previewError ? (
-          <p className="rq-sub" role="alert">
-            {previewError}
-          </p>
-        ) : preview?.state === 'flagged' ? (
-          <>
-            <p className="preview__lede rq-sub">Against your recent trades, this would have flagged</p>
-            <p className="preview__count rq-num">{preview.flagged}</p>
-            <p className="preview__guidance rq-sub">{preview.guidance}</p>
-            {preview.calibration && <p className="preview__calibration rq-sub">{preview.calibration}</p>}
-          </>
-        ) : (
-          <p className="rq-sub">{preview?.guidance ?? 'Not enough data yet.'}</p>
-        )}
-        <p className="preview__disclaimer rq-sub">Preview only. Past trades are never scored against this rule.</p>
-      </aside>
+      {/* §2.5's own freeze guarantee, said out loud where a trader is
+          about to change a threshold — frame 3.11's `.hint`. */}
+      <p className="hint">Past evaluations keep the old threshold. Only new trades use this one.</p>
 
       {submitError && (
         <div className="flex flex-col gap-2">
@@ -443,12 +425,13 @@ function EditableSentence({
         </div>
       )}
 
+      {/* Frame 3.11's order: the way out first, then the commit. */}
       <div className="rq-btn-row">
-        <button type="button" className="rq-btn" disabled={submitting} onClick={onSubmit}>
-          {submitting ? 'Saving…' : 'Save'}
-        </button>
         <button type="button" className="rq-btn rq-btn--ghost" disabled={submitting} onClick={onCancel}>
           Cancel
+        </button>
+        <button type="button" className="rq-btn" disabled={submitting} onClick={onSubmit}>
+          {submitting ? 'Saving…' : 'Save'}
         </button>
       </div>
     </section>

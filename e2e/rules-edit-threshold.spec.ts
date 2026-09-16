@@ -256,11 +256,11 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
     // longer see it).
     const row = page.getByTestId(`rule-row-${ruleId}`);
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Edit' }).click();
+    await row.getByRole('button', { name: 'Edit threshold' }).click();
 
     // Pre-filled from the rule's REAL current value (`fetchRuleForEdit`),
     // not a fabricated/default one.
-    const stepperValue = row.locator('.rq-step__val');
+    const stepperValue = row.locator('.rule-value');
     await expect(stepperValue).toHaveText('1.5%', { timeout: 10_000 });
 
     // Live preview well is present (§5.8/story 1.2 — same live-preview
@@ -329,9 +329,9 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
 
     const row = page.locator('li', { hasText: 'Never move your stop more than 2 time(s).' });
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Edit' }).click();
+    await row.getByRole('button', { name: 'Edit threshold' }).click();
 
-    const stepperValue = row.locator('.rq-step__val');
+    const stepperValue = row.locator('.rule-value');
     await expect(stepperValue).toHaveText('2', { timeout: 10_000 });
 
     await row.getByRole('button', { name: 'Save' }).click();
@@ -369,8 +369,8 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
     // comment above for why a `hasText`-filtered one would silently break
     // the moment this row's own header text changes.
     const row = page.getByTestId(`rule-row-${ruleId}`);
-    await row.getByRole('button', { name: 'Edit' }).click();
-    await expect(row.locator('.rq-step__val')).toHaveText('1.0%', { timeout: 10_000 });
+    await row.getByRole('button', { name: 'Edit threshold' }).click();
+    await expect(row.locator('.rule-value')).toHaveText('1.0%', { timeout: 10_000 });
 
     // Simulate a genuine, already-COMMITTED edit "elsewhere" (a second
     // tab, or another device) that lands between this trader opening Edit
@@ -427,7 +427,7 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
     // nowhere to go.
     await page.screenshot({ path: 'tmp/dev-screenshots/rule-edit-conflict-rejected.png', fullPage: true });
     await row.getByRole('button', { name: 'Refresh with the latest value' }).click();
-    await expect(row.locator('.rq-step__val')).toHaveText('3.0%', { timeout: 10_000 });
+    await expect(row.locator('.rule-value')).toHaveText('3.0%', { timeout: 10_000 });
     await expect(alert).toHaveCount(0);
 
     // A fresh Save now (adjust +2 from the newly-refreshed 3% baseline =
@@ -458,7 +458,7 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
     await page.getByText('Retired rules (1)').click();
     const row = page.locator('li', { hasText: 'Never risk more than 1% per trade (retired).' });
     await expect(row).toBeVisible();
-    await expect(row.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: 'Edit threshold' })).toHaveCount(0);
   });
 
   test('a bool operand rule (no threshold to change) never shows an Edit action', async ({ page }) => {
@@ -471,7 +471,7 @@ test.describe('Editing an existing rule\'s threshold (Module 04 §2.5, /rules)',
 
     const row = page.locator('li', { hasText: 'Always set a stop before entering.' });
     await expect(row).toBeVisible();
-    await expect(row.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: 'Edit threshold' })).toHaveCount(0);
     // The rest of the row's controls are still present -- exclusion is
     // scoped to Edit only.
     await expect(row.getByRole('button', { name: 'Promote to hard' })).toBeVisible();

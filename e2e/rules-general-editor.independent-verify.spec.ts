@@ -145,7 +145,7 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
     // own fixture): (0.5+10)/2 = 5.25, rounded to the nearest 0.5 step (via
     // HALF_UP on steps-from-min) = 5.5. `lte 5.5` is contradictory with the
     // seeded `gte 6` rule (no value can be both <= 5.5 and >= 6).
-    await expect(page.locator('.rq-step__val')).toHaveText('5.5%');
+    await expect(page.locator('.rule-value')).toHaveText('5.5%');
 
     await page.getByRole('button', { name: 'Add rule' }).click();
     await expect(page.getByText('can never be satisfied', { exact: false })).toBeVisible({ timeout: 10_000 });
@@ -386,13 +386,13 @@ test.describe('General rule editor (Module 04 §6.1, /rules/new) — independent
     await page.goto('/rules/new');
     await openCatalogue(page);
     await page.selectOption('#operand-picker', 'risk_pct');
-    await expect(page.locator('.rq-step__val')).toHaveText('2.6%');
+    await expect(page.locator('.rule-value')).toHaveText('2.6%');
 
     await expect(page.locator('.preview__count')).toHaveText('4', { timeout: 10_000 });
     await expect(page.getByText('Tight enough to matter, loose enough to keep.')).toBeVisible();
 
     // .rq-num on the stepper value AND the preview count -- no exceptions.
-    await expect(page.locator('.rq-step__val.rq-num')).toHaveCount(1);
+    await expect(page.locator('.rule-value.rq-num')).toHaveCount(1);
     await expect(page.locator('.preview__count.rq-num')).toHaveCount(1);
 
     // Exactly one primary .rq-btn while editing; no red/green class names

@@ -273,7 +273,9 @@ test.describe('Strategy list + creation builder (Module 03 §5.1/§5.2, /strateg
     await page.goto('/strategies');
     const rows = page.locator('li:has-text("Liquidity sweep reversal (indep-verify)")');
     await expect(rows).toHaveCount(1);
-    await expect(rows.getByText('2 trigger conditions')).toBeVisible();
+    // UI batch 3 (2026-09-16), frame 3.12: the list row's count line reads
+    // "2 conditions · 1 field", the frame's own wording.
+    await expect(rows.getByText('2 conditions', { exact: false })).toBeVisible();
     await page.screenshot({ path: 'tmp/dev-screenshots/strategies-list-pro-populated.png', fullPage: true });
 
     void convictionId;

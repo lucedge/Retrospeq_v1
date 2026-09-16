@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { canForUser } from '@/lib/entitlements/service';
 import { fetchFieldsList } from './actions';
 import { FieldsList } from './FieldsList';
+import { RulebookSubnav } from '../AppShellNav';
 
 /**
  * Module 03 (Field Registry & Strategy) §4.5/§6.1 — the fields management
@@ -48,10 +49,16 @@ export default async function FieldsPage() {
   const [entitlement, listResult] = await Promise.all([canForUser(user.id, 'fields.custom'), fetchFieldsList()]);
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="fields-h">
+    // UI phase batch 3 (2026-09-16), inventory row 3.18 — frame
+    // `brand/docs/screens/rulebook.html#3.18`. Derived fields first (they
+    // are already free and already working), then the trader's own; the
+    // free gate is a `.gate` block, the same "quantity cap, not a
+    // capability cap" device `/strategies` uses.
+    <section className="fields flex flex-col gap-5" aria-labelledby="fields-h">
       <h1 id="fields-h" className="rq-h1">
-        Your fields
+        Fields
       </h1>
+      <RulebookSubnav />
 
       {!listResult.success && (
         <p className="rq-sub" role="alert">
@@ -60,13 +67,14 @@ export default async function FieldsPage() {
       )}
 
       {listResult.success && !entitlement.allowed && (
-        <div className="rq-well flex flex-col gap-3">
-          <p className="rq-body">
-            Custom fields — anything beyond what your broker already tells us — are a Pro feature. Upgrade to record
-            your own conviction, setup quality, or anything else you want to learn from.
+        <div className="gate">
+          <p>Custom fields are a Pro feature.</p>
+          <p className="hint">
+            Anything beyond what your broker already tells us — your own conviction, setup quality, or whatever else you
+            want to learn from. The fields below are recorded automatically on every plan.
           </p>
           <Link href="/plan" className="rq-btn">
-            Upgrade to Pro
+            See Pro
           </Link>
         </div>
       )}
