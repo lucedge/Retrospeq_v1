@@ -76,4 +76,12 @@
   --radius-pill: 999px;
 
   --ease-rq: cubic-bezier(.2, .7, .3, 1);
+
+  /* Breakpoints (ADR 0047). Named, not t-shirt-sized, so a variant reads
+     as the decision it encodes: `desktop:` means "where the tab bar is a
+     rail". Mirrors --rq-bp-* in tokens.css — keep the two in step.
+     Tailwind's own sm/md/lg/xl/2xl stay available; prefer these. */
+  --breakpoint-tablet:  48rem;
+  --breakpoint-desktop: 64rem;
+  --breakpoint-wide:    90rem;
 }

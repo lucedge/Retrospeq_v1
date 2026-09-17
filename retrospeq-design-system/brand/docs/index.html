@@ -107,6 +107,23 @@
     <div class="sw"><i style="background:var(--rq-mark-dim)"></i><span>mark-dim</span></div>
   </div>
 
+  <p class="rq-label sect">Breakpoints — phone is the design, the rest are steps</p>
+  <div class="rq-card" style="margin-bottom:40px">
+    <p class="rq-sub" style="margin-bottom:12px">Every frame in <code>docs/screens/</code> is drawn at phone width, and the phone rendering is not conditional on anything — no <code>@media</code> rule in this stylesheet applies below <b>48rem</b>. The three steps above it are additive: the same one column, wider, and at desktop the four tabs rotate from the bottom edge to a left rail. No step introduces a component, a colour or a typeface the phone frames don't already use. Tokens in <code>tokens/tokens.css</code>; Tailwind variants of the same names in <code>tokens/tailwind.css</code>. Rationale: <code>docs/adr/0047</code>.</p>
+    <table class="rq-table">
+      <thead>
+        <tr><th>Step</th><th>From</th><th>Content column</th><th>Navigation</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>phone</td><td class="rq-num">0</td><td class="rq-num">32rem</td><td>Four tabs, fixed to the bottom edge</td></tr>
+        <tr><td>tablet</td><td class="rq-num">48rem</td><td class="rq-num">38rem</td><td>Unchanged — bottom tab bar, column width</td></tr>
+        <tr><td>desktop</td><td class="rq-num">64rem</td><td class="rq-num">42rem</td><td>Tabs become a <span class="rq-num">15rem</span> left rail; top bar spans the window</td></tr>
+        <tr><td>wide</td><td class="rq-num">90rem</td><td class="rq-num">48rem</td><td>Unchanged from desktop</td></tr>
+      </tbody>
+    </table>
+    <p class="rq-sub" style="margin-top:12px">Two things deliberately do <b>not</b> grow with the column: running text (<code>.rq-body</code>, <code>.rq-sub</code>) stops at <code>--rq-measure</code> 36rem, and the signed-out card stays at <code>--rq-auth-max</code> 32rem. A block primary (<code>.rq-btn--block</code>) stops at 24rem and centres from tablet up — on a phone the column <i>is</i> the thumb-width target; at 42rem it would be a slab.</p>
+  </div>
+
   <p class="rq-label sect">Marks &amp; controls — live from the stylesheet</p>
   <div class="rq-card">
     <div class="demo">
