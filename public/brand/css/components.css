@@ -141,6 +141,74 @@
 .rq-tab.on, .rq-tab[aria-current="page"] { color: var(--rq-accent-ink); }
 .rq-tab span { font-size: var(--rq-text-xs); font-weight: var(--rq-weight-semi); }
 
+/* ---------- App shell (ADR 0047) ----------
+   One column at every width; what changes with the viewport is how wide
+   it is and where the four tabs live. Phone (< 48rem) is the default and
+   is byte-for-byte the layout that shipped before responsiveness: bar,
+   column at --rq-shell-max (32rem), tab bar fixed to the bottom edge.
+
+   All of the shell's positioning lives here rather than in Tailwind
+   utilities in app/(app)/layout.tsx, so that a media query overriding it
+   never has to win a source-order fight with a utility class of equal
+   specificity. Padding and typography stay in the layout. */
+.rq-shell { display: flex; flex-direction: column; }
+.rq-shell__bar,
+.rq-shell__main { width: 100%; max-width: var(--rq-shell-max); margin-inline: auto; }
+.rq-shell__nav { position: fixed; inset-inline: 0; bottom: 0; z-index: 10; }
+.rq-shell__nav .rq-tabs { max-width: var(--rq-shell-max); margin-inline: auto; }
+
+@media (min-width: 48rem) {
+  /* Running text stops at a readable measure while cards, rows and marks
+     take the wider column — the reason the column may widen at all. */
+  .rq-shell__main .rq-body,
+  .rq-shell__main .rq-sub { max-width: var(--rq-measure); }
+
+  /* The one primary keeps the proportions it was drawn with instead of
+     becoming a 670px slab of amber: a block button stops growing when the
+     column does, and centres. Phone (< 48rem) is untouched — there the
+     column IS the thumb-width target. `display: flex` because `.rq-btn`
+     is inline-flex, and an inline-level box resolves `margin-inline:
+     auto` to zero rather than centring. */
+  .rq-shell__main .rq-btn--block { display: flex; max-width: 24rem; margin-inline: auto; }
+}
+
+/* Side rail. Same four destinations, same labels, same icons, same
+   aria-current — the bottom bar rotated, not a second navigation. A
+   fixed bar pinned to the bottom of a 1050px-tall window is a phone
+   habit, not a decision. */
+@media (min-width: 64rem) {
+  .rq-shell {
+    display: grid;
+    grid-template-columns: var(--rq-rail-w) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "bar bar" "rail main";
+  }
+  .rq-shell__bar  { grid-area: bar; max-width: none; padding-inline: var(--rq-space-6); }
+  .rq-shell__main { grid-area: main; }
+  .rq-shell__nav {
+    grid-area: rail; position: static; z-index: auto;
+    border-right: 1px solid var(--rq-line); background: var(--rq-surface);
+  }
+  .rq-shell__nav .rq-tabs {
+    position: sticky; top: 0;
+    flex-direction: column; align-items: stretch; gap: var(--rq-space-1);
+    max-width: none; margin-inline: 0;
+    padding: var(--rq-space-4) var(--rq-space-3);
+    background: transparent; border-top: 0;
+  }
+  .rq-shell__nav .rq-tab {
+    flex: 0 0 auto; flex-direction: row; justify-content: flex-start;
+    gap: var(--rq-space-3);
+    padding-inline: var(--rq-space-3);
+    border-radius: var(--rq-radius-md);
+  }
+  .rq-shell__nav .rq-tab span { font-size: var(--rq-text-base); font-weight: var(--rq-weight-medium); }
+  .rq-shell__nav .rq-tab.on,
+  .rq-shell__nav .rq-tab[aria-current="page"] { background: var(--rq-accent-soft); }
+  .rq-shell__nav .rq-tab.on span,
+  .rq-shell__nav .rq-tab[aria-current="page"] span { font-weight: var(--rq-weight-bold); }
+}
+
 /* ---------- Cost note ----------
    Amber-bordered, for a trade-off the user must weigh — NOT a warning
    to dismiss. There is no red equivalent in this system by design. */

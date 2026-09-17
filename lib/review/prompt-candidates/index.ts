@@ -5,7 +5,13 @@ import { findPromotionCandidates, type PromotionEvidence } from './promotion-can
 import { findRetirementDecayCandidates, type RetirementDecayEvidence } from './retirement-decay-candidates';
 import { findRetirementConditionCandidates, type RetirementConditionEvidence } from './retirement-condition-candidates';
 import { findDetectionCandidates, type DetectionEvidence } from './detection-candidates';
-import { fetchMutedSubjectKeys, excludeMuted, fetchPromptHistoryStateForUser, filterDormant } from './prompt-history-repository';
+import {
+  fetchMutedSubjectKeys,
+  excludeMuted,
+  fetchPromptHistoryStateForUser,
+  filterDormant,
+  type PromptHistoryState,
+} from './prompt-history-repository';
 import type { PromptCandidate } from './types';
 
 export * from './types';
@@ -53,6 +59,14 @@ export interface AllPromptCandidates {
   retirementDecay: PromptCandidate<RetirementDecayEvidence>[];
   retirementCondition: PromptCandidate<RetirementConditionEvidence>[];
   detection: PromptCandidate<DetectionEvidence>[];
+  /** The SAME `prompt_history` read this function already had to make for
+   *  its own promotion-dormancy pass (below) — returned rather than
+   *  silently kept internal so `review-prompts.ts`'s own caller (the only
+   *  one, `computeAndWriteReviewPrompts`) can reuse it for every OTHER
+   *  kind's dormancy pass instead of issuing the identical query a second
+   *  time (2026-09-17 latency slice; this table has no per-kind split, one
+   *  read already covers every kind). */
+  historyState: ReadonlyMap<string, PromptHistoryState>;
 }
 
 export async function computeAllPromptCandidates(userId: string, asOfDate: Date = new Date()): Promise<AllPromptCandidates> {
@@ -88,5 +102,6 @@ export async function computeAllPromptCandidates(userId: string, asOfDate: Date 
     retirementDecay: excludeMuted(retirementDecay, muted),
     retirementCondition: excludeMuted(retirementCondition, muted),
     detection: excludeMuted(detection, muted),
+    historyState,
   };
 }

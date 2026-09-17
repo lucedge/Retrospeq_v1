@@ -34,17 +34,37 @@ import { canRenderPure, type AnalyticConfigLookup, type CanRenderResult, type Su
  * it is, not silently assumed.
  */
 export async function canRender(analyticId: string, userId: string, _surface: Surface): Promise<CanRenderResult> {
-  let configLookup: AnalyticConfigLookup;
-  try {
-    configLookup = await getAnalyticConfig(analyticId, userId);
-  } catch {
-    configLookup = { status: 'unavailable' };
-  }
+  // All five reads fire in parallel, not config-then-the-rest (2026-09-17
+  // latency slice): the original code paid TWO sequential round trips for
+  // the overwhelmingly common `found` case (config alone, then the other
+  // four together) purely to skip four reads on the rare `not_found`/
+  // `unavailable` path (a misconfigured or not-yet-seeded analytic id,
+  // effectively never true in practice, and `getAnalyticConfig` is cached
+  // 60s regardless — see that file's own header). Starting every read at
+  // once halves this function's own latency on the hot path at the cost
+  // of a few wasted reads on the cold one. The fail-closed CONTRACT below
+  // is unchanged — only when the reads fire changed, not what a failure
+  // resolves to.
+  const configPromise = getAnalyticConfig(analyticId, userId).catch(
+    (): AnalyticConfigLookup => ({ status: 'unavailable' }),
+  );
+  const restPromise = Promise.all([
+    getUserPlan(userId) as Promise<Plan>,
+    isUserInCohort(userId),
+    isSuppressed(userId, analyticId),
+    getAccountSyncTiers(userId),
+  ]);
+  // Started unconditionally above so the `not_found`/`unavailable` branch
+  // below never leaves `restPromise` unobserved (an unhandled rejection)
+  // when it returns without awaiting it.
+  restPromise.catch(() => {});
+
+  const configLookup = await configPromise;
 
   if (configLookup.status !== 'found') {
-    // Short-circuit -- no point paying for three more reads once config
-    // already resolves to a `false` outcome; canRenderPure would reach
-    // the identical answer regardless of what these three values are.
+    // Same short-circuit ANSWER as before — canRenderPure reaches the
+    // identical result regardless of the other four values — but the
+    // reads themselves are already in flight, not newly triggered here.
     return canRenderPure({
       configLookup,
       userPlan: 'free',
@@ -55,12 +75,7 @@ export async function canRender(analyticId: string, userId: string, _surface: Su
   }
 
   try {
-    const [userPlan, userInCohort, suppressed, accountSyncTiers] = await Promise.all([
-      getUserPlan(userId) as Promise<Plan>,
-      isUserInCohort(userId),
-      isSuppressed(userId, analyticId),
-      getAccountSyncTiers(userId),
-    ]);
+    const [userPlan, userInCohort, suppressed, accountSyncTiers] = await restPromise;
     return canRenderPure({ configLookup, userPlan, userInCohort, suppressed, accountSyncTiers });
   } catch {
     // See this file's own header -- any downstream read failing is

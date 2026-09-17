@@ -6,7 +6,7 @@ import {
   type GraduationEvidence,
   type DetectionEvidence,
 } from './prompt-candidates';
-import { fetchPromptHistoryStateForUser, filterDormant, type PromptHistoryState } from './prompt-candidates/prompt-history-repository';
+import { filterDormant, type PromptHistoryState } from './prompt-candidates/prompt-history-repository';
 import { rankAndCapPromptCandidates } from './prompt-candidates/ranking';
 import { writeReviewPrompts, type WrittenReviewPrompt } from './review-prompts-repository';
 import type { PromptCandidate } from './prompt-candidates/types';
@@ -63,27 +63,29 @@ async function filterByCanRender<E>(
   analyticIdOf: (evidence: E) => string,
 ): Promise<PromptCandidate<E>[]> {
   if (candidates.length === 0) return [];
+
+  // Every DISTINCT analytic id is checked in one parallel batch, not one
+  // at a time (2026-09-17 latency slice) -- the original `for`/`await`
+  // loop paid one round trip per distinct id, sequentially, even though
+  // none of these checks depends on another's result.
+  const distinctIds = new Set(candidates.map((c) => analyticIdOf(c.evidence)));
   const cache = new Map<string, boolean>();
-  const kept: PromptCandidate<E>[] = [];
-  for (const candidate of candidates) {
-    const analyticId = analyticIdOf(candidate.evidence);
-    let allowed = cache.get(analyticId);
-    if (allowed === undefined) {
+  await Promise.all(
+    Array.from(distinctIds, async (analyticId) => {
       try {
         const result = await canRender(analyticId, userId, 'weekly');
-        allowed = result.canRender;
+        cache.set(analyticId, result.canRender);
       } catch (err) {
         // canRender itself is documented never to throw -- this catch is
         // defense in depth, matching `weekly-findings.ts`'s own identical
         // posture for the identical call.
         console.error('[review-prompts:filterByCanRender] canRender failed:', err);
-        allowed = false;
+        cache.set(analyticId, false);
       }
-      cache.set(analyticId, allowed);
-    }
-    if (allowed) kept.push(candidate);
-  }
-  return kept;
+    }),
+  );
+
+  return candidates.filter((candidate) => cache.get(analyticIdOf(candidate.evidence)) === true);
 }
 
 function applyDormancy(all: AllPromptCandidates, historyState: ReadonlyMap<string, PromptHistoryState>) {
@@ -121,10 +123,14 @@ export async function computeAndWriteReviewPrompts(
   reviewId: string,
   asOfDate: Date = new Date(),
 ): Promise<WrittenReviewPrompt[]> {
-  const [all, historyState] = await Promise.all([
-    computeAllPromptCandidates(userId, asOfDate),
-    fetchPromptHistoryStateForUser(userId),
-  ]);
+  // `all.historyState` is the SAME `prompt_history` read
+  // `computeAllPromptCandidates` already had to make for its own
+  // promotion-dormancy pass — reused here for every other kind's dormancy
+  // pass below instead of a second, identical query (2026-09-17 latency
+  // slice; this table has no per-kind split, so one read already covers
+  // every kind's own dormancy check).
+  const all = await computeAllPromptCandidates(userId, asOfDate);
+  const historyState = all.historyState;
 
   const [graduationAllowed, detectionAllowed] = await Promise.all([
     filterByCanRender<GraduationEvidence>(all.graduation, userId, (e) => e.analyticId),

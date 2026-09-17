@@ -60,15 +60,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-full flex-1 flex-col bg-bg">
+    <div className="rq-shell min-h-full flex-1 bg-bg">
       {/* App shell — Module 08 §7.5 (four tabs, "Strategy lives inside
           Rulebook") rendered to `retrospeq-design-system/brand/docs/
-          instrument.html`: one phone-width column, centred at every
-          viewport, bottom tab bar. Settings-type pages (accounts, plan,
-          security, privacy, sign-out) sit behind the top-right Settings
-          link rather than competing with the four tabs. The bottom
-          padding on <main> keeps content clear of the fixed tab bar. */}
-      <header className="mx-auto flex w-full max-w-[32rem] items-center justify-between px-5 pt-3">
+          instrument.html`: one column, centred, bottom tab bar.
+          Settings-type pages (accounts, plan, security, privacy,
+          sign-out) sit behind the top-right Settings link rather than
+          competing with the four tabs. The bottom padding on <main>
+          keeps content clear of the fixed tab bar.
+
+          Responsive since 2026-09-17 (ADR 0047): `.rq-shell`,
+          `.rq-shell__bar` and `.rq-shell__main` carry the column width
+          and the grid, so the steps (32 → 38 → 42 → 48rem) and the
+          desktop side rail live in the design system, not in utility
+          classes here. Below 48rem this renders exactly what it rendered
+          before — same widths, same fixed bottom tab bar. */}
+      <header className="rq-shell__bar flex items-center justify-between px-5 pt-3">
         <Link href="/dashboard" className="flex items-center gap-2 text-ink">
           <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
             <circle cx="16" cy="16" r="11.25" fill="none" stroke="currentColor" strokeWidth="2.4" />
@@ -87,7 +94,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           in the same tab (`/rules/start`, `/strategies/new`,
           `/strategies/[id]`, `/fields/new`) have no pills at all in their
           frames — a sub-screen is not a fourth destination. */}
-      <main className="mx-auto flex w-full max-w-[32rem] flex-1 flex-col px-5 pt-4 pb-28">{children}</main>
+      {/* pb-28 clears the fixed bottom tab bar; at `desktop:` the tabs are
+          a left rail and there is nothing under the content to clear. */}
+      <main className="rq-shell__main flex flex-1 flex-col px-5 pt-4 pb-28 desktop:pb-12">{children}</main>
       <TabBar />
     </div>
   );

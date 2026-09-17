@@ -55,7 +55,19 @@ function getPool(): Pool {
     // the transaction pooler anyway (`docs/infra-gaps.md`), so 10 is
     // comfortably inside budget while letting a page's parallel reads
     // actually run in parallel.
-    pool = new Pool({ connectionString: SUPABASE_DB_URL, max: 10, idleTimeoutMillis: 10_000 });
+    pool = new Pool({
+      connectionString: SUPABASE_DB_URL,
+      max: 10,
+      idleTimeoutMillis: 10_000,
+      // Fail fast instead of hanging: a request on this machine hung for
+      // 15.1 MINUTES against the direct IPv6 endpoint on 2026-09-17 before
+      // anyone noticed (that endpoint also produced EHOSTUNREACH and an
+      // E2E ETIMEDOUT, which is why `.env.local` is back on the session
+      // pooler). An unreachable database should surface as an error the
+      // caller can report, not a page that never finishes rendering.
+      connectionTimeoutMillis: 10_000,
+      statement_timeout: 20_000,
+    });
   }
   return pool;
 }

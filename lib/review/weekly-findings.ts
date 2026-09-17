@@ -178,8 +178,28 @@ export async function assembleWeeklyFindings(userId: string, limit: number = WEE
     return [];
   }
 
-  const canRenderCache = new Map<string, CanRenderResult>();
-  const candidates: Candidate[] = [];
+  // Two passes rather than one, so every DISTINCT `analyticId` needing a
+  // `canRender` check is looked up in ONE parallel batch instead of
+  // sequentially inside the field loop (2026-09-17 latency slice — the
+  // original `for`/`await` loop paid one round trip per distinct analytic,
+  // one after another, even though none of those checks depends on
+  // another's result). Pass 1 below does no I/O at all; it only resolves
+  // which fields have a representative finding and which distinct
+  // analytics therefore need checking. Pass 2 builds the same candidates
+  // the original single pass did, reading `canRender`'s answer from the
+  // now-fully-populated cache instead of awaiting it inline.
+  interface ResolvedFieldEntry {
+    strategyId: string;
+    fieldId: string;
+    fieldName: string;
+    fieldUnit: string | undefined;
+    representative: FindingRowWithStrategy | null;
+    /** Only set when `representative` is null — see pass 2 below. */
+    noDataAnalyticId: string | null;
+  }
+
+  const resolvedEntries: ResolvedFieldEntry[] = [];
+  const analyticIdsNeedingCheck = new Set<string>();
 
   for (const snapshot of strategySnapshots) {
     // A strategy deleted/archived between `fetchStrategiesForUser` and here
@@ -203,59 +223,90 @@ export async function assembleWeeklyFindings(userId: string, limit: number = WEE
       if (!representative) {
         const analyticId = resolveAnalyticId(field.fieldId, field.dataType);
         if (analyticId === null) continue; // structurally unreachable given the `note` filter above
-        candidates.push({
+        resolvedEntries.push({
           strategyId: snapshot.strategyId,
           fieldId: field.fieldId,
           fieldName: field.name,
-          payload: buildNoDataFindingPayload(analyticId),
-          isRealRender: false,
+          fieldUnit: field.config.unit,
+          representative: null,
+          noDataAnalyticId: analyticId,
         });
         continue;
       }
 
-      let renderCheck = canRenderCache.get(representative.analyticId);
-      if (renderCheck === undefined) {
-        try {
-          renderCheck = await canRender(representative.analyticId, userId, 'weekly');
-        } catch (err) {
-          // canRender itself is documented never to throw — this catch is
-          // defense in depth, matching this file's own overall fail-closed
-          // posture, not an expected path.
-          console.error('[weekly-findings:assembleWeeklyFindings] canRender failed:', err);
-          renderCheck = { canRender: false, reason: 'config_unavailable' };
-        }
-        canRenderCache.set(representative.analyticId, renderCheck);
-      }
-
-      if (!renderCheck.canRender) {
-        // See `findings-service.ts`'s own header, "PLAN-GATED EXCEPTION"
-        // (docs/adr/0035 addendum, 2026-09-15 QA FAIL fix) — the identical
-        // fix applied at this file's own candidate-ranking level. A
-        // permanent plan wall must never masquerade as "not enough data
-        // yet" — doubly so HERE, since an invented `insufficient` fallback
-        // candidate competes for one of this panel's `WEEKLY_FINDINGS_CAP`
-        // (3) slots, which could displace a real finding a free user
-        // could otherwise have seen. Every other block reason keeps the
-        // pre-existing "same as insufficient" fallback candidate.
-        if (renderCheck.reason === 'plan') continue;
-        candidates.push({
-          strategyId: snapshot.strategyId,
-          fieldId: field.fieldId,
-          fieldName: field.name,
-          payload: buildNoDataFindingPayload(representative.analyticId),
-          isRealRender: false,
-        });
-        continue;
-      }
-
-      candidates.push({
+      analyticIdsNeedingCheck.add(representative.analyticId);
+      resolvedEntries.push({
         strategyId: snapshot.strategyId,
         fieldId: field.fieldId,
         fieldName: field.name,
-        payload: buildFindingPayloadFromRow(representative, field.name, { unit: field.config.unit }),
-        isRealRender: true,
+        fieldUnit: field.config.unit,
+        representative,
+        noDataAnalyticId: null,
       });
     }
+  }
+
+  const canRenderCache = new Map<string, CanRenderResult>();
+  await Promise.all(
+    Array.from(analyticIdsNeedingCheck, async (analyticId) => {
+      try {
+        canRenderCache.set(analyticId, await canRender(analyticId, userId, 'weekly'));
+      } catch (err) {
+        // canRender itself is documented never to throw — this catch is
+        // defense in depth, matching this file's own overall fail-closed
+        // posture, not an expected path.
+        console.error('[weekly-findings:assembleWeeklyFindings] canRender failed:', err);
+        canRenderCache.set(analyticId, { canRender: false, reason: 'config_unavailable' });
+      }
+    }),
+  );
+
+  const candidates: Candidate[] = [];
+  for (const entry of resolvedEntries) {
+    if (!entry.representative) {
+      candidates.push({
+        strategyId: entry.strategyId,
+        fieldId: entry.fieldId,
+        fieldName: entry.fieldName,
+        payload: buildNoDataFindingPayload(entry.noDataAnalyticId!),
+        isRealRender: false,
+      });
+      continue;
+    }
+
+    const representative = entry.representative;
+    // Always present -- populated for every id in `analyticIdsNeedingCheck`
+    // above, which this entry's own `representative.analyticId` was added to.
+    const renderCheck = canRenderCache.get(representative.analyticId)!;
+
+    if (!renderCheck.canRender) {
+      // See `findings-service.ts`'s own header, "PLAN-GATED EXCEPTION"
+      // (docs/adr/0035 addendum, 2026-09-15 QA FAIL fix) — the identical
+      // fix applied at this file's own candidate-ranking level. A
+      // permanent plan wall must never masquerade as "not enough data
+      // yet" — doubly so HERE, since an invented `insufficient` fallback
+      // candidate competes for one of this panel's `WEEKLY_FINDINGS_CAP`
+      // (3) slots, which could displace a real finding a free user
+      // could otherwise have seen. Every other block reason keeps the
+      // pre-existing "same as insufficient" fallback candidate.
+      if (renderCheck.reason === 'plan') continue;
+      candidates.push({
+        strategyId: entry.strategyId,
+        fieldId: entry.fieldId,
+        fieldName: entry.fieldName,
+        payload: buildNoDataFindingPayload(representative.analyticId),
+        isRealRender: false,
+      });
+      continue;
+    }
+
+    candidates.push({
+      strategyId: entry.strategyId,
+      fieldId: entry.fieldId,
+      fieldName: entry.fieldName,
+      payload: buildFindingPayloadFromRow(representative, entry.fieldName, { unit: entry.fieldUnit }),
+      isRealRender: true,
+    });
   }
 
   const ranked = rankCandidates(candidates).slice(0, Math.max(limit, 0));

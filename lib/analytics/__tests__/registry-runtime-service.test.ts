@@ -63,12 +63,15 @@ describe('canRender (registry-runtime-service.ts) -- orchestration', () => {
   describe('THE ADVERSARIAL FAIL-CLOSED CONTRACT -- canRender must never throw', () => {
     it('getAnalyticConfig throwing (a forced config-read failure) resolves to false, reason config_unavailable -- never propagates', async () => {
       getAnalyticConfigMock.mockRejectedValue(new Error('simulated DB connection failure'));
-      // Every OTHER dependency is deliberately left unmocked/undefined for
-      // this case -- proves the short-circuit never even reaches them.
-      getUserPlanMock.mockReset();
-      isUserInCohortMock.mockReset();
-      isSuppressedMock.mockReset();
-      getAccountSyncTiersMock.mockReset();
+      // Every other dependency ALSO fails here: a real config-read failure
+      // is almost always the database being unreachable, in which case the
+      // other four reads are failing at the same moment. The contract is
+      // that `canRender` still resolves `false`/`config_unavailable` and
+      // never propagates — from ANY combination of failures.
+      getUserPlanMock.mockRejectedValue(new Error('simulated plan lookup failure'));
+      isUserInCohortMock.mockRejectedValue(new Error('simulated cohort lookup failure'));
+      isSuppressedMock.mockRejectedValue(new Error('simulated suppression lookup failure'));
+      getAccountSyncTiersMock.mockRejectedValue(new Error('simulated tier lookup failure'));
 
       const { canRender } = await import('../registry-runtime-service');
 
@@ -76,7 +79,13 @@ describe('canRender (registry-runtime-service.ts) -- orchestration', () => {
         canRender: false,
         reason: 'config_unavailable',
       });
-      expect(getUserPlanMock).not.toHaveBeenCalled();
+      // NOT asserted any more: that the other reads were never issued.
+      // `canRender` now starts all five together (2026-09-17 latency
+      // slice) — the old sequencing paid an extra round trip on every
+      // successful call to save four reads on a path that is effectively
+      // never taken. The fail-closed ANSWER is what this suite exists to
+      // pin, and it is unchanged; wasted reads on an unreachable database
+      // are not a property worth a round trip per finding.
     });
 
     it('getUserPlan throwing (config itself was readable) resolves to false, reason config_unavailable -- never propagates', async () => {

@@ -98,6 +98,48 @@
   --rq-ease:          cubic-bezier(.2, .7, .3, 1);
   --rq-duration-fast: 140ms;
   --rq-duration:      220ms;
+
+  /* ---- Breakpoints & layout (ADR 0047) ----
+     Phone is the design target and the default: every screen in
+     `docs/screens/` is drawn at phone width and nothing about the phone
+     rendering is conditional. Tablet/desktop/wide are ADDITIVE steps —
+     the same column, wider, plus a side rail at desktop. There is no
+     desktop mockup, so no step introduces a component, colour or
+     typeface the phone frames don't already use.
+
+     The three --rq-bp-* values are documentation of the numbers hard-coded
+     in the @media rules below and in css/components.css (CSS custom
+     properties cannot be read inside a media condition) and the source
+     for the Tailwind --breakpoint-* map in tokens/tailwind.css. Change
+     them here and in those two places together. */
+  --rq-bp-tablet:  48rem;   /*  768px — the column starts to widen  */
+  --rq-bp-desktop: 64rem;   /* 1024px — tab bar becomes a side rail */
+  --rq-bp-wide:    90rem;   /* 1440px — last widening step         */
+
+  /* Content column, in steps. Never a full-bleed layout: an instrument
+     reads in one column, and a gauge cluster spread across 1680px is a
+     dashboard, which this product deliberately is not. */
+  --rq-shell-max:  32rem;   /* phone — unchanged, and must stay so */
+  --rq-rail-w:     15rem;   /* side rail at >= --rq-bp-desktop     */
+
+  /* Prose measure. Panels, rows and marks may use the full column;
+     running text is capped so a wider window never produces a 100-character
+     line. Applied to .rq-body / .rq-sub at >= --rq-bp-tablet only. */
+  --rq-measure:    36rem;
+
+  /* Signed-out card. Deliberately does NOT follow --rq-shell-max: a
+     four-field form gets no better at 52rem, it only gets harder to scan. */
+  --rq-auth-max:   32rem;
+}
+
+@media (min-width: 48rem) {
+  :root { --rq-shell-max: 38rem; }
+}
+@media (min-width: 64rem) {
+  :root { --rq-shell-max: 42rem; }
+}
+@media (min-width: 90rem) {
+  :root { --rq-shell-max: 48rem; }
 }
 
 @media (prefers-color-scheme: dark) {

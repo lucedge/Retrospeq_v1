@@ -86,6 +86,12 @@ describe.skipIf(!env)('lib/review/prompt-candidates (live DB, brand-new user)', 
       retirementDecay: [],
       retirementCondition: [],
       detection: [],
+      // The same `prompt_history` read this function already made for its
+      // own promotion-dormancy pass, returned so `computeAndWriteReviewPrompts`
+      // can reuse it instead of a second, identical query (2026-09-17
+      // latency slice) — empty for a brand-new user, same as every other
+      // field here.
+      historyState: new Map(),
     });
   }, 30_000);
 });

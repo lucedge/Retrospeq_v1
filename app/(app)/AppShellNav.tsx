@@ -90,11 +90,27 @@ const TABS: Array<{ section: Section; href: string; label: string; icon: React.R
   },
 ];
 
+/**
+ * The four tabs. ONE element at every viewport — a bottom bar below
+ * 64rem, a left rail at or above it (ADR 0047). Not two navs behind
+ * media queries: a duplicate would give assistive tech two "Main"
+ * landmarks and `getByRole('link', { name: 'Home' })` two matches, and
+ * would let the two copies drift.
+ *
+ * Positioning is `.rq-shell__nav` in `brand/css/components.css`, not
+ * utility classes here, so the desktop grid placement can override the
+ * phone's `position: fixed` without a specificity fight (see that file).
+ * The nav stays LAST in the DOM at both sizes: on the phone that is the
+ * reviewed order (content before chrome), and keeping it means the tab
+ * order a trader has on the phone is the tab order they have on the
+ * desktop, where the rail is simply drawn to the left of the content it
+ * follows.
+ */
 export function TabBar() {
   const section = sectionFor(usePathname());
   return (
-    <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-10">
-      <div className="rq-tabs mx-auto max-w-[32rem]">
+    <nav aria-label="Main" className="rq-shell__nav">
+      <div className="rq-tabs">
         {TABS.map((tab) => (
           <Link
             key={tab.section}
