@@ -67,6 +67,17 @@ for (const section of manifest.sections) {
         md = md.replaceAll(`](${p.path})`, `](#${slug(p.path)})`).replaceAll(`](./${file})`, `](#${slug(p.path)})`);
       }
     }
+    // Inline local SVGs: a relative <img src> would not resolve from the
+    // single-file output, and these diagrams are the point of the page.
+    md = md.replace(/!\[([^\]]*)\]\(([^)]+\.svg)\)/g, (whole, alt, src) => {
+      const svgPath = join(dirname(abs), src);
+      if (!existsSync(svgPath)) return whole;
+      const svg = readFileSync(svgPath, 'utf8')
+        .replace(/<\?xml[^>]*\?>/g, '')
+        .replace(/<!DOCTYPE[^>]*>/gi, '');
+      return `<figure class="figure">${svg}<figcaption>${alt}</figcaption></figure>`;
+    });
+
     body += `<article class="page" id="${id}" data-page="${id}">
       <p class="page__crumb">${esc(section.group)}</p>
       <p class="page__blurb">${esc(page.blurb)}</p>
@@ -143,6 +154,10 @@ const html = `<title>${esc(manifest.title)}</title>
   .prose blockquote { margin:16px 0; padding:2px 0 2px 16px; border-left:2px solid var(--accent);
                       color:var(--ink-soft); }
   .prose img { max-width:100%; }
+  .figure { margin:20px 0; padding:16px; background:var(--surface); border:1px solid var(--line);
+            border-radius:var(--radius); text-align:center; }
+  .figure svg { max-width:100%; height:auto; }
+  .figure figcaption { margin-top:10px; font-size:12.5px; color:var(--ink-faint); text-align:left; }
   .prose hr { border:none; border-top:1px solid var(--line); margin:28px 0; }
   .theme { position:fixed; top:14px; right:18px; border:1px solid var(--line); background:var(--surface);
            color:var(--ink-soft); border-radius:8px; padding:6px 11px; font:inherit; font-size:12px; cursor:pointer; }
