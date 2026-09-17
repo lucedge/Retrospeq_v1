@@ -20,7 +20,8 @@
     "test:user": "node --env-file=.env.local scripts/test-user.mjs",
     "e2e": "playwright test",
     "e2e:changed": "node scripts/e2e-for-change.mjs",
-    "test:exclusive": "vitest run -c vitest.exclusive.config.ts"
+    "test:exclusive": "vitest run -c vitest.exclusive.config.ts",
+    "docs:build": "node scripts/build-docs-site.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
@@ -46,6 +47,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "fast-check": "^4.9.0",
+    "marked": "^18.0.13",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.7"

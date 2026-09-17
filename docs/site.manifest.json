@@ -1,0 +1,50 @@
+{
+  "title": "Retrospeq — developer documentation",
+  "subtitle": "How the system works, why it is built this way, and how to change it safely.",
+  "sections": [
+    {
+      "group": "Start here",
+      "pages": [
+        { "path": "README.md", "title": "What Retrospeq is", "blurb": "The product, the three objects, and three things that will surprise you." },
+        { "path": "docs/README.md", "title": "Documentation map", "blurb": "Every doc in the repo, and the order to read them in." },
+        { "path": "docs/handbook/01-product-and-domain.md", "title": "Product & domain", "blurb": "The vocabulary and the closed loop everything else assumes." },
+        { "path": "docs/handbook/02-getting-started.md", "title": "Getting started", "blurb": "Zero to a running app and your first change." }
+      ]
+    },
+    {
+      "group": "The system",
+      "pages": [
+        { "path": "docs/handbook/03-architecture.md", "title": "Architecture", "blurb": "Request path, where the auth guard really is, module layering." },
+        { "path": "docs/handbook/04-module-map.md", "title": "Module map", "blurb": "The 14 lib/ modules: what each owns and who calls it." },
+        { "path": "docs/handbook/05-data-access.md", "title": "Data access", "blurb": "Why .from() does not work, and the two connection helpers." },
+        { "path": "docs/handbook/06-data-model.md", "title": "Data model", "blurb": "50 tables by domain, RLS shapes, and the invariants the DB enforces." }
+      ]
+    },
+    {
+      "group": "How it runs",
+      "pages": [
+        { "path": "docs/handbook/07-flows-capture.md", "title": "Flows — capture", "blurb": "Connect, sync, group, close out, freeze." },
+        { "path": "docs/handbook/08-flows-insight.md", "title": "Flows — insight", "blurb": "Engines, findings, the weekly review, decisions, engagement." },
+        { "path": "docs/handbook/09-privacy.md", "title": "Privacy", "blurb": "Export, ordered erasure, tombstones, audit log." },
+        { "path": "docs/handbook/10-concurrency.md", "title": "Concurrency", "blurb": "The three recurring patterns and when to reach for which." }
+      ]
+    },
+    {
+      "group": "Working on it",
+      "pages": [
+        { "path": "docs/handbook/11-frontend.md", "title": "Frontend", "blurb": "Route groups, the Server Action contract, design-system wiring." },
+        { "path": "docs/handbook/12-testing.md", "title": "Testing", "blurb": "Five layers, what needs a database, and the traps." },
+        { "path": "docs/handbook/13-environments.md", "title": "Environments", "blurb": "Env vars, migrations, Vercel, the cron." },
+        { "path": "docs/handbook/14-making-a-change.md", "title": "Making a change", "blurb": "Classify, build, gate, document, commit." },
+        { "path": "docs/handbook/15-glossary.md", "title": "Glossary", "blurb": "The coined vocabulary, each with a code anchor." }
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        { "path": "docs/adr/README.md", "title": "Decision records", "blurb": "Every ADR, its status, and what supersedes what." },
+        { "path": "docs/process.md", "title": "How this gets built", "blurb": "The agent pipeline and risk tiers." }
+      ]
+    }
+  ]
+}
