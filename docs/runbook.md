@@ -7,6 +7,53 @@ spec could ever alert on.
 
 ---
 
+<!-- toc -->
+
+## Contents
+
+37 conditions. Each section is symptom, diagnosis, then
+what to do about it.
+
+- [Shadow analytic diverging from expectation](#shadow-analytic-diverging-from-expectation)
+- [Any credential decryption failure](#any-credential-decryption-failure)
+- [Broker/vendor connection outage during connect](#brokervendor-connection-outage-during-connect)
+- [Sync failure rate > 5% over 15 min](#sync-failure-rate--5-over-15-min)
+- [Every credentialed connect attempt fails because KMS isn't configured](#every-credentialed-connect-attempt-fails-because-kms-isnt-configured)
+- [MFA verification failures at volume](#mfa-verification-failures-at-volume)
+- [Erasure execution stuck or failed](#erasure-execution-stuck-or-failed)
+- [Degraded session-revocation reliability](#degraded-session-revocation-reliability)
+- [Trades stuck unable to confirm — coverage-gap / block-anomaly backlog](#trades-stuck-unable-to-confirm--coverage-gap--block-anomaly-backlog)
+- [`RuleEvaluationError` thrown while freezing rule_evaluations at confirm](#ruleevaluationerror-thrown-while-freezing-ruleevaluations-at-confirm)
+- [`operand_distributions` recompute failing after a sync](#operanddistributions-recompute-failing-after-a-sync)
+- [`adherence_weekly` recompute failing after a confirmation](#adherenceweekly-recompute-failing-after-a-confirmation)
+- [`rule_overrides` write failing silently](#ruleoverrides-write-failing-silently)
+- [`unlock_state` recompute failing after a confirmation](#unlockstate-recompute-failing-after-a-confirmation)
+- [`autoConfirmStaleTrades` sweep duration scales with the pending](#autoconfirmstaletrades-sweep-duration-scales-with-the-pending)
+- [`onboarding_state` stage advance failing after a connect/import/calibration](#onboardingstate-stage-advance-failing-after-a-connectimportcalibration)
+- [Pre-existing, non-Slice-08b timing gap found while E2E-verifying Slice 08b: `rules-guided-front-door.spec.ts`'s "core flow" test runs right at the edge of Playwright's default 30s timeout](#pre-existing-non-slice-08b-timing-gap-found-while-e2e-verifying-slice-08b-rules-guided-front-doorspectss-core-flow-test-runs-right-at-the-edge-of-playwrights-default-30s-timeout)
+- [Dashboard state resolution failing (`DASH_STATE_UNRESOLVED`)](#dashboard-state-resolution-failing-dashstateunresolved)
+- [`handle_new_user` failing at the derived-field seeding step blocks signup entirely](#handlenewuser-failing-at-the-derived-field-seeding-step-blocks-signup-entirely)
+- [`analytic_config` unreadable — every analytic renders nothing, product-wide](#analyticconfig-unreadable--every-analytic-renders-nothing-product-wide)
+- [Edge engine `findings` recompute failing after a sync](#edge-engine-findings-recompute-failing-after-a-sync)
+- [Strategy-builder create leaves an orphaned, empty strategy behind (`STRATEGY_BUILDER_PARTIAL`)](#strategy-builder-create-leaves-an-orphaned-empty-strategy-behind-strategybuilderpartial)
+- [Detection engine `detections` recompute failing after a sync](#detection-engine-detections-recompute-failing-after-a-sync)
+- [Decay check failed after sync](#decay-check-failed-after-sync)
+- [Decay check failed for an individual link](#decay-check-failed-for-an-individual-link)
+- [Asset-class suppression is no longer a separate sync-hook call — see the edge engine entry above](#asset-class-suppression-is-no-longer-a-separate-sync-hook-call--see-the-edge-engine-entry-above)
+- [Judgment findings (`find.*`) render nothing for a Pro user outside the beta cohort — this is `cohort_only`, not a bug](#judgment-findings-find-render-nothing-for-a-pro-user-outside-the-beta-cohort--this-is-cohortonly-not-a-bug)
+- [`recordAnalyticRender` write failing silently on the strategy-detail screen](#recordanalyticrender-write-failing-silently-on-the-strategy-detail-screen)
+- [Engagement streak recompute failing after a confirmation](#engagement-streak-recompute-failing-after-a-confirmation)
+- [Engagement event emission failing after a confirmation, sync, or review close](#engagement-event-emission-failing-after-a-confirmation-sync-or-review-close)
+- [Weekly review materialisation has no deployed scheduler yet](#weekly-review-materialisation-has-no-deployed-scheduler-yet)
+- [Promotion-candidate check failed for an individual rule during prompt-candidate computation](#promotion-candidate-check-failed-for-an-individual-rule-during-prompt-candidate-computation)
+- [Graduation accept skipped the `finding_rule_links` write — the accepted rule will never be decay-checked](#graduation-accept-skipped-the-findingrulelinks-write--the-accepted-rule-will-never-be-decay-checked)
+- [Relaxation adjust found an eligible, adjustable rule with no numeric median — a data-shape mismatch, not an expected outcome](#relaxation-adjust-found-an-eligible-adjustable-rule-with-no-numeric-median--a-data-shape-mismatch-not-an-expected-outcome)
+- [`ensureDefaultStrategyForUser` failing after a sync/manual-connect (silent default strategy never created)](#ensuredefaultstrategyforuser-failing-after-a-syncmanual-connect-silent-default-strategy-never-created)
+- [`onboarding_state` field-offer stamp failing (§5.5 field-introduction offer)](#onboardingstate-field-offer-stamp-failing-55-field-introduction-offer)
+- [Weekly review cron returns 503 (`Scheduler not configured.`)](#weekly-review-cron-returns-503-scheduler-not-configured)
+
+<!-- /toc -->
+
 ## Shadow analytic diverging from expectation
 
 **Source:** 00-foundation §7.3 alerting table — `Shadow analytic diverging
