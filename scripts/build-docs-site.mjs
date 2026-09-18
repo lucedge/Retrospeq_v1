@@ -186,12 +186,25 @@ const html = `<title>${esc(manifest.title)}</title>
   // as a local file the CDN copy above does it instead; if neither is
   // available the diagram source stays readable as text, which is the point
   // of keeping it as text.
+  // Render each page's diagrams the first time that page is SHOWN. A
+  // hidden element has no layout, so mermaid measures its text as zero and
+  // emits transforms full of NaN — the diagram comes out as an empty box.
+  let mermaidReady = false;
   try {
     if (window.mermaid) {
       const dark = matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light';
-      window.mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'neutral', securityLevel: 'strict' });
+      window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'neutral', securityLevel: 'strict' });
+      mermaidReady = true;
     }
   } catch {}
+
+  async function renderDiagrams(page) {
+    if (!mermaidReady || !page) return;
+    const nodes = [...page.querySelectorAll('pre.mermaid:not([data-rendered])')];
+    if (!nodes.length) return;
+    nodes.forEach((n) => n.setAttribute('data-rendered', '1'));
+    try { await window.mermaid.run({ nodes }); } catch {}
+  }
 
   const links = [...document.querySelectorAll('.nav-link')];
   const pages = [...document.querySelectorAll('.page')];
@@ -199,6 +212,7 @@ const html = `<title>${esc(manifest.title)}</title>
     const target = pages.find((p) => p.dataset.page === id) ?? pages[0];
     if (!target) return;
     pages.forEach((p) => p.classList.toggle('is-visible', p === target));
+    renderDiagrams(target);
     links.forEach((a) => a.classList.toggle('is-active', a.dataset.target === target.dataset.page));
     document.querySelector('.main').scrollTo?.(0, 0);
     window.scrollTo(0, 0);

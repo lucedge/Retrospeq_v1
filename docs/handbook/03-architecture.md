@@ -170,7 +170,7 @@ sequenceDiagram
           A-->>U: { error: NOT_FOUND, retryable: false }
         else owned
           A->>C: withUserConnection(userId, fn)
-          C->>DB: BEGIN; SET LOCAL ROLE authenticated;\nset_config(request.jwt.claims); ...write...; COMMIT
+          C->>DB: BEGIN, SET LOCAL ROLE authenticated, set_config of the jwt claims, the write, COMMIT
           DB-->>C: row(s)
           C-->>A: result
           A->>A: revalidatePath('/route')

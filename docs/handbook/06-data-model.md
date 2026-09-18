@@ -37,14 +37,14 @@ sit on top of that as second and third layers.
 ```mermaid
 flowchart LR
   subgraph UA["User A"]
-    SA["strategies<br/>(user_id=A, id=S1)"]
-    FA["fields<br/>(user_id=A, owner_strategy_id=S1)"]
+    SA["strategies — (user_id=A, id=S1)"]
+    FA["fields — (user_id=A, owner_strategy_id=S1)"]
   end
   subgraph UB["User B"]
-    SB["strategies<br/>(user_id=B, id=S2)"]
+    SB["strategies — (user_id=B, id=S2)"]
   end
-  FA -->|"FK (user_id, owner_strategy_id)<br/>resolves"| SA
-  FA -.->|"cannot exist:<br/>(A, S2) matches no row"| SB
+  FA -->|"FK (user_id, owner_strategy_id) — resolves"| SA
+  FA -.->|"cannot exist: — (A, S2) matches no row"| SB
 ```
 
 Tables using this pattern: `fields`, `strategy_versions`, `field_usages`,

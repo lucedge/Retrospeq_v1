@@ -136,7 +136,7 @@ sequenceDiagram
   participant PG as Postgres
   Caller->>Pool: connect()
   Pool-->>Caller: client
-  Caller->>PG: BEGIN; SET LOCAL ROLE authenticated; set_config('request.jwt.claims', …)
+  Caller->>PG: BEGIN, SET LOCAL ROLE authenticated, set_config of the jwt claims
   Note over Caller,PG: one batched round trip, not three
   loop each query in the callback
     Caller->>PG: select … where user_id = $1
@@ -163,17 +163,17 @@ with no role set. Return data from the callback, never the client.
 flowchart LR
   subgraph S1["Owner, full access"]
     direction TB
-    A1["trades · rules · strategies<br/>reviews · trade_captures"]
-    A2["policy: user_id = auth.uid()<br/>for all"]
+    A1["trades · rules · strategies — reviews · trade_captures"]
+    A2["policy: user_id = auth.uid() — for all"]
   end
   subgraph S2["Owner reads, server writes"]
     direction TB
-    B1["rule_evaluations · findings<br/>adherence_weekly · engagement_events"]
-    B2["policy: select only<br/>writes via service role"]
+    B1["rule_evaluations · findings — adherence_weekly · engagement_events"]
+    B2["policy: select only — writes via service role"]
   end
   subgraph S3["Server only"]
     direction TB
-    C1["rate_limit_hits<br/>erasure_tombstones"]
+    C1["rate_limit_hits — erasure_tombstones"]
     C2["RLS on, no policy at all"]
   end
 ```
