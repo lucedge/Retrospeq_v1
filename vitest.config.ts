@@ -20,6 +20,13 @@ export default defineConfig({
     // 10s default, which surfaced as six "Hook timed out" suite failures in
     // the 2026-09-15 phase-end sweep while every test inside them passed.
     hookTimeout: 30_000,
+    // Property tests run hundreds of cases and are CPU-bound, so they
+    // exceed Vitest's 5s default whenever the machine is busy — which,
+    // on a host running several agents plus a dev server, is most of the
+    // time. Six such timeouts in one sweep on 2026-09-18 were all
+    // load-induced: every one passed when run alone. A slow machine
+    // should make a suite slower, not red.
+    testTimeout: 20_000,
     include: ['**/*.test.ts'],
     // `analytics-registry-schema.independent-verify.rls.test.ts` is
     // DESTRUCTIVE against the shared dev DB: it drops CHECK constraints and
